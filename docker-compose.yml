@@ -1,0 +1,99 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: secplat-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  opensearch:
+    image: opensearchproject/opensearch:2.14.0
+    container_name: secplat-opensearch
+    restart: "no"
+    environment:
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - OPENSEARCH_JAVA_OPTS=-Xms${OPENSEARCH_HEAP} -Xmx${OPENSEARCH_HEAP}
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_INITIAL_ADMIN_PASSWORD}
+      - plugins.security.disabled=true
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+    ports:
+      - "${OPENSEARCH_PORT}:9200"
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+      - ./infra/opensearch/opensearch.yml:/usr/share/opensearch/config/opensearch.yml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9200 >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: secplat-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "${GRAFANA_PORT}:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  juiceshop:
+    image: bkimminich/juice-shop:latest
+    container_name: secplat-juiceshop
+    ports:
+      - "${JUICESHOP_PORT}:3000"
+
+  api:
+    build:
+      context: ./services/api
+    container_name: secplat-api
+    environment:
+      ENV: ${ENV}
+      API_SECRET_KEY: ${API_SECRET_KEY}
+      POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      OPENSEARCH_URL: http://opensearch:9200
+      MAX_SCAN_DURATION_SECONDS: ${MAX_SCAN_DURATION_SECONDS}
+      MAX_REQUESTS_PER_SECOND: ${MAX_REQUESTS_PER_SECOND}
+      BLOCK_PRIVATE_IPS: ${BLOCK_PRIVATE_IPS}
+      REQUIRE_DOMAIN_VERIFICATION: ${REQUIRE_DOMAIN_VERIFICATION}
+    ports:
+      - "${API_PORT}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+   
+  verify-web:
+   image: nginx:alpine
+   volumes:
+     - ./infra/verify-web:/usr/share/nginx/html:ro
+   ports:
+     - "8081:80"
+
+
+volumes:
+  postgres-data:
+  opensearch-data:
+  grafana-data:
+

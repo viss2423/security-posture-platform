@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+.env
+.env.*
+.pytest_cache/
+.mypy_cache/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Docker / volumes
+**/data/
+**/logs/
+opensearch-data/
+postgres-data/
+grafana-data/
+
+# Reports / exports
+*.pdf
+*.zip
+exports/

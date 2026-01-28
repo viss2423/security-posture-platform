@@ -1,0 +1,15 @@
+apiVersion: 1
+
+datasources:
+  - name: Postgres
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    database: secplat
+    user: secplat
+    secureJsonData:
+      password: secplat_password
+    jsonData:
+      sslmode: "disable"
+      postgresVersion: 1600
+
