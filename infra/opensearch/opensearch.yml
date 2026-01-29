@@ -1,3 +1,4 @@
 cluster.name: secplat
 network.host: 0.0.0.0
 http.port: 9200
+plugins.security.disabled: false

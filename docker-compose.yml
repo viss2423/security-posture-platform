@@ -7,7 +7,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
-      - "${POSTGRES_PORT}:5432"
+      - "127.0.0.1:${POSTGRES_PORT}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -29,7 +29,7 @@ services:
       - plugins.security.disabled=true
       - DISABLE_INSTALL_DEMO_CONFIG=true
     ports:
-      - "${OPENSEARCH_PORT}:9200"
+      - "127.0.0.1:${OPENSEARCH_PORT}:9200"
     volumes:
       - opensearch-data:/usr/share/opensearch/data
       - ./infra/opensearch/opensearch.yml:/usr/share/opensearch/config/opensearch.yml:ro
@@ -48,7 +48,7 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
       GF_USERS_ALLOW_SIGN_UP: "false"
     ports:
-      - "${GRAFANA_PORT}:3000"
+      - "127.0.0.1:${GRAFANA_PORT}:3000"
     volumes:
       - grafana-data:/var/lib/grafana
       - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
@@ -61,7 +61,7 @@ services:
     image: bkimminich/juice-shop:latest
     container_name: secplat-juiceshop
     ports:
-      - "${JUICESHOP_PORT}:3000"
+      - "127.0.0.1:${JUICESHOP_PORT}:3000"
 
   api:
     build:
@@ -77,20 +77,20 @@ services:
       BLOCK_PRIVATE_IPS: ${BLOCK_PRIVATE_IPS}
       REQUIRE_DOMAIN_VERIFICATION: ${REQUIRE_DOMAIN_VERIFICATION}
     ports:
-      - "${API_PORT}:8000"
+      - "127.0.0.1:${API_PORT}:8000"
     depends_on:
       postgres:
         condition: service_healthy
       opensearch:
         condition: service_healthy
-   
-  verify-web:
-   image: nginx:alpine
-   volumes:
-     - ./infra/verify-web:/usr/share/nginx/html:ro
-   ports:
-     - "8081:80"
 
+  verify-web:
+    image: nginx:alpine
+    container_name: secplat-verify-web
+    ports:
+      - "127.0.0.1:8081:80"
+    volumes:
+      - ./infra/verify-web:/usr/share/nginx/html:ro
 
 volumes:
   postgres-data:
