@@ -1,27 +1,33 @@
 # Security Posture Platform
 
-A local, containerised **security posture and observability lab** that demonstrates how security and reliability signals flow from running services → **OpenSearch** → **Grafana**, with domain ownership verification and continuous health monitoring.
+A local, containerised **security posture and observability lab** that demonstrates how security and reliability signals flow from running services → **OpenSearch** → **derived asset posture** → **Grafana dashboards**.
 
-This repository is intentionally **developer-first**:
+The project focuses on **how security platforms are built internally** (CSPM, ASM, SIEM-lite), not just how dashboards are consumed.
 
--- everything runs locally using Docker Compose
--- all services are bound to `127.0.0.1`
--- the stack is easy to inspect, break, debug, and extend
+Everything runs locally using **Docker Compose**, is easy to inspect and break, and mirrors real internal security tooling patterns.
 
-The project is designed to mirror how real security platforms (CSPM, ASM, SIEM-lite tools) are **built internally**, not just how they are used.
+---
+
+## Key characteristics
+
+* Fully local (`127.0.0.1` only)
+* Event-driven (raw signals → derived posture)
+* Asset-centric (one current state per asset)
+* Cron-driven (no Prometheus required)
+* Grafana dashboards **provisioned as code**
 
 ---
 
 ## What’s running
 
-| Service            | Purpose                              | Port (localhost) |
-| ------------------ | ------------------------------------ | ---------------- |
-| API (FastAPI)      | Core backend service                 | `8000`           |
-| PostgreSQL         | Relational data store                | `5432`           |
-| OpenSearch         | Event and signal store               | `9200`           |
-| Grafana            | Dashboards and visualisation         | `3001`           |
-| Juice Shop         | Intentionally vulnerable demo target | `3000`           |
-| verify-web (nginx) | Domain / ownership verification      | `8081`           |
+| Service            | Purpose                                 | Port |
+| ------------------ | --------------------------------------- | ---- |
+| API (FastAPI)      | Core backend + health endpoint          | 8000 |
+| PostgreSQL         | Asset inventory & metadata              | 5432 |
+| OpenSearch         | Events + derived asset status           | 9200 |
+| Grafana            | Dashboards & visualisation              | 3001 |
+| Juice Shop         | Intentionally vulnerable demo target    | 3000 |
+| verify-web (nginx) | Domain / ownership verification service | 8081 |
 
 All services are **local-only**. Nothing is exposed externally.
 
@@ -30,24 +36,29 @@ All services are **local-only**. Nothing is exposed externally.
 ## High-level architecture
 
 ```
-+-----------+        +-------------+        +------------+
-|  Clients  | -----> |     API     | -----> | OpenSearch |
-+-----------+        +-------------+        +------------+
-                             |                     |
-                             |                     v
-                             |               +-----------+
-                             |               |  Grafana  |
-                             |               +-----------+
-                             v
-                      +---------------+
-                      |  PostgreSQL   |
-                      +---------------+
++-----------+
+|  Clients  |
++-----------+
+      |
+      v
++-------------+        +-------------------+
+|   FastAPI   | -----> |   OpenSearch       |
+|   (health)  |        |                   |
++-------------+        | - secplat-events  |
+      |                | - secplat-asset-  |
+      |                |   status          |
+      v                +-------------------+
++---------------+                |
+|  PostgreSQL   |                v
+|  (assets)     |          +-----------+
++---------------+          |  Grafana  |
+                           +-----------+
 ```
 
 Supporting components:
 
--- **verify-web**: static nginx service for ownership verification
--- **cron health pinger**: writes API health events into OpenSearch every minute
+* **verify-web**: static nginx service for ownership verification
+* **cron jobs**: continuously emit health signals and rebuild asset posture
 
 ---
 
@@ -55,9 +66,9 @@ Supporting components:
 
 ### Prerequisites
 
--- Linux / Ubuntu
--- Docker Engine
--- Docker Compose v2
+* Linux / Ubuntu
+* Docker Engine
+* Docker Compose v2
 
 ### Start the stack
 
@@ -75,7 +86,7 @@ docker compose ps
 # API health
 curl http://localhost:8000/health
 
-# OpenSearch
+# OpenSearch availability
 curl http://localhost:9200 | head
 
 # Domain verification token
@@ -88,25 +99,23 @@ All three should return successful responses.
 
 ## Domain / ownership verification
 
-The platform exposes a **well-known verification path**, similar to real SaaS security products.
-
-Path:
+The platform exposes a **well-known verification path**, similar to real SaaS security tools.
 
 ```
 /.well-known/secplat-verification.txt
 ```
 
-Repo location:
+Source in repo:
 
 ```
 infra/verify-web/.well-known/secplat-verification.txt
 ```
 
-This demonstrates how asset ownership or domain control can be verified before scanning or monitoring is allowed.
+This demonstrates how **asset ownership or control can be verified** before monitoring or scanning is allowed.
 
 ---
 
-## OpenSearch event ingestion
+## Event ingestion (raw signals)
 
 ### Event index
 
@@ -120,75 +129,143 @@ Example document:
 
 ```json
 {
-  "@timestamp": "2026-01-29T16:22:01Z",
+  "@timestamp": "2026-02-02T17:45:09Z",
   "service": "api",
+  "asset": "secplat-api",
   "level": "health",
-  "message": "healthcheck",
   "status": "up",
   "status_num": 1,
   "code": 200,
-  "latency_ms": 22
+  "latency_ms": 46
 }
 ```
 
-This schema is intentionally simple and extensible.
+Signals are intentionally **raw and append-only**.
 
 ---
 
-## API health monitoring (cron → OpenSearch)
+## Asset posture (derived state)
 
-A lightweight cron job performs a health check against the API every minute and writes the result into OpenSearch.
+A separate index represents **current posture per asset**:
 
-### Script
+```
+secplat-asset-status
+```
+
+Key properties:
+
+* **One document per asset**
+* Continuously rebuilt
+* Represents *current state*, not history
+
+### Posture states
+
+| State   | status_num | Meaning                    |
+| ------- | ---------- | -------------------------- |
+| UP      | `1`        | Asset responding normally  |
+| STALE   | `0`        | No recent health events    |
+| UNKNOWN | `-1`       | No health events ever seen |
+| DOWN    | `-2`       | Explicit failure detected  |
+
+Example document:
+
+```json
+{
+  "asset_key": "verify-web",
+  "status": "up",
+  "status_num": 1,
+  "code": 200,
+  "latency_ms": 12,
+  "last_seen": "2026-02-02T17:45:09Z"
+}
+```
+
+This mirrors how real security platforms **collapse events into posture**.
+
+---
+
+## Cron-based health monitoring
+
+Two cron jobs drive the platform:
+
+### 1) Health signal ingestion
 
 ```
 scripts/health_to_opensearch.sh
 ```
 
-### Cron configuration
+* Probes API, external web assets
+* Measures latency
+* Emits health events into `secplat-events`
+
+Cron entry:
 
 ```cron
 * * * * * /home/labuser/security-posture-platform/scripts/health_to_opensearch.sh >/dev/null 2>&1
 ```
 
-This enables:
+---
 
--- continuous uptime tracking
--- latency measurement
--- failure detection without Prometheus
--- a simple, observable heartbeat
+### 2) Asset posture builder
+
+```
+scripts/build_asset_status.sh
+```
+
+* Reads asset inventory
+* Pulls latest health events
+* Computes UP / STALE / UNKNOWN / DOWN
+* Upserts into `secplat-asset-status`
+
+Cron entry:
+
+```cron
+* * * * * /home/labuser/security-posture-platform/scripts/build_asset_status.sh >> /tmp/secplat_build_asset_status.log 2>&1
+```
+
+This decouples **signal generation** from **posture evaluation**.
 
 ---
 
 ## Grafana dashboards
 
-Grafana is available at:
+Grafana runs at:
 
 ```
 http://localhost:3001
 ```
 
-### Provisioned components
+### Provisioned dashboards
 
--- OpenSearch datasource (Elasticsearch-compatible API)
--- Dashboards auto-loaded from `infra/grafana/dashboards/`
+Dashboards are **provisioned as code** and auto-loaded on startup:
 
-A placeholder dashboard is included to validate provisioning before real dashboards are built.
+```
+infra/grafana/dashboards/secplat-posture.json
+infra/grafana/provisioning/dashboards/dashboards.yaml
+```
+
+No manual UI setup is required after restart.
 
 ---
 
-## Asset health visualisation (current state)
+## Asset posture dashboard (current)
 
-The platform includes a **current-state Asset Health Table** built using Grafana transformations.
+The main dashboard includes:
+
+* **Healthy Assets** (UP)
+* **Stale Assets**
+* **Unknown Assets**
+* **Down Assets**
+* **Current Asset Posture Table**
 
 Key characteristics:
 
--- one row per asset
--- shows latest status, latency, HTTP code
--- shows last time the asset was seen
--- derived from raw event data (not pre-aggregated)
+* Uses **Metric → Count** (no transform hacks)
+* Uses Lucene filters on `status_num`
+* Time-range aware
+* One-row-per-asset posture view
 
-This demonstrates how **events are transformed into posture** inside a security platform.
+This reflects how SOC and platform teams monitor **fleet-level health**.
 
 ---
 
@@ -197,13 +274,13 @@ This demonstrates how **events are transformed into posture** inside a security 
 Common commands:
 
 ```bash
-# View service logs
+# View logs
 docker compose logs -f api
 
-# Restart a service
+# Restart Grafana
 docker compose restart grafana
 
-# Validate compose configuration
+# Validate compose file
 docker compose config > /dev/null && echo "compose ok"
 ```
 
@@ -211,36 +288,24 @@ docker compose config > /dev/null && echo "compose ok"
 
 ## Security notes
 
--- All ports are bound to `127.0.0.1`
--- OpenSearch security plugins are disabled for local development
--- Grafana admin credentials are configurable via `.env`
+* All ports are bound to `127.0.0.1`
+* OpenSearch security plugins disabled (local lab)
+* Grafana credentials configurable via `.env`
 
-This repository is a **learning and experimentation lab**, not a hardened production deployment.
+This repository is a **learning and experimentation environment**, not a hardened production deployment.
 
 ---
 
 ## Why this project exists
 
-This project exists to demonstrate:
+This project demonstrates:
 
--- how security signals are generated
--- how they are indexed
--- how they are visualised
--- how ownership and trust can be enforced
--- how real security platforms are architected
+* How security signals are generated
+* How events are indexed
+* How posture is derived
+* How assets are tracked
+* How dashboards are provisioned
+* How real security platforms are structured internally
 
-If you can reason about this stack, you can reason about **CSPM, ASM, SIEM, and internal security platforms** used in real organisations.
-
----
-
-## Planned next steps
-
--- Full asset inventory (owner, environment, criticality)
--- Asset-aware dashboards and filtering
--- Alerting on asset health degradation
--- Findings ingestion beyond health checks
--- Optional authentication and role separation
-
----
-
+If you can reason about this system, you can reason about **CSPM, ASM, SIEM, and internal security tooling** used in real organisations.
 
