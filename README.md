@@ -1,8 +1,8 @@
 # Security Posture Platform
 
-A local, containerised **security posture and observability lab** that demonstrates how security and reliability signals flow from running services → **OpenSearch** → **derived asset posture** → **Grafana dashboards**.
+A local, containerised **security posture and observability lab** that demonstrates how security and reliability signals flow from running services → **OpenSearch** → **derived asset posture** → **Grafana dashboards + alerts**.
 
-The project focuses on **how security platforms are built internally** (CSPM, ASM, SIEM-lite), not just how dashboards are consumed.
+The goal is to show **how security platforms are built internally** (CSPM / ASM / SIEM-lite), not just how dashboards are used.
 
 Everything runs locally using **Docker Compose**, is easy to inspect and break, and mirrors real internal security tooling patterns.
 
@@ -10,24 +10,24 @@ Everything runs locally using **Docker Compose**, is easy to inspect and break, 
 
 ## Key characteristics
 
-* Fully local (`127.0.0.1` only)
-* Event-driven (raw signals → derived posture)
-* Asset-centric (one current state per asset)
-* Cron-driven (no Prometheus required)
-* Grafana dashboards **provisioned as code**
+- Fully local (`127.0.0.1` only)
+- Event-driven (raw signals → derived posture)
+- Asset-centric (one current state per asset)
+- Cron-driven ingestion (no Prometheus required)
+- Grafana dashboards provisioned as code
 
 ---
 
 ## What’s running
 
-| Service            | Purpose                                 | Port |
-| ------------------ | --------------------------------------- | ---- |
-| API (FastAPI)      | Core backend + health endpoint          | 8000 |
-| PostgreSQL         | Asset inventory & metadata              | 5432 |
-| OpenSearch         | Events + derived asset status           | 9200 |
-| Grafana            | Dashboards & visualisation              | 3001 |
-| Juice Shop         | Intentionally vulnerable demo target    | 3000 |
-| verify-web (nginx) | Domain / ownership verification service | 8081 |
+| Service            | Purpose                                   | Port |
+|--------------------|-------------------------------------------|------|
+| API (FastAPI)      | Core backend + health endpoint             | 8000 |
+| PostgreSQL         | Asset inventory & metadata                 | 5432 |
+| OpenSearch         | Events + derived asset status              | 9200 |
+| Grafana            | Dashboards & alerting                      | 3001 |
+| Juice Shop         | Intentionally vulnerable demo target       | 3000 |
+| verify-web (nginx) | Domain / ownership verification service    | 8081 |
 
 All services are **local-only**. Nothing is exposed externally.
 
@@ -36,29 +36,31 @@ All services are **local-only**. Nothing is exposed externally.
 ## High-level architecture
 
 ```
+
 +-----------+
 |  Clients  |
 +-----------+
-      |
-      v
+|
+v
 +-------------+        +-------------------+
 |   FastAPI   | -----> |   OpenSearch       |
 |   (health)  |        |                   |
 +-------------+        | - secplat-events  |
-      |                | - secplat-asset-  |
-      |                |   status          |
-      v                +-------------------+
+|                | - secplat-asset-  |
+|                |   status          |
+v                +-------------------+
 +---------------+                |
 |  PostgreSQL   |                v
 |  (assets)     |          +-----------+
 +---------------+          |  Grafana  |
-                           +-----------+
-```
++-----------+
+
+````
 
 Supporting components:
 
-* **verify-web**: static nginx service for ownership verification
-* **cron jobs**: continuously emit health signals and rebuild asset posture
+- **verify-web**: static nginx service for ownership verification
+- **cron jobs**: continuously emit health signals and rebuild asset posture
 
 ---
 
@@ -66,9 +68,9 @@ Supporting components:
 
 ### Prerequisites
 
-* Linux / Ubuntu
-* Docker Engine
-* Docker Compose v2
+- Linux / Ubuntu
+- Docker Engine
+- Docker Compose v2
 
 ### Start the stack
 
@@ -76,7 +78,7 @@ Supporting components:
 cd security-posture-platform
 docker compose up -d --build
 docker compose ps
-```
+````
 
 ---
 
@@ -92,8 +94,6 @@ curl http://localhost:9200 | head
 # Domain verification token
 curl http://localhost:8081/.well-known/secplat-verification.txt
 ```
-
-All three should return successful responses.
 
 ---
 
@@ -115,50 +115,46 @@ This demonstrates how **asset ownership or control can be verified** before moni
 
 ---
 
-## Event ingestion (raw signals)
+## OpenSearch indices
 
-### Event index
+### Raw events (append-only)
 
-All health signals are written to:
+Health signals are written to:
 
 ```
 secplat-events
 ```
 
-Example document:
+Example event:
 
 ```json
 {
-  "@timestamp": "2026-02-02T17:45:09Z",
+  "@timestamp": "2026-02-02T22:06:01Z",
   "service": "api",
   "asset": "secplat-api",
   "level": "health",
   "status": "up",
   "status_num": 1,
   "code": 200,
-  "latency_ms": 46
+  "latency_ms": 32
 }
 ```
 
-Signals are intentionally **raw and append-only**.
+### Derived posture (current state per asset)
 
----
-
-## Asset posture (derived state)
-
-A separate index represents **current posture per asset**:
+Current posture is stored in:
 
 ```
 secplat-asset-status
 ```
 
-Key properties:
+This index contains **one document per asset** (upserted by `asset_key`).
 
-* **One document per asset**
-* Continuously rebuilt
-* Represents *current state*, not history
+---
 
-### Posture states
+## Asset posture model
+
+Posture is represented using:
 
 | State   | status_num | Meaning                    |
 | ------- | ---------- | -------------------------- |
@@ -167,63 +163,43 @@ Key properties:
 | UNKNOWN | `-1`       | No health events ever seen |
 | DOWN    | `-2`       | Explicit failure detected  |
 
-Example document:
-
-```json
-{
-  "asset_key": "verify-web",
-  "status": "up",
-  "status_num": 1,
-  "code": 200,
-  "latency_ms": 12,
-  "last_seen": "2026-02-02T17:45:09Z"
-}
-```
-
-This mirrors how real security platforms **collapse events into posture**.
-
 ---
 
-## Cron-based health monitoring
+## Continuous ingestion (cron)
 
 Two cron jobs drive the platform:
 
 ### 1) Health signal ingestion
 
+Script:
+
 ```
 scripts/health_to_opensearch.sh
 ```
 
-* Probes API, external web assets
+* Probes API, verify-web, and a stable local target (Juice Shop) for repeatable demos
 * Measures latency
 * Emits health events into `secplat-events`
 
-Cron entry:
+Example cron entries:
 
 ```cron
 * * * * * /home/labuser/security-posture-platform/scripts/health_to_opensearch.sh >/dev/null 2>&1
+* * * * * /home/labuser/security-posture-platform/scripts/build_asset_status.sh >> /tmp/secplat_build_asset_status.log 2>&1
 ```
 
----
-
 ### 2) Asset posture builder
+
+Script:
 
 ```
 scripts/build_asset_status.sh
 ```
 
-* Reads asset inventory
-* Pulls latest health events
+* Reads assets
+* Pulls latest health events from OpenSearch
 * Computes UP / STALE / UNKNOWN / DOWN
-* Upserts into `secplat-asset-status`
-
-Cron entry:
-
-```cron
-* * * * * /home/labuser/security-posture-platform/scripts/build_asset_status.sh >> /tmp/secplat_build_asset_status.log 2>&1
-```
-
-This decouples **signal generation** from **posture evaluation**.
+* Upserts one current-state doc per asset into `secplat-asset-status`
 
 ---
 
@@ -237,41 +213,25 @@ http://localhost:3001
 
 ### Provisioned dashboards
 
-Dashboards are **provisioned as code** and auto-loaded on startup:
+Dashboards are provisioned as code and auto-loaded on startup:
 
-```
-infra/grafana/dashboards/secplat-posture.json
-infra/grafana/provisioning/dashboards/dashboards.yaml
-```
-
-No manual UI setup is required after restart.
+* `infra/grafana/dashboards/secplat-posture.json`
+* `infra/grafana/provisioning/dashboards/dashboards.yaml`
 
 ---
 
-## Asset posture dashboard (current)
+## Alerting
 
-The main dashboard includes:
+A baseline alert rule is configured:
 
-* **Healthy Assets** (UP)
-* **Stale Assets**
-* **Unknown Assets**
-* **Down Assets**
-* **Current Asset Posture Table**
+* **Down Assets Detected**
+* Condition: Down Assets count (`status_num:-2`) **> 0**
 
-Key characteristics:
-
-* Uses **Metric → Count** (no transform hacks)
-* Uses Lucene filters on `status_num`
-* Time-range aware
-* One-row-per-asset posture view
-
-This reflects how SOC and platform teams monitor **fleet-level health**.
+This turns the dashboard into a usable posture system: not just visibility, but actionable detection.
 
 ---
 
 ## Development workflow
-
-Common commands:
 
 ```bash
 # View logs
@@ -292,7 +252,7 @@ docker compose config > /dev/null && echo "compose ok"
 * OpenSearch security plugins disabled (local lab)
 * Grafana credentials configurable via `.env`
 
-This repository is a **learning and experimentation environment**, not a hardened production deployment.
+This repository is a learning and experimentation environment, not a hardened production deployment.
 
 ---
 
@@ -305,7 +265,17 @@ This project demonstrates:
 * How posture is derived
 * How assets are tracked
 * How dashboards are provisioned
-* How real security platforms are structured internally
+* How alerting turns posture into detection
 
-If you can reason about this system, you can reason about **CSPM, ASM, SIEM, and internal security tooling** used in real organisations.
+If you can reason about this system, you can reason about internal security tooling used in real organisations.
+
+---
+
+## Next steps (optional)
+
+* Alerting on stale critical assets
+* Asset ownership & criticality weighting
+* Findings ingestion beyond health checks
+* API exposure of posture data
+* Authentication and role separation
 
