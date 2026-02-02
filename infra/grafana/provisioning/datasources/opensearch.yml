@@ -4,7 +4,7 @@ datasources:
   - name: OpenSearch
     type: elasticsearch
     access: proxy
-    url: http://opensearch:9200
+    url: http://secplat-opensearch:9200
     isDefault: false
     jsonData:
       timeField: "@timestamp"

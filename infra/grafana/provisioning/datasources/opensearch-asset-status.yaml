@@ -1,0 +1,18 @@
+apiVersion: 1
+
+deleteDatasources:
+  - name: OpenSearch (asset-status)
+    orgId: 1
+
+datasources:
+  - name: OpenSearch (asset-status)
+    type: grafana-opensearch-datasource
+    access: proxy
+    url: http://secplat-opensearch:9200
+    isDefault: false
+    editable: true
+    jsonData:
+      database: secplat-asset-status
+      timeField: "@timestamp"
+      version: "2.14.0"
+      pplEnabled: false
