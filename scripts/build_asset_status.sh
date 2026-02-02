@@ -6,7 +6,21 @@ ASSETS_INDEX="${ASSETS_INDEX:-secplat-assets}"
 EVENTS_INDEX="${EVENTS_INDEX:-secplat-events}"
 STATUS_INDEX="${STATUS_INDEX:-secplat-asset-status}"
 
+# STALE threshold (5 minutes)
+STALE_THRESHOLD_SECONDS="${STALE_THRESHOLD_SECONDS:-300}"
+
 now_iso="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+now_epoch="$(date -u +%s)"
+
+# Convert ISO8601 -> epoch seconds (GNU date on Ubuntu)
+to_epoch() {
+  local iso="$1"
+  if [[ -z "$iso" || "$iso" == "null" ]]; then
+    echo ""
+    return 0
+  fi
+  date -u -d "$iso" +%s 2>/dev/null || echo ""
+}
 
 # Create status index if missing
 if curl -sS "$OS_URL/$STATUS_INDEX" | jq -e 'has("error")' >/dev/null 2>&1; then
@@ -79,6 +93,7 @@ echo "$assets_json" | jq -c '.hits.hits[]?._source' | while read -r asset; do
 
   event_src="$(echo "$latest_event" | jq -c '.hits.hits[0]._source // empty')"
 
+  # Defaults
   status="unknown"
   status_num=-1
   code="null"
@@ -87,12 +102,38 @@ echo "$assets_json" | jq -c '.hits.hits[]?._source' | while read -r asset; do
   event_ts="null"
 
   if [[ -n "$event_src" ]]; then
-    status="$(echo "$event_src" | jq -r '.status // "unknown"')"
-    status_num="$(echo "$event_src" | jq -r 'if has("status_num") then .status_num else (if .status=="up" then 1 elif .status=="down" then 0 else -1 end) end')"
+    # Pull raw fields from event
+    raw_status="$(echo "$event_src" | jq -r '.status // "unknown"')"
     code="$(echo "$event_src" | jq -r '.code // null')"
     latency_ms="$(echo "$event_src" | jq -r '.latency_ms // null')"
     last_seen="$(echo "$event_src" | jq -r '.["@timestamp"] // null')"
     event_ts="$last_seen"
+
+    # Decide STALE vs FRESH first
+    last_seen_epoch="$(to_epoch "$last_seen")"
+
+    if [[ -n "$last_seen_epoch" ]]; then
+      age_seconds=$(( now_epoch - last_seen_epoch ))
+
+      if (( age_seconds > STALE_THRESHOLD_SECONDS )); then
+        status="stale"
+        status_num=0
+      else
+        # FRESH: decide UP/DOWN using code/status
+        # "up" if code==200 OR raw_status=="up"
+        if [[ "$code" == "200" ]] || [[ "$raw_status" == "up" ]]; then
+          status="up"
+          status_num=1
+        else
+          status="down"
+          status_num=-2
+        fi
+      fi
+    else
+      # If timestamp parsing failed, keep unknown (safe fallback)
+      status="unknown"
+      status_num=-1
+    fi
   fi
 
   # Build doc safely (no --argjson surprises)
@@ -139,7 +180,7 @@ echo "$assets_json" | jq -c '.hits.hits[]?._source' | while read -r asset; do
     -d "$doc")"
 
   echo "$resp" | jq -c '{result, _id, _index, error}'
-  echo "status upserted asset_key=$asset_key status=$status"
+  echo "status upserted asset_key=$asset_key status=$status status_num=$status_num"
 done
 
 curl -sS -X POST "$OS_URL/$STATUS_INDEX/_refresh" >/dev/null
