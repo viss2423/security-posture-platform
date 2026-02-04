@@ -6,6 +6,33 @@ ASSETS_INDEX="${ASSETS_INDEX:-secplat-assets}"
 EVENTS_INDEX="${EVENTS_INDEX:-secplat-events}"
 STATUS_INDEX="${STATUS_INDEX:-secplat-asset-status}"
 
+now_epoch() { date -u +%s; }
+
+# Convert ISO8601 (e.g. 2026-02-04T20:12:01Z) to epoch seconds
+iso_to_epoch() {
+  # GNU date supports this on Ubuntu
+  date -u -d "$1" +%s 2>/dev/null || echo 0
+}
+
+# Get current stored status_num for an asset from secplat-asset-status (if exists)
+get_prev_status_num() {
+  local asset_id="$1"
+  curl -s "$OS_URL/$STATUS_INDEX/_doc/$asset_id" \
+    -H 'Content-Type: application/json' \
+    ${OS_AUTH:+-u "$OS_AUTH"} \
+  | jq -r '._source.status_num // empty'
+}
+
+# Get current stored last_status_change (if exists)
+get_prev_last_change() {
+  local asset_id="$1"
+  curl -s "$OS_URL/$STATUS_INDEX/_doc/$asset_id" \
+    -H 'Content-Type: application/json' \
+    ${OS_AUTH:+-u "$OS_AUTH"} \
+  | jq -r '._source.last_status_change // empty'
+}
+
+
 # STALE threshold (5 minutes)
 STALE_THRESHOLD_SECONDS="${STALE_THRESHOLD_SECONDS:-300}"
 
@@ -45,7 +72,11 @@ if curl -sS "$OS_URL/$STATUS_INDEX" | jq -e 'has("error")' >/dev/null 2>&1; then
           "code": { "type": "integer" },
           "latency_ms": { "type": "integer" },
           "last_seen": { "type": "date" },
-          "source_event_timestamp": { "type": "date" }
+          "source_event_timestamp": { "type": "date" },
+          "staleness_seconds": { "type": "integer" },
+          "posture_score": { "type": "integer" },
+          "posture_state": { "type": "keyword" },
+          "last_status_change": { "type": "date" }
         }
       }
     }' | jq .
@@ -100,6 +131,7 @@ echo "$assets_json" | jq -c '.hits.hits[]?._source' | while read -r asset; do
   latency_ms="null"
   last_seen="null"
   event_ts="null"
+  last_seen_epoch=""
 
   if [[ -n "$event_src" ]]; then
     # Pull raw fields from event
@@ -136,6 +168,42 @@ echo "$assets_json" | jq -c '.hits.hits[]?._source' | while read -r asset; do
     fi
   fi
 
+  # --- Posture scoring ---
+  STALE_SEC=0
+  if [[ -n "$last_seen_epoch" && "$last_seen_epoch" != "" ]]; then
+    STALE_SEC=$(( now_epoch - last_seen_epoch ))
+  fi
+
+  # posture_score + posture_state
+  POSTURE_SCORE=100
+  POSTURE_STATE="green"
+
+  if [[ "$status_num" == "-2" ]]; then
+    POSTURE_SCORE=0
+    POSTURE_STATE="red"
+  elif [[ "$status_num" == "-1" ]]; then
+    # No health events ever seen
+    POSTURE_SCORE=0
+    POSTURE_STATE="red"
+  elif (( STALE_SEC > 300 )); then
+    POSTURE_SCORE=60
+    POSTURE_STATE="amber"
+  fi
+
+  # last_status_change (changes only when status flips)
+  PREV_STATUS_NUM="$(get_prev_status_num "$asset_key")"
+  PREV_LAST_CHANGE="$(get_prev_last_change "$asset_key")"
+
+  LAST_STATUS_CHANGE="$PREV_LAST_CHANGE"
+  if [[ -z "$LAST_STATUS_CHANGE" ]]; then
+    LAST_STATUS_CHANGE="$last_seen"
+  fi
+
+  if [[ -n "$PREV_STATUS_NUM" && "$PREV_STATUS_NUM" != "$status_num" ]]; then
+    LAST_STATUS_CHANGE="$last_seen"
+  fi
+  # --- End posture scoring ---
+
   # Build doc safely (no --argjson surprises)
   doc="$(jq -n \
     --arg ts "$now_iso" \
@@ -152,6 +220,10 @@ echo "$assets_json" | jq -c '.hits.hits[]?._source' | while read -r asset; do
     --arg latency_ms "$latency_ms" \
     --arg last_seen "$last_seen" \
     --arg source_event_timestamp "$event_ts" \
+    --arg staleness_seconds "$STALE_SEC" \
+    --arg posture_score "$POSTURE_SCORE" \
+    --arg posture_state "$POSTURE_STATE" \
+    --arg last_status_change "$LAST_STATUS_CHANGE" \
     '{
       "@timestamp": $ts,
       asset_key: $asset_key,
@@ -166,7 +238,11 @@ echo "$assets_json" | jq -c '.hits.hits[]?._source' | while read -r asset; do
       code: (if $code=="null" then null else ($code|tonumber) end),
       latency_ms: (if $latency_ms=="null" then null else ($latency_ms|tonumber) end),
       last_seen: (if $last_seen=="null" then null else $last_seen end),
-      source_event_timestamp: (if $source_event_timestamp=="null" then null else $source_event_timestamp end)
+      source_event_timestamp: (if $source_event_timestamp=="null" then null else $source_event_timestamp end),
+      staleness_seconds: ($staleness_seconds | tonumber),
+      posture_score: ($posture_score | tonumber),
+      posture_state: $posture_state,
+      last_status_change: (if $last_status_change=="null" then null else $last_status_change end)
     }'
   )"
 

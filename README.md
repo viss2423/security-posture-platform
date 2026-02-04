@@ -163,6 +163,34 @@ Posture is represented using:
 | UNKNOWN | `-1`       | No health events ever seen |
 | DOWN    | `-2`       | Explicit failure detected  |
 
+### Posture scoring (secplat-asset-status)
+
+Each asset document includes derived scoring fields:
+
+| Field               | Meaning |
+| ------------------- | ------- |
+| `posture_score`     | 0–100 (0 = bad, 100 = good) |
+| `posture_state`     | `green` \| `amber` \| `red` |
+| `last_seen`         | Last health event time |
+| `staleness_seconds`  | Seconds since last event |
+| `last_status_change`| When status last changed |
+
+Scoring logic:
+
+- `status_num == -2` (DOWN) → score `0`, state `red`
+- `status_num == -1` (UNKNOWN) → score `0`, state `red`
+- `status_num == 1` (UP) and stale (>5 min) → score `60`, state `amber`
+- `status_num == 1` and fresh → score `100`, state `green`
+
+---
+
+## Architecture & design principles
+
+- **Events ≠ state** — `secplat-events` is append-only; posture decisions use **current** state in `secplat-asset-status`, not historical queries.
+- **Posture is current, not historical** — One document per asset, continuously overwritten by `build_asset_status.sh`.
+- **Data model clarity > tooling** — If dashboards are wrong, alerts will be wrong; the pipeline is designed so posture is computed in one place (the script) and dashboards only read it.
+- **Alerting** — Explored (e.g. LAST vs MAX reducers); currently **deferred** so the platform can focus on posture intelligence and dashboards first.
+
 ---
 
 ## Continuous ingestion (cron)
@@ -181,7 +209,7 @@ scripts/health_to_opensearch.sh
 * Measures latency
 * Emits health events into `secplat-events`
 
-Example cron entries:
+Example cron entries (run `assets_to_opensearch.sh` first or periodically so `secplat-assets` is populated):
 
 ```cron
 * * * * * /home/labuser/security-posture-platform/scripts/health_to_opensearch.sh >/dev/null 2>&1
@@ -200,6 +228,30 @@ scripts/build_asset_status.sh
 * Pulls latest health events from OpenSearch
 * Computes UP / STALE / UNKNOWN / DOWN
 * Upserts one current-state doc per asset into `secplat-asset-status`
+
+### 3) Validate posture docs (optional)
+
+After ingestion, check that `secplat-asset-status` has the expected posture fields:
+
+```bash
+./scripts/validate_posture.sh
+```
+
+Requires `jq`. Checks for `posture_score`, `posture_state`, `staleness_seconds`, `last_status_change`, etc.
+
+---
+
+## Posture API
+
+The API exposes current posture (read from OpenSearch):
+
+| Endpoint | Description |
+| -------- | ----------- |
+| `GET /posture` | List all asset posture documents |
+| `GET /posture/summary` | Counts: green, amber, red, and average posture score |
+| `GET /posture/{asset_key}` | Posture for one asset |
+
+Example: `curl http://localhost:8000/posture/summary`
 
 ---
 
@@ -222,12 +274,7 @@ Dashboards are provisioned as code and auto-loaded on startup:
 
 ## Alerting
 
-A baseline alert rule is configured:
-
-* **Down Assets Detected**
-* Condition: Down Assets count (`status_num:-2`) **> 0**
-
-This turns the dashboard into a usable posture system: not just visibility, but actionable detection.
+Alerting has been explored (e.g. LAST vs MAX reducers for “broken right now” vs “ever broken”) and is **intentionally paused**. Focus is on posture scoring and dashboards; alerts can be re-enabled later once the data model and panels are stable.
 
 ---
 
