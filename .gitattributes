@@ -1,0 +1,2 @@
+# Keep shell scripts as LF so they run in Docker (Linux) and on WSL
+*.sh text eol=lf

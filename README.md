@@ -27,7 +27,8 @@ Everything runs locally using **Docker Compose**, is easy to inspect and break, 
 | OpenSearch         | Events + derived asset status              | 9200 |
 | Grafana            | Dashboards & alerting                      | 3001 |
 | Juice Shop         | Intentionally vulnerable demo target       | 3000 |
-| verify-web (nginx) | Domain / ownership verification service    | 8081 |
+| verify-web (nginx) | Domain / ownership verification service   | 8081 |
+| ingestion          | Runs health + posture scripts in a loop (no host cron) | —    |
 
 All services are **local-only**. Nothing is exposed externally.
 
@@ -60,7 +61,7 @@ v                +-------------------+
 Supporting components:
 
 - **verify-web**: static nginx service for ownership verification
-- **cron jobs**: continuously emit health signals and rebuild asset posture
+- **ingestion** (container): runs `health_to_opensearch.sh`, `assets_to_opensearch.sh`, `build_asset_status.sh`, etc. every 60s so no host cron is needed (works on Windows)
 
 ---
 
@@ -68,9 +69,10 @@ Supporting components:
 
 ### Prerequisites
 
-- Linux / Ubuntu
 - Docker Engine
 - Docker Compose v2
+- **Linux/Ubuntu**: bash, curl, jq for running scripts on the host (optional; see below).
+- **Windows**: No WSL or bash required. All ingestion runs inside the `ingestion` container.
 
 ### Start the stack
 
@@ -78,7 +80,9 @@ Supporting components:
 cd security-posture-platform
 docker compose up -d --build
 docker compose ps
-````
+```
+
+On **Windows**, this is enough: the `ingestion` service runs the health and posture scripts inside Docker every 60 seconds, so you don't run any scripts on the host. On **Linux**, you can either use the same (recommended) or run the scripts via cron as in the [Continuous ingestion](#continuous-ingestion-cron) section.
 
 ---
 
