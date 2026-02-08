@@ -172,7 +172,7 @@ def create_asset(payload: dict, db: Session = Depends(get_db)):
         "owner": owner,
         "owner_team": payload.get("owner_team"),
         "owner_email": payload.get("owner_email"),
-        "asset_type": payload.get("asset_type"),
+        "asset_type": payload.get("asset_type") or "service",
         "environment": payload.get("environment", "dev"),
         "criticality": payload.get("criticality", 3),
         "token": token,

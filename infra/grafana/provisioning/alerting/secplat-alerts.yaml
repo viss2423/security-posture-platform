@@ -1,0 +1,92 @@
+# SecPlat alert rules (unified alerting).
+# Loaded on Grafana startup. Rules appear under Alerting → Alert rules.
+# Use a dedicated folder name to avoid conflict with built-in "General" (which causes startup failure).
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: SecPlat Posture
+    folder: SecPlat Alerts
+    interval: 60s
+    rules:
+      - uid: secplat-any-red
+        title: Any asset red
+        condition: B
+        data:
+          - refId: A
+            datasourceUid: P3DECE5F6851F5FA5
+            relativeTimeRange:
+              from: 900
+              to: 0
+            model:
+              alias: ""
+              bucketAggs:
+                - field: "@timestamp"
+                  id: "2"
+                  settings:
+                    interval: "15m"
+                  type: date_histogram
+              format: table
+              luceneQueryType: Metric
+              metrics:
+                - id: "1"
+                  type: count
+              query: "posture_state:red"
+              queryType: lucene
+              refId: A
+              timeField: "@timestamp"
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              refId: B
+              expression: A
+              reducer: last
+        dashboardUid: afbkybzs8bzeof
+        panelId: 23
+        noDataState: NoData
+        execErrState: Alerting
+        for: 1m
+        annotations: {}
+        labels: {}
+
+      - uid: secplat-stale-assets
+        title: Stale assets present
+        condition: B
+        data:
+          - refId: A
+            datasourceUid: P3DECE5F6851F5FA5
+            relativeTimeRange:
+              from: 900
+              to: 0
+            model:
+              alias: ""
+              bucketAggs:
+                - field: "@timestamp"
+                  id: "2"
+                  settings:
+                    interval: "15m"
+                  type: date_histogram
+              format: table
+              luceneQueryType: Metric
+              metrics:
+                - id: "1"
+                  type: count
+              query: "status_num:0"
+              queryType: lucene
+              refId: A
+              timeField: "@timestamp"
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              refId: B
+              expression: A
+              reducer: last
+        dashboardUid: afbkybzs8bzeof
+        panelId: 15
+        noDataState: NoData
+        execErrState: Alerting
+        for: 2m
+        annotations: {}
+        labels: {}

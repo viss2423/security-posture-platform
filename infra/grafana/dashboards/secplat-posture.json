@@ -195,6 +195,23 @@
         }
       ],
       "title": "Stale Assets",
+      "alert": {
+        "name": "Stale assets present",
+        "conditions": [
+          {
+            "evaluator": {"params": [0], "type": "gt"},
+            "operator": {"type": "and"},
+            "query": {"params": ["secplat-asset-status"]},
+            "reducer": {"type": "last"},
+            "type": "query"
+          }
+        ],
+        "executionErrorState": "alerting",
+        "for": "2m",
+        "frequency": "1m",
+        "noDataState": "no_data",
+        "notifications": []
+      },
       "type": "stat"
     },
     {
@@ -332,7 +349,7 @@
         "percentChangeColorMode": "standard",
         "reduceOptions": {
           "calcs": [
-            "count"
+            "lastNotNull"
           ],
           "fields": "",
           "values": false
@@ -350,7 +367,7 @@
               "field": "@timestamp",
               "id": "2",
               "settings": {
-                "interval": "auto"
+                "interval": "15m"
               },
               "type": "date_histogram"
             }
@@ -360,16 +377,11 @@
             "uid": "P3DECE5F6851F5FA5"
           },
           "format": "table",
-          "luceneQueryType": "RawData",
+          "luceneQueryType": "Metric",
           "metrics": [
             {
               "id": "1",
-              "settings": {
-                "order": "desc",
-                "size": "500",
-                "useTimeRange": true
-              },
-              "type": "raw_data"
+              "type": "count"
             }
           ],
           "query": "posture_state:green",
@@ -419,7 +431,7 @@
         "percentChangeColorMode": "standard",
         "reduceOptions": {
           "calcs": [
-            "count"
+            "lastNotNull"
           ],
           "fields": "",
           "values": false
@@ -437,7 +449,7 @@
               "field": "@timestamp",
               "id": "2",
               "settings": {
-                "interval": "auto"
+                "interval": "15m"
               },
               "type": "date_histogram"
             }
@@ -447,16 +459,11 @@
             "uid": "P3DECE5F6851F5FA5"
           },
           "format": "table",
-          "luceneQueryType": "RawData",
+          "luceneQueryType": "Metric",
           "metrics": [
             {
               "id": "1",
-              "settings": {
-                "order": "desc",
-                "size": "500",
-                "useTimeRange": true
-              },
-              "type": "raw_data"
+              "type": "count"
             }
           ],
           "query": "posture_state:amber",
@@ -506,7 +513,7 @@
         "percentChangeColorMode": "standard",
         "reduceOptions": {
           "calcs": [
-            "count"
+            "lastNotNull"
           ],
           "fields": "",
           "values": false
@@ -524,7 +531,7 @@
               "field": "@timestamp",
               "id": "2",
               "settings": {
-                "interval": "auto"
+                "interval": "15m"
               },
               "type": "date_histogram"
             }
@@ -534,16 +541,11 @@
             "uid": "P3DECE5F6851F5FA5"
           },
           "format": "table",
-          "luceneQueryType": "RawData",
+          "luceneQueryType": "Metric",
           "metrics": [
             {
               "id": "1",
-              "settings": {
-                "order": "desc",
-                "size": "500",
-                "useTimeRange": true
-              },
-              "type": "raw_data"
+              "type": "count"
             }
           ],
           "query": "posture_state:red",
@@ -553,6 +555,23 @@
         }
       ],
       "title": "Red",
+      "alert": {
+        "name": "Any asset red",
+        "conditions": [
+          {
+            "evaluator": {"params": [0], "type": "gt"},
+            "operator": {"type": "and"},
+            "query": {"params": ["A"]},
+            "reducer": {"type": "last"},
+            "type": "query"
+          }
+        ],
+        "executionErrorState": "alerting",
+        "for": "1m",
+        "frequency": "1m",
+        "noDataState": "no_data",
+        "notifications": []
+      },
       "type": "stat"
     },
     {
@@ -643,6 +662,45 @@
                 "value": "dateTimeAsSystem"
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "posture_state (lastNotNull)"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "options": {
+                      "green": {
+                        "color": "dark-green",
+                        "index": 0,
+                        "text": "green"
+                      },
+                      "amber": {
+                        "color": "semi-dark-orange",
+                        "index": 1,
+                        "text": "amber"
+                      },
+                      "red": {
+                        "color": "dark-red",
+                        "index": 2,
+                        "text": "red"
+                      }
+                    },
+                    "type": "value"
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
           }
         ]
       },
@@ -718,25 +776,25 @@
             },
             "includeByName": {},
             "indexByName": {
-              "@timestamp": 10,
-              "_id": 11,
-              "_index": 12,
-              "_type": 3,
+              "@timestamp": 11,
+              "_id": 14,
+              "_index": 15,
+              "_type": 16,
               "asset_key": 0,
-              "code": 7,
+              "code": 9,
               "criticality": 13,
-              "environment": 4,
-              "last_seen": 9,
-              "latency_ms": 8,
+              "environment": 3,
+              "last_seen": 6,
+              "latency_ms": 10,
               "name": 1,
-              "owner": 14,
-              "owner_team": 15,
-              "posture_score": 18,
-              "posture_state": 17,
-              "source_event_timestamp": 16,
-              "staleness_seconds": 19,
-              "status": 5,
-              "status_num": 6,
+              "owner": 17,
+              "owner_team": 18,
+              "posture_score": 5,
+              "posture_state": 4,
+              "source_event_timestamp": 19,
+              "staleness_seconds": 12,
+              "status": 7,
+              "status_num": 8,
               "type": 2
             },
             "renameByName": {}
@@ -1766,15 +1824,178 @@
         }
       ],
       "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 68},
+      "id": 24,
+      "panels": [],
+      "title": "Posture over time & triage",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "grafana-opensearch-datasource", "uid": "P3DECE5F6851F5FA5"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {"legend": false, "tooltip": false, "viz": false},
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {"type": "linear"},
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {"group": "A", "mode": "none"},
+            "thresholdsStyle": {"mode": "off"}
+          },
+          "mappings": [],
+          "max": 100,
+          "min": 0,
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 80}]},
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 69},
+      "id": 25,
+      "options": {
+        "legend": {"calcs": ["mean", "lastNotNull"], "displayMode": "list", "placement": "bottom", "showLegend": true},
+        "tooltip": {"mode": "single", "sort": "none"}
+      },
+      "targets": [
+        {
+          "alias": "",
+          "bucketAggs": [
+            {"field": "@timestamp", "id": "2", "settings": {"interval": "auto"}, "type": "date_histogram"}
+          ],
+          "datasource": {"type": "grafana-opensearch-datasource", "uid": "P3DECE5F6851F5FA5"},
+          "format": "time_series",
+          "luceneQueryType": "Metric",
+          "metrics": [{"field": "posture_score", "id": "1", "type": "avg"}],
+          "query": "*",
+          "queryType": "lucene",
+          "refId": "A",
+          "timeField": "@timestamp"
+        }
+      ],
+      "title": "Overall Posture Score (time series)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "grafana-opensearch-datasource", "uid": "P3DECE5F6851F5FA5"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "inspect": false},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 80}]}
+        },
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "posture_state (lastNotNull)"},
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "options": {
+                      "green": {"color": "dark-green", "index": 0, "text": "green"},
+                      "amber": {"color": "semi-dark-orange", "index": 1, "text": "amber"},
+                      "red": {"color": "dark-red", "index": 2, "text": "red"}
+                    },
+                    "type": "value"
+                  }
+                ]
+              },
+              {"id": "custom.cellOptions", "value": {"type": "color-text"}}
+            ]
+          },
+          {"matcher": {"id": "byName", "options": "last_seen (lastNotNull)"}, "properties": [{"id": "unit", "value": "dateTimeAsSystem"}]},
+          {"matcher": {"id": "byName", "options": "last_status_change (lastNotNull)"}, "properties": [{"id": "unit", "value": "dateTimeAsSystem"}]}
+        ]
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 69},
+      "id": 26,
+      "options": {"cellHeight": "sm", "footer": {"countRows": false, "fields": "", "reducer": ["sum"], "show": false}, "showHeader": true},
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "alias": "",
+          "bucketAggs": [{"field": "@timestamp", "id": "2", "settings": {"interval": "auto"}, "type": "date_histogram"}],
+          "datasource": {"type": "grafana-opensearch-datasource", "uid": "P3DECE5F6851F5FA5"},
+          "format": "table",
+          "luceneQueryType": "RawData",
+          "metrics": [{"id": "1", "settings": {"order": "desc", "size": "500", "useTimeRange": true}, "type": "raw_data"}],
+          "query": "*",
+          "queryType": "lucene",
+          "refId": "A",
+          "timeField": "@timestamp"
+        }
+      ],
+      "title": "Staleness & last status change (triage)",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {"_id": true, "_index": true, "_type": true, "code": true, "latency_ms": true, "owner": true, "owner_team": true, "source_event_timestamp": true, "status": true, "status_num": true},
+            "includeByName": {},
+            "indexByName": {
+              "asset_key": 0,
+              "name": 1,
+              "posture_state": 2,
+              "posture_score": 3,
+              "staleness_seconds": 4,
+              "last_seen": 5,
+              "last_status_change": 6
+            },
+            "renameByName": {}
+          }
+        },
+        {"id": "sortBy", "options": {"fields": {}, "sort": [{"desc": true, "field": "staleness_seconds (lastNotNull)"}]}}
+      ],
+      "type": "table"
     }
   ],
   "schemaVersion": 39,
   "tags": [],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "current": {
+          "selected": true,
+          "text": "secplat-api",
+          "value": "secplat-api"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "name": "asset",
+        "options": [
+          {"selected": true, "text": "secplat-api", "value": "secplat-api"},
+          {"selected": false, "text": "verify-web", "value": "verify-web"},
+          {"selected": false, "text": "example-com", "value": "example-com"},
+          {"selected": false, "text": "juice-shop", "value": "juice-shop"}
+        ],
+        "query": "secplat-api,verify-web,example-com,juice-shop",
+        "queryValue": "",
+        "skipUrlSync": false,
+        "type": "custom"
+      }
+    ]
   },
   "time": {
-    "from": "now-6h",
+    "from": "now-15m",
     "to": "now"
   },
   "timepicker": {},

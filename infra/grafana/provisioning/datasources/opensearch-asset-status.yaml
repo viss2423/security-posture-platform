@@ -6,9 +6,10 @@ deleteDatasources:
 
 datasources:
   - name: OpenSearch (asset-status)
+    uid: P3DECE5F6851F5FA5
     type: grafana-opensearch-datasource
     access: proxy
-    url: http://secplat-opensearch:9200
+    url: http://opensearch:9200
     isDefault: false
     editable: true
     jsonData:

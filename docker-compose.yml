@@ -94,6 +94,25 @@ services:
     volumes:
       - ./infra/verify-web:/usr/share/nginx/html:ro
 
+  ingestion:
+    build:
+      context: .
+      dockerfile: services/ingestion/Dockerfile
+    container_name: secplat-ingestion
+    environment:
+      API_URL: http://api:8000
+      OPENSEARCH_URL: http://opensearch:9200
+      OS_URL: http://opensearch:9200
+      VERIFY_WEB_URL: http://verify-web/.well-known/secplat-verification.txt
+      JUICE_URL: http://juiceshop:3000
+      INGESTION_INTERVAL: "60"
+    depends_on:
+      api:
+        condition: service_started
+      opensearch:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   postgres-data:
   opensearch-data:

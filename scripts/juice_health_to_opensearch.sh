@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OPENSEARCH_URL="http://localhost:9200"
-INDEX="secplat-events"
-HEALTH_URL="http://localhost:3000"
-ASSET="juice-shop"
-SERVICE="juice-shop"
+OPENSEARCH_URL="${OPENSEARCH_URL:-http://localhost:9200}"
+INDEX="${INDEX:-secplat-events}"
+HEALTH_URL="${JUICE_URL:-${EXAMPLE_COM_URL:-http://localhost:3000}}"
+ASSET="${JUICE_ASSET:-juice-shop}"
+SERVICE="${JUICE_SERVICE:-juice-shop}"
 
 TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 START_MS=$(date +%s%3N)
@@ -20,7 +20,7 @@ if [[ "$CODE" == "200" ]]; then
   STATUS_NUM=1
 else
   STATUS="down"
-  STATUS_NUM=0
+  STATUS_NUM=-2
 fi
 
 curl -sS -X POST "${OPENSEARCH_URL}/${INDEX}/_doc" \

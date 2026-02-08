@@ -2,11 +2,13 @@ apiVersion: 1
 
 datasources:
   - name: OpenSearch
+    uid: P9744FCCEAAFBD98F
     type: elasticsearch
     access: proxy
-    url: http://secplat-opensearch:9200
+    url: http://opensearch:9200
     isDefault: false
     jsonData:
       timeField: "@timestamp"
       esVersion: "7.17.0"
       maxConcurrentShardRequests: 5
+      database: secplat-events
