@@ -72,12 +72,18 @@ services:
     environment:
       ENV: ${ENV}
       API_SECRET_KEY: ${API_SECRET_KEY}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
       POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       OPENSEARCH_URL: http://opensearch:9200
       MAX_SCAN_DURATION_SECONDS: ${MAX_SCAN_DURATION_SECONDS}
       MAX_REQUESTS_PER_SECOND: ${MAX_REQUESTS_PER_SECOND}
       BLOCK_PRIVATE_IPS: ${BLOCK_PRIVATE_IPS}
       REQUIRE_DOMAIN_VERIFICATION: ${REQUIRE_DOMAIN_VERIFICATION}
+      STALE_THRESHOLD_SECONDS: ${STALE_THRESHOLD_SECONDS:-300}
+      EXPECTED_CHECK_INTERVAL_SECONDS: ${EXPECTED_CHECK_INTERVAL_SECONDS:-60}
+      LATENCY_SLO_MS: ${LATENCY_SLO_MS:-200}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
     ports:
       - "127.0.0.1:${API_PORT}:8000"
     depends_on:
@@ -94,6 +100,32 @@ services:
     volumes:
       - ./infra/verify-web:/usr/share/nginx/html:ro
 
+  web:
+    image: nginx:alpine
+    container_name: secplat-web
+    ports:
+      - "127.0.0.1:${WEB_PORT:-8082}:80"
+    volumes:
+      - ./infra/web:/usr/share/nginx/html:ro
+      - ./infra/web/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - api
+
+  frontend:
+    build:
+      context: ./services/frontend
+      dockerfile: Dockerfile
+      args:
+        API_URL: http://api:8000
+        NEXT_PUBLIC_GRAFANA_URL: ${NEXT_PUBLIC_GRAFANA_URL:-http://localhost:3001}
+    container_name: secplat-frontend
+    environment:
+      API_URL: http://api:8000
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-3002}:3000"
+    depends_on:
+      - api
+
   ingestion:
     build:
       context: .
@@ -105,6 +137,7 @@ services:
       OS_URL: http://opensearch:9200
       VERIFY_WEB_URL: http://verify-web/.well-known/secplat-verification.txt
       JUICE_URL: http://juiceshop:3000
+      EXAMPLE_COM_URL: ${EXAMPLE_COM_URL:-https://example.com}
       INGESTION_INTERVAL: "60"
     depends_on:
       api:

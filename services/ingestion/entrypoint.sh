@@ -16,7 +16,8 @@ export STATUS_INDEX="${STATUS_INDEX:-secplat-asset-status}"
 export API_URL="${API_URL}/assets/"
 export API_HEALTH_URL="${API_URL%/assets*}/health"
 export VERIFY_WEB_URL
-export EXAMPLE_COM_URL="$JUICE_URL"
+# example-com probes this URL (default: example.com so it's independent of juice-shop)
+export EXAMPLE_COM_URL="${EXAMPLE_COM_URL:-https://example.com}"
 
 echo "[ingestion] waiting for API and OpenSearch..."
 until curl -sf --connect-timeout 2 "$API_HEALTH_URL" >/dev/null 2>&1; do

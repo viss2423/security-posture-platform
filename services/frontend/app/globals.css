@@ -1,0 +1,63 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #0f1419;
+  --surface: #1a2332;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --green: #3fb950;
+  --amber: #d29922;
+  --red: #f85149;
+  --border: #30363d;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  margin: 0;
+  min-height: 100vh;
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 transition-shadow hover:shadow-lg;
+  }
+  .btn-primary {
+    @apply rounded-lg bg-[var(--green)] px-4 py-2.5 font-semibold text-white transition hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-[var(--green)] focus:ring-offset-2 focus:ring-offset-[var(--bg)] disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-secondary {
+    @apply rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-2.5 font-medium text-[var(--text)] transition hover:bg-[var(--border)] focus:outline-none focus:ring-2 focus:ring-[var(--muted)] focus:ring-offset-2 focus:ring-offset-[var(--bg)] disabled:opacity-50;
+  }
+  .input {
+    @apply w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 text-[var(--text)] placeholder:text-[var(--muted)] focus:border-[var(--green)] focus:outline-none focus:ring-1 focus:ring-[var(--green)];
+  }
+  .badge {
+    @apply inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium;
+  }
+  .badge.green {
+    @apply bg-[var(--green)]/20 text-[var(--green)];
+  }
+  .badge.amber {
+    @apply bg-[var(--amber)]/20 text-[var(--amber)];
+  }
+  .badge.red {
+    @apply bg-[var(--red)]/20 text-[var(--red)];
+  }
+  .page-title {
+    @apply text-2xl font-semibold tracking-tight text-[var(--text)];
+  }
+  .section-title {
+    @apply text-sm font-medium uppercase tracking-wider text-[var(--muted)] mb-3;
+  }
+}
+
+a {
+  @apply text-[var(--muted)] no-underline transition hover:text-[var(--text)];
+}

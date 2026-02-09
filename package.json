@@ -1,0 +1,11 @@
+{
+  "name": "security-posture-platform",
+  "private": true,
+  "scripts": {
+    "dev": "npm run dev --prefix services/frontend",
+    "build": "npm run build --prefix services/frontend",
+    "start": "npm run start --prefix services/frontend",
+    "frontend:install": "npm install --prefix services/frontend",
+    "postinstall": "npm install --prefix services/frontend"
+  }
+}

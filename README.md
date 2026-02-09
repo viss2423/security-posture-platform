@@ -22,46 +22,73 @@ Everything runs locally using **Docker Compose**, is easy to inspect and break, 
 
 | Service            | Purpose                                   | Port |
 |--------------------|-------------------------------------------|------|
-| API (FastAPI)      | Core backend + health endpoint             | 8000 |
+| **Frontend (Next.js)** | Main UI: login, overview, assets, alerts, reports, Grafana embed | 3002 |
+| API (FastAPI)      | Core backend, JWT auth, posture API (source of truth) | 8000 |
 | PostgreSQL         | Asset inventory & metadata                 | 5432 |
 | OpenSearch         | Events + derived asset status              | 9200 |
-| Grafana            | Dashboards & alerting                      | 3001 |
-| Juice Shop         | Intentionally vulnerable demo target       | 3000 |
-| verify-web (nginx) | Domain / ownership verification service   | 8081 |
-| ingestion          | Runs health + posture scripts in a loop (no host cron) | —    |
+| Grafana            | Dashboards & alerting (read-only on OpenSearch) | 3001 |
+| Juice Shop         | Demo health-check target                   | 3000 |
+| verify-web (nginx) | Domain / ownership verification            | 8081 |
+| web (nginx)        | Simple static proxy to API (optional)      | 8082 |
+| ingestion          | Health + posture scripts every 60s (no host cron) | —    |
 
 All services are **local-only**. Nothing is exposed externally.
 
 ---
 
-## High-level architecture
+## Data flow (architecture)
 
+**Single source of truth:** FastAPI reads from OpenSearch and exposes a **canonical asset state schema**. The website and reports use only this API. Grafana visualises the same data (read-only); it does not define business logic.
+
+```mermaid
+flowchart LR
+  subgraph targets["Health targets"]
+    J[Juice Shop]
+    V[verify-web]
+    A[API]
+    E[example.com]
+  end
+
+  subgraph ingestion["Ingestion (every 60s)"]
+    H[health_to_opensearch]
+    JH[juice_health]
+    B[build_asset_status]
+  end
+
+  subgraph storage["OpenSearch"]
+    EV[(secplat-events)]
+    ST[(secplat-asset-status)]
+  end
+
+  subgraph app["Application"]
+    API[FastAPI]
+    FE[Website]
+    GF[Grafana]
+  end
+
+  J --> JH
+  V --> H
+  A --> H
+  E --> H
+  JH --> EV
+  H --> EV
+  EV --> B
+  B --> ST
+  ST --> API
+  API --> FE
+  ST --> GF
 ```
 
-+-----------+
-|  Clients  |
-+-----------+
-|
-v
-+-------------+        +-------------------+
-|   FastAPI   | -----> |   OpenSearch       |
-|   (health)  |        |                   |
-+-------------+        | - secplat-events  |
-|                | - secplat-asset-  |
-|                |   status          |
-v                +-------------------+
-+---------------+                |
-|  PostgreSQL   |                v
-|  (assets)     |          +-----------+
-+---------------+          |  Grafana  |
-+-----------+
+**In words:**
 
-````
+1. **Ingestion** (container) runs every 60s: health checks → `secplat-events`; `build_asset_status.sh` → latest event per asset → `secplat-asset-status`.
+2. **Website** (Next.js, port 3002) → **FastAPI** (posture summary, list, detail, reports) → **OpenSearch** (read). Login: JWT; pages: Overview, Assets, Asset detail (timeline, evidence, recommendations), Alerts, Reports (CSV + summary), Grafana embed.
+3. **Grafana** (port 3001) reads OpenSearch for dashboards and alert rules; it does not compute posture (FastAPI does).
 
 Supporting components:
 
-- **verify-web**: static nginx service for ownership verification
-- **ingestion** (container): runs `health_to_opensearch.sh`, `assets_to_opensearch.sh`, `build_asset_status.sh`, etc. every 60s so no host cron is needed (works on Windows)
+- **verify-web**: static nginx for `/.well-known/secplat-verification.txt`
+- **web** (optional): nginx serving a simple static page + API proxy on 8082
 
 ---
 
@@ -245,17 +272,43 @@ Requires `jq`. Checks for `posture_score`, `posture_state`, `staleness_seconds`,
 
 ---
 
+## Website (main UI)
+
+Open **http://localhost:3002** after starting the stack.
+
+- **Login:** `admin` / `admin` (configurable via `ADMIN_USERNAME`, `ADMIN_PASSWORD`).
+- **Overview:** Green/amber/red counts, posture score, down assets list.
+- **Assets:** Table with status, criticality, owner, env; click for detail (timeline, evidence, recommendations, SLO).
+- **Alerts:** Currently firing (down assets from API) + link to Grafana alerting.
+- **Reports:** Summary (uptime %, avg latency, top incidents) + CSV export.
+- **Grafana:** Embedded posture dashboard (deep dive).
+
+All API calls go through FastAPI (canonical schema). See [Testing](docs/TESTING-SECPLAT.md) for a full test plan.
+
+---
+
 ## Posture API
 
-The API exposes current posture (read from OpenSearch):
+Endpoints require **Bearer token** (from `POST /auth/login`). The API is the **source of truth** for posture; it reads OpenSearch and returns a canonical schema.
 
 | Endpoint | Description |
 | -------- | ----------- |
-| `GET /posture` | List all asset posture documents |
-| `GET /posture/summary` | Counts: green, amber, red, and average posture score |
-| `GET /posture/{asset_key}` | Posture for one asset |
+| `POST /auth/login` | Form: `username`, `password` → JWT |
+| `GET /posture` | List all assets (canonical schema). `?format=csv` for export |
+| `GET /posture/summary` | Green/amber/red counts, `posture_score_avg`, `down_assets` |
+| `GET /posture/reports/summary?period=24h` | Report: uptime %, avg latency, top incidents |
+| `GET /posture/{asset_key}` | One asset (current state) |
+| `GET /posture/{asset_key}/detail?hours=24` | State + timeline + evidence + recommendations + completeness/SLO |
+| `POST /posture/alert/send` | If any assets are down and `SLACK_WEBHOOK_URL` is set, send Slack message; returns `sent`, `down_assets`, `message`. Call from cron or manually. |
+| `POST /posture/reports/snapshot?period=24h` | Save current report summary to DB; returns stored snapshot with `id`, `created_at`. |
+| `GET /posture/reports/history?limit=20` | List stored report snapshots (newest first). |
+| `GET /posture/reports/history/{id}` | Get one stored snapshot by id. |
 
-Example: `curl http://localhost:8000/posture/summary`
+**Report history:** Snapshots are stored in `posture_report_snapshots`. New installs get the table from `init.sql`; for an existing DB run `infra/postgres/migrations/003_report_snapshots.sql`.
+
+Optional env: `SLACK_WEBHOOK_URL` (e.g. Slack Incoming Webhook). When set, `POST /posture/alert/send` notifies Slack only when `down_assets` is non-empty.
+
+Example (PowerShell): see `scripts/test-api.ps1`. With token: `GET /posture/summary`, `GET /posture/juice-shop/detail`.
 
 ---
 
@@ -324,9 +377,9 @@ If you can reason about this system, you can reason about internal security tool
 
 ## Next steps (optional)
 
-* Alerting on stale critical assets
-* Asset ownership & criticality weighting
-* Findings ingestion beyond health checks
-* API exposure of posture data
-* Authentication and role separation
+* **Alert action:** Send to Slack/email when `down_assets` is non-empty
+* **Weekly report job:** Cron that calls report API and emails or stores snapshot
+* **Owner/criticality from Postgres:** Merge asset metadata into posture views
+* **Grafana drill-down:** Dashboard with `$asset` variable, linked from website asset detail
+* **OAuth or read-only role:** Second user or GitHub/Google login
 

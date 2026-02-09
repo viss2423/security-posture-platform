@@ -150,6 +150,25 @@ echo "$assets_json" | jq -c '.hits.hits[]?._source' | while read -r asset; do
       if (( age_seconds > STALE_THRESHOLD_SECONDS )); then
         status="stale"
         status_num=0
+        # Fallback: juice-shop and example-com share the same backend (JUICE_URL). If example-com is down, treat juice-shop as down.
+        if [[ "$asset_key" == "juice-shop" ]]; then
+          other_event="$(curl -sS "$OS_URL/$EVENTS_INDEX/_search" \
+            -H "Content-Type: application/json" \
+            -d '{"size":1,"sort":[{"@timestamp":"desc"}],"query":{"bool":{"filter":[{"term":{"level":"health"}},{"term":{"asset.keyword":"example-com"}}]}}}')"
+          other_src="$(echo "$other_event" | jq -r '.hits.hits[0]._source // empty')"
+          if [[ -n "$other_src" ]]; then
+            other_status="$(echo "$other_src" | jq -r '.status // ""')"
+            other_ts="$(echo "$other_src" | jq -r '.["@timestamp"] // ""')"
+            other_epoch="$(to_epoch "$other_ts")"
+            if [[ "$other_status" == "down" && -n "$other_epoch" ]]; then
+              other_age=$(( now_epoch - other_epoch ))
+              if (( other_age < STALE_THRESHOLD_SECONDS * 2 )); then
+                status="down"
+                status_num=-2
+              fi
+            fi
+          fi
+        fi
       else
         # FRESH: decide UP/DOWN using code/status
         # "up" if code==200 OR raw_status=="up"

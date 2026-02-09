@@ -1,9 +1,10 @@
 from fastapi import FastAPI
-from .routers import health, assets, jobs, findings, posture
+from .routers import health, assets, jobs, findings, posture, auth
 
 app = FastAPI(title="Security Posture Platform API")
 
 app.include_router(health.router)
+app.include_router(auth.router)
 app.include_router(assets.router)
 app.include_router(posture.router)
 app.include_router(jobs.router, prefix="/jobs", tags=["jobs"])
