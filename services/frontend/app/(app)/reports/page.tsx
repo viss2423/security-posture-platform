@@ -11,25 +11,26 @@ import {
   type ReportSummary,
   type ReportSnapshot,
 } from '@/lib/api';
+import { formatDateTime } from '@/lib/format';
 
 function SummaryCards({ s }: { s: ReportSummary | ReportSnapshot }) {
   return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-      <div className="card text-center">
-        <div className="text-2xl font-bold">{s.uptime_pct}%</div>
-        <div className="mt-1 text-sm text-[var(--muted)]">Uptime</div>
+    <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="metric-card">
+        <div className="text-3xl font-bold text-[var(--text)]">{s.uptime_pct}%</div>
+        <div className="mt-2 text-sm font-medium text-[var(--muted)]">Uptime</div>
       </div>
-      <div className="card text-center">
-        <div className="text-2xl font-bold">{s.posture_score_avg ?? '–'}</div>
-        <div className="mt-1 text-sm text-[var(--muted)]">Posture score (avg)</div>
+      <div className="metric-card neutral">
+        <div className="text-3xl font-bold text-[var(--text)]">{s.posture_score_avg ?? '–'}</div>
+        <div className="mt-2 text-sm font-medium text-[var(--muted)]">Posture score (avg)</div>
       </div>
-      <div className="card text-center">
-        <div className="text-2xl font-bold">{s.avg_latency_ms ?? '–'} ms</div>
-        <div className="mt-1 text-sm text-[var(--muted)]">Avg latency</div>
+      <div className="metric-card amber">
+        <div className="text-3xl font-bold text-[var(--amber)]">{s.avg_latency_ms ?? '–'} ms</div>
+        <div className="mt-2 text-sm font-medium text-[var(--muted)]">Avg latency</div>
       </div>
-      <div className="card text-center">
-        <div className="text-2xl font-bold">{s.total_assets}</div>
-        <div className="mt-1 text-sm text-[var(--muted)]">Assets (G/A/R: {s.green}/{s.amber}/{s.red})</div>
+      <div className="metric-card">
+        <div className="text-3xl font-bold text-[var(--text)]">{s.total_assets}</div>
+        <div className="mt-2 text-sm font-medium text-[var(--muted)]">Assets (G/A/R: {s.green}/{s.amber}/{s.red})</div>
       </div>
     </div>
   );
@@ -104,7 +105,7 @@ export default function ReportsPage() {
     <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
       <h1 className="page-title mb-8">Reports</h1>
       {error && (
-        <div className="mb-6 rounded-lg bg-[var(--red)]/10 px-4 py-3 text-sm text-[var(--red)]" role="alert">
+        <div className="mb-6 alert-error animate-in" role="alert">
           {error}
         </div>
       )}
@@ -132,7 +133,7 @@ export default function ReportsPage() {
         <section className="mb-10">
           <div className="mb-4 flex flex-wrap items-center gap-3">
             <h2 className="text-base font-medium text-[var(--muted)]">
-              Snapshot #{viewSnapshot.id} · {new Date(viewSnapshot.created_at).toLocaleString()} ({viewSnapshot.period})
+              Snapshot #{viewSnapshot.id} · {formatDateTime(viewSnapshot.created_at)} ({viewSnapshot.period})
             </h2>
             <button type="button" onClick={() => setViewSnapshot(null)} className="btn-secondary text-sm">
               Back to current
@@ -172,7 +173,7 @@ export default function ReportsPage() {
         {history.length === 0 ? (
           <p className="text-sm text-[var(--muted)]">No snapshots yet. Save one above.</p>
         ) : (
-          <div className="card overflow-hidden p-0">
+          <div className="card overflow-hidden p-0 animate-in">
             <div className="overflow-x-auto">
               <table className="w-full border-collapse text-sm">
                 <thead>
@@ -191,7 +192,7 @@ export default function ReportsPage() {
                       className="cursor-pointer border-b border-[var(--border)] transition hover:bg-[var(--border)]/30"
                       onClick={() => handleViewSnapshot(row.id)}
                     >
-                      <td className="px-4 py-3">{new Date(row.created_at).toLocaleString()}</td>
+                      <td className="px-4 py-3">{formatDateTime(row.created_at)}</td>
                       <td className="px-4 py-3">{row.period}</td>
                       <td className="px-4 py-3 text-right">{row.uptime_pct}%</td>
                       <td className="px-4 py-3 text-right">{row.posture_score_avg ?? '–'}</td>

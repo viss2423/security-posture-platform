@@ -28,3 +28,4 @@ exports/
 
 # Node
 node_modules/
+.next/

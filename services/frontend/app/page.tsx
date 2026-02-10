@@ -12,8 +12,12 @@ export default function Home() {
   }, [router]);
   return (
     <div className="flex min-h-screen items-center justify-center gap-3 text-[var(--muted)]">
-      <span className="h-5 w-5 animate-spin rounded-full border-2 border-[var(--border)] border-t-[var(--green)]" />
-      Loading…
+      <div className="loading-dots">
+        <span />
+        <span />
+        <span />
+      </div>
+      <span>Loading…</span>
     </div>
   );
 }

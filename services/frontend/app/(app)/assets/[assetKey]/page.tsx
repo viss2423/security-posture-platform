@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { getAssetDetail, updateAssetByKey, type AssetDetail } from '@/lib/api';
+import { AssetDetailSkeleton } from '@/components/Skeleton';
+import { formatDateTime } from '@/lib/format';
 
 function lastUpdatedAgo(lastSeen: string | null | undefined): string {
   if (!lastSeen) return '—';
@@ -83,19 +85,25 @@ export default function AssetDetailPage() {
   const openSearchUrl = process.env.NEXT_PUBLIC_OPENSEARCH_DASHBOARDS_URL;
 
   return (
-    <main className="mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
-      <Link href="/assets" className="mb-6 inline-block text-sm text-[var(--muted)] hover:text-[var(--text)]">
-        ← Back to Assets
-      </Link>
-      <h1 className="page-title mb-2">{assetKey}</h1>
+    <main className="mx-auto max-w-4xl px-4 py-10 sm:px-6 lg:px-8">
+      <nav className="mb-6 flex items-center gap-2 text-sm" aria-label="Breadcrumb">
+        <Link href="/assets" className="font-medium text-[var(--muted)] transition hover:text-[var(--text)]">
+          Assets
+        </Link>
+        <span className="text-[var(--border)]">/</span>
+        <span className="font-medium text-[var(--text)] truncate max-w-[200px] sm:max-w-none" title={assetKey}>
+          {assetKey}
+        </span>
+      </nav>
+      <h1 className="page-title mb-2 animate-in truncate" title={assetKey}>{assetKey}</h1>
       {error && (
-        <div className="mb-6 rounded-lg bg-[var(--red)]/10 px-4 py-3 text-sm text-[var(--red)]" role="alert">
+        <div className="mb-6 alert-error animate-in" role="alert">
           {error}
         </div>
       )}
       {asset && detail && (
         <>
-          <p className="mb-6 text-sm text-[var(--muted)]">
+          <p className="mb-6 text-sm text-[var(--muted)] animate-in">
             Last updated {lastUpdatedAgo(asset.last_seen)}
             {detail.expected_interval_sec != null && (
               <> · Expected interval: every {detail.expected_interval_sec}s</>
@@ -104,7 +112,7 @@ export default function AssetDetailPage() {
               <> · Data completeness (24h): {detail.data_completeness.label_24h}{detail.data_completeness.pct_24h != null ? ` (${detail.data_completeness.pct_24h}%)` : ''}</>
             )}
           </p>
-          <div className="card mb-8">
+          <div className="card mb-8 animate-in">
             <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-3 text-sm">
               <dt className="text-[var(--muted)]">Status</dt>
               <dd><span className={`badge ${(asset.status || 'unknown').toLowerCase()}`}>{asset.status || 'unknown'}</span></dd>
@@ -115,7 +123,7 @@ export default function AssetDetailPage() {
               <dt className="text-[var(--muted)]">Criticality</dt>
               <dd className="capitalize">{asset.criticality ?? '–'}</dd>
               <dt className="text-[var(--muted)]">Last seen</dt>
-              <dd>{asset.last_seen ? new Date(asset.last_seen).toLocaleString() : '–'}</dd>
+              <dd>{asset.last_seen ? formatDateTime(asset.last_seen) : '–'}</dd>
               <dt className="text-[var(--muted)]">Staleness (s)</dt>
               <dd>{asset.staleness_seconds ?? '–'}</dd>
               <dt className="text-[var(--muted)]">Environment</dt>
@@ -123,7 +131,7 @@ export default function AssetDetailPage() {
               <dt className="text-[var(--muted)]">Owner</dt>
               <dd>{asset.owner?.trim() || 'Unassigned'}</dd>
               <dt className="text-[var(--muted)]">Latency SLO</dt>
-              <dd>{detail.latency_slo_ok ? `✓ < ${detail.latency_slo_ms}ms` : `✗ > ${detail.latency_slo_ms}ms`}</dd>
+              <dd>{detail.latency_slo_ok ? <span className="text-[var(--green)]">Pass &lt; {detail.latency_slo_ms}ms</span> : <span className="text-[var(--red)]">Over &gt; {detail.latency_slo_ms}ms</span>}</dd>
               <dt className="text-[var(--muted)]">Error rate (24h)</dt>
               <dd>{detail.error_rate_24h ?? 0}%</dd>
             </dl>
@@ -197,7 +205,7 @@ export default function AssetDetailPage() {
                         const isAnomaly = codeBad || latencySpike;
                         return (
                           <tr key={i} className={`border-b border-[var(--border)] ${isAnomaly ? 'bg-[var(--red)]/10' : ''}`}>
-                            <td className="px-4 py-3">{ev['@timestamp'] ? new Date(ev['@timestamp']).toLocaleString() : '–'}</td>
+                            <td className="px-4 py-3">{ev['@timestamp'] ? formatDateTime(ev['@timestamp']) : '–'}</td>
                             <td className="px-4 py-3">{ev.status ?? '–'}</td>
                             <td className={`px-4 py-3 ${codeBad ? 'font-semibold text-[var(--red)]' : ''}`}>{ev.code ?? '–'}</td>
                             <td className={`px-4 py-3 ${latencySpike ? 'font-semibold text-[var(--amber)]' : ''}`}>
@@ -224,16 +232,13 @@ export default function AssetDetailPage() {
                   <a href={openSearchUrl} target="_blank" rel="noopener noreferrer" className="btn-secondary text-sm">View in OpenSearch</a>
                 )}
               </div>
-              <pre className="overflow-auto rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 text-xs">{JSON.stringify(detail.evidence, null, 2)}</pre>
+              <pre className="overflow-auto rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)] p-4 text-xs text-[var(--text-muted)]">{JSON.stringify(detail.evidence, null, 2)}</pre>
             </section>
           )}
         </>
       )}
       {!detail && !error && (
-        <div className="flex items-center gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-8 text-[var(--muted)]">
-          <span className="h-5 w-5 animate-spin rounded-full border-2 border-[var(--border)] border-t-[var(--green)]" />
-          Loading…
-        </div>
+        <AssetDetailSkeleton />
       )}
     </main>
   );

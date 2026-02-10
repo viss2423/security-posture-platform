@@ -29,15 +29,20 @@ export default function LoginPage() {
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center px-4 py-12">
-      <div className="w-full max-w-sm">
-        <div className="card mb-8 text-center">
-          <span className="text-3xl text-[var(--green)]">◆</span>
-          <h1 className="mt-3 text-2xl font-semibold tracking-tight text-[var(--text)]">SecPlat</h1>
-          <p className="mt-1 text-sm text-[var(--muted)]">Security Posture Platform</p>
+      <div className="w-full max-w-md animate-in">
+        <div className="card-glass mb-8 text-center relative overflow-hidden">
+          <div className="absolute inset-0 bg-gradient-to-br from-[var(--green)]/5 to-transparent pointer-events-none" />
+          <div className="relative">
+            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-[var(--green)] to-[#16a34a] text-xl font-bold text-white shadow-glow">
+              SP
+            </div>
+            <h1 className="text-2xl font-bold tracking-tight text-[var(--text)]">SecPlat</h1>
+            <p className="mt-1 text-sm text-[var(--muted)]">Security Posture Platform</p>
+          </div>
         </div>
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-5 animate-in animate-in-delay-1">
           <div>
-            <label htmlFor="username" className="mb-1.5 block text-sm font-medium text-[var(--muted)]">
+            <label htmlFor="username" className="mb-2 block text-sm font-medium text-[var(--text-muted)]">
               Username
             </label>
             <input
@@ -51,7 +56,7 @@ export default function LoginPage() {
             />
           </div>
           <div>
-            <label htmlFor="password" className="mb-1.5 block text-sm font-medium text-[var(--muted)]">
+            <label htmlFor="password" className="mb-2 block text-sm font-medium text-[var(--text-muted)]">
               Password
             </label>
             <input
@@ -65,11 +70,11 @@ export default function LoginPage() {
             />
           </div>
           {error && (
-            <p className="rounded-lg bg-[var(--red)]/10 px-3 py-2 text-sm text-[var(--red)]" role="alert">
+            <p className="alert-error" role="alert">
               {error}
             </p>
           )}
-          <button type="submit" disabled={loading} className="btn-primary w-full">
+          <button type="submit" disabled={loading} className="btn-primary w-full py-3.5">
             {loading ? 'Signing in…' : 'Sign in'}
           </button>
         </form>

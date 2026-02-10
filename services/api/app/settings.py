@@ -4,8 +4,9 @@ class Settings(BaseSettings):
     ENV: str = "dev"
     API_SECRET_KEY: str = "change_me"
     ADMIN_USERNAME: str = "admin"
-    ADMIN_PASSWORD: str = "admin"  # plain; set ADMIN_PASSWORD_HASH in prod
-    ADMIN_PASSWORD_HASH: str | None = None
+    ADMIN_PASSWORD: str = "admin"  # dev only; use ADMIN_PASSWORD_HASH in prod
+    ADMIN_PASSWORD_HASH: str | None = None  # bcrypt hash; when set, login uses this instead of ADMIN_PASSWORD
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24h; shorten for higher security
     POSTGRES_DSN: str
     OPENSEARCH_URL: str = "http://opensearch:9200"
     MAX_SCAN_DURATION_SECONDS: int = 900
@@ -20,6 +21,17 @@ class Settings(BaseSettings):
 
     # Alerting: optional Slack webhook; when set, POST /posture/alert/send can notify
     SLACK_WEBHOOK_URL: str | None = None
+
+    # Retention: applied by POST /retention/apply (or cron calling it)
+    EVENTS_RETENTION_DAYS: int = 90  # delete OpenSearch secplat-events older than this
+    SNAPSHOTS_RETENTION_KEEP: int = 500  # keep this many newest report snapshots in Postgres
+
+    # Logging
+    LOG_LEVEL: str = "INFO"
+
+    # Rate limiting (in-memory, per process)
+    RATE_LIMIT_LOGIN_PER_MINUTE: int = 5
+    RATE_LIMIT_RETENTION_PER_HOUR: int = 10
 
 settings = Settings()
 
