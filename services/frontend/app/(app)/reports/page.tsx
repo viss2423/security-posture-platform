@@ -12,6 +12,7 @@ import {
   type ReportSnapshot,
 } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
+import { EmptyState } from '@/components/EmptyState';
 
 function SummaryCards({ s }: { s: ReportSummary | ReportSnapshot }) {
   return (
@@ -171,7 +172,10 @@ export default function ReportsPage() {
           Stored snapshots. Click a row to view.
         </p>
         {history.length === 0 ? (
-          <p className="text-sm text-[var(--muted)]">No snapshots yet. Save one above.</p>
+          <EmptyState
+            title="No report history yet"
+            description="Save a snapshot above to store the current 24h summary. Saved snapshots appear here for trend and audit."
+          />
         ) : (
           <div className="card overflow-hidden p-0 animate-in">
             <div className="overflow-x-auto">

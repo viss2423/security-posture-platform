@@ -72,3 +72,31 @@ CREATE TABLE IF NOT EXISTS posture_report_snapshots (
   top_incidents     JSONB NOT NULL DEFAULT '[]'::jsonb
 );
 CREATE INDEX IF NOT EXISTS idx_report_snapshots_created_at ON posture_report_snapshots(created_at DESC);
+
+-- Audit log for UI
+CREATE TABLE IF NOT EXISTS audit_events (
+  id         SERIAL PRIMARY KEY,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  action     TEXT NOT NULL,
+  user_name  TEXT,
+  asset_key  TEXT,
+  details    JSONB NOT NULL DEFAULT '{}'::jsonb,
+  request_id TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_audit_events_created_at ON audit_events(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_events_action ON audit_events(action);
+CREATE INDEX IF NOT EXISTS idx_audit_events_user ON audit_events(user_name);
+
+-- Alert lifecycle
+CREATE TABLE IF NOT EXISTS alert_states (
+  asset_key       TEXT PRIMARY KEY,
+  state           TEXT NOT NULL DEFAULT 'firing',
+  ack_reason      TEXT,
+  acked_by        TEXT,
+  acked_at        TIMESTAMPTZ,
+  suppressed_until TIMESTAMPTZ,
+  assigned_to     TEXT,
+  resolved_at     TIMESTAMPTZ,
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_alert_states_state ON alert_states(state);

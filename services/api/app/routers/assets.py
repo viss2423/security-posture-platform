@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from .auth import require_auth
 from ..verification import generate_token, verify_domain_ownership
+from ..audit import log_audit
+from ..request_context import request_id_ctx
 
 router = APIRouter(prefix="/assets", tags=["assets"])
 
@@ -248,6 +250,7 @@ def update_asset_by_key(asset_key: str, payload: dict, db: Session = Depends(get
 
     try:
         row = db.execute(uq, params).mappings().first()
+        log_audit(db, "asset_edit", user_name=_user, asset_key=asset_key, details=fields, request_id=request_id_ctx.get("") or None)
         db.commit()
         return dict(row)
     except Exception as e:

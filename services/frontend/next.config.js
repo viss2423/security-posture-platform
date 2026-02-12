@@ -1,12 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
-  async rewrites() {
-    const api = process.env.API_URL || 'http://localhost:8000';
-    return [
-      { source: '/api/:path*', destination: `${api}/:path*` },
-    ];
-  },
+  // API routes in app/api/[...path]/route.ts handle proxying to backend
 };
 
 module.exports = nextConfig;

@@ -4,6 +4,17 @@ Short procedures for common operational issues.
 
 ---
 
+## Overview / Alerts / Audit show 404 or "Asset not found in posture index"
+
+**Cause:** The running API process was started before routes for `/posture/overview`, `/alerts`, or `/audit` were added.
+
+**Fix:** Restart the API so it loads the latest routes, then refresh the app.
+
+- Local: stop and start the API (e.g. `uvicorn` or `docker compose restart api`).
+- After pulling new code, always restart the API.
+
+---
+
 ## Health and readiness
 
 - **Liveness:** `GET /health` — API process is up. Returns 200 and `{"status":"ok"}`.

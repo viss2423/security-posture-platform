@@ -11,6 +11,7 @@ from app.db import get_db
 from app.routers.auth import require_auth
 from app.rate_limit import check_rate_limit
 from app.request_context import request_id_ctx
+from app.audit import log_audit
 
 audit = logging.getLogger("secplat.audit")
 
@@ -32,11 +33,6 @@ async def retention_apply(
     key = f"retention:{_client_id(request)}"
     if not await check_rate_limit(key, settings.RATE_LIMIT_RETENTION_PER_HOUR, 3600.0):
         raise HTTPException(status_code=429, detail="Retention apply rate limited. Try again later.")
-    """
-    Apply retention policy: delete events older than EVENTS_RETENTION_DAYS in OpenSearch,
-    and keep only the newest SNAPSHOTS_RETENTION_KEEP report snapshots in Postgres.
-    Call from cron or manually. Requires auth.
-    """
     result = {"events_deleted": None, "snapshots_deleted": None, "errors": []}
 
     # OpenSearch: delete events older than EVENTS_RETENTION_DAYS
@@ -76,11 +72,20 @@ async def retention_apply(
 
     if result["errors"]:
         raise HTTPException(status_code=502, detail={"message": "Retention applied with errors", "result": result})
+    req_id = request_id_ctx.get("")
     audit.info(
         "action=retention_apply user=%s events_deleted=%s snapshots_deleted=%s request_id=%s",
         _user,
         result["events_deleted"],
         result["snapshots_deleted"],
-        request_id_ctx.get(""),
+        req_id,
     )
+    log_audit(
+        db,
+        "retention_apply",
+        user_name=_user,
+        details={"events_deleted": result["events_deleted"], "snapshots_deleted": result["snapshots_deleted"]},
+        request_id=req_id or None,
+    )
+    db.commit()
     return result

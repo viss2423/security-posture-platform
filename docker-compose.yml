@@ -146,6 +146,25 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  scanner:
+    build:
+      context: ./services/scanner
+      dockerfile: Dockerfile
+    container_name: secplat-scanner
+    environment:
+      API_URL: http://api:8000
+      # internal_only = only lab (verify-web, juice-shop, api); internal_and_verified = + verified external_web assets
+      SCANNER_SCOPE: ${SCANNER_SCOPE:-internal_only}
+      VERIFY_WEB_URL: http://verify-web
+      JUICE_URL: http://juiceshop:3000
+      # Optional: override with "url|asset_key,url|asset_key"
+      # INTERNAL_TARGETS: "http://verify-web|verify-web,http://juiceshop:3000|juice-shop,http://api:8000|secplat-api"
+      SCAN_INTERVAL_SECONDS: ${SCAN_INTERVAL_SECONDS:-21600}
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+
 volumes:
   postgres-data:
   opensearch-data:

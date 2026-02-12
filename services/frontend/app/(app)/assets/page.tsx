@@ -3,8 +3,10 @@
 import { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
 import { getPostureList, type AssetPosture } from '@/lib/api';
+import { useFilters } from '@/contexts/FilterContext';
 import { formatDateTime } from '@/lib/format';
 import { AssetsTableSkeleton } from '@/components/Skeleton';
+import { EmptyState, ApiDownHint } from '@/components/EmptyState';
 
 type SortKey = 'asset_key' | 'name' | 'status' | 'criticality' | 'posture_score' | 'last_seen' | null;
 type SortDir = 'asc' | 'desc';
@@ -38,17 +40,28 @@ function CriticalityCell({ value }: { value: string | null | undefined }) {
 }
 
 export default function AssetsPage() {
+  const filters = useFilters();
   const [data, setData] = useState<{ total: number; items: AssetPosture[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [sortKey, setSortKey] = useState<SortKey>(null);
   const [sortDir, setSortDir] = useState<SortDir>('asc');
 
+  const filterParams = useMemo(
+    () => ({
+      environment: filters.environment ?? undefined,
+      criticality: filters.criticality ?? undefined,
+      owner: filters.owner ?? undefined,
+      status: filters.status ?? undefined,
+    }),
+    [filters.environment, filters.criticality, filters.owner, filters.status]
+  );
+
   useEffect(() => {
-    getPostureList()
+    getPostureList(filterParams)
       .then(setData)
       .catch((e) => setError(e.message));
-  }, []);
+  }, [filterParams.environment, filterParams.criticality, filterParams.owner, filterParams.status]);
 
   const filteredAndSorted = useMemo(() => {
     if (!data?.items) return [];
@@ -143,6 +156,7 @@ export default function AssetsPage() {
       {error && (
         <div className="mb-6 alert-error animate-in" role="alert">
           {error}
+          <ApiDownHint />
         </div>
       )}
       {data && filteredAndSorted.length > 0 && (
@@ -239,15 +253,11 @@ export default function AssetsPage() {
         </div>
       )}
       {data && data.items.length === 0 && (
-        <div className="card animate-in py-16 text-center">
-          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-[var(--surface-elevated)]">
-            <span className="text-2xl font-bold text-[var(--muted)]">0</span>
-          </div>
-          <h2 className="text-lg font-semibold text-[var(--text)]">No assets yet</h2>
-          <p className="mt-2 max-w-sm mx-auto text-sm text-[var(--muted)]">
-            Assets will appear here once posture data is ingested.
-          </p>
-        </div>
+        <EmptyState
+          icon={<span className="text-2xl font-bold text-[var(--muted)]">0</span>}
+          title="No assets yet"
+          description="Assets appear here once posture data is ingested. Ingestion runs every 60s when the stack is up. Check that the ingestion container is running."
+        />
       )}
       {!data && !error && (
         <AssetsTableSkeleton rows={8} />

@@ -16,6 +16,8 @@ RUN npm run build
 FROM node:20-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
+# Runtime API_URL for Next.js rewrites (must match Docker network hostname)
+ENV API_URL=http://api:8000
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 COPY --from=builder /app/public ./public

@@ -1,4 +1,4 @@
-"""Simple JWT auth: one admin user from env. No DB."""
+"""Simple JWT auth: one admin user from env. Writes audit events to DB."""
 import logging
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -6,9 +6,12 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, OAuth2Pas
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 from app.settings import settings
+from app.db import get_db
 from app.rate_limit import check_rate_limit
 from app.request_context import request_id_ctx
+from app.audit import log_audit
 
 audit = logging.getLogger("secplat.audit")
 
@@ -64,17 +67,23 @@ def _client_id(request: Request) -> str:
 
 
 @router.post("/login", response_model=Token)
-async def login(request: Request, form: OAuth2PasswordRequestForm = Depends()):
+async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     req_id = request_id_ctx.get("")
     key = f"login:{_client_id(request)}"
     if not await check_rate_limit(key, settings.RATE_LIMIT_LOGIN_PER_MINUTE, 60.0):
         audit.info("action=login user=%s success=false reason=rate_limited request_id=%s", form.username, req_id)
+        log_audit(db, "login", user_name=form.username, details={"success": False, "reason": "rate_limited"}, request_id=req_id or None)
+        db.commit()
         raise HTTPException(status_code=429, detail="Too many login attempts. Try again later.")
     _reject_default_password_in_prod()
     if form.username != settings.ADMIN_USERNAME or not _verify_password(form.password):
         audit.info("action=login user=%s success=false reason=invalid request_id=%s", form.username, req_id)
+        log_audit(db, "login", user_name=form.username, details={"success": False, "reason": "invalid"}, request_id=req_id or None)
+        db.commit()
         raise HTTPException(status_code=401, detail="Invalid username or password")
     audit.info("action=login user=%s success=true request_id=%s", form.username, req_id)
+    log_audit(db, "login", user_name=form.username, details={"success": True}, request_id=req_id or None)
+    db.commit()
     return Token(access_token=create_access_token(form.username))
 
 

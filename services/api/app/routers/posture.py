@@ -191,36 +191,74 @@ def _merge_posture_with_db(state_dict: dict, meta: dict | None) -> dict:
     return out
 
 
+def _parse_multi_param(val: str | None) -> list[str] | None:
+    """Parse optional query param: None = no filter, else comma-separated list (e.g. 'dev,prod' -> ['dev','prod'])."""
+    if val is None or (isinstance(val, str) and not val.strip()):
+        return None
+    return [v.strip().lower() for v in val.split(",") if v.strip()]
+
+
+def _apply_filters(
+    items: list[dict],
+    environment: list[str] | None,
+    criticality: list[str] | None,
+    owner: list[str] | None,
+    status: list[str] | None,
+) -> list[dict]:
+    """Filter merged posture items by optional environment, criticality, owner, status (any match in list)."""
+    out = items
+    if environment:
+        out = [d for d in out if (d.get("environment") or "").strip().lower() in environment]
+    if criticality:
+        out = [d for d in out if (d.get("criticality") or "").strip().lower() in criticality]
+    if owner:
+        out = [d for d in out if (d.get("owner") or "").strip().lower() in [o.lower() for o in owner]]
+    if status:
+        out = [d for d in out if (d.get("status") or "").strip().lower() in status]
+    return out
+
+
+def _get_filtered_posture_list(
+    db: Session,
+    environment: str | None = None,
+    criticality: str | None = None,
+    owner: str | None = None,
+    status: str | None = None,
+) -> list[dict]:
+    """Fetch posture list from OpenSearch, merge with Postgres metadata, apply filters. Returns list of merged dicts."""
+    _, raw_items = _fetch_posture_list_raw()
+    states = _raw_list_to_states(raw_items)
+    meta = _get_asset_metadata_batch(db, [s.asset_id for s in states])
+    items = [_merge_posture_with_db(s.model_dump(mode="json"), meta) for s in states]
+    env_list = _parse_multi_param(environment)
+    crit_list = _parse_multi_param(criticality)
+    owner_list = _parse_multi_param(owner)
+    status_list = _parse_multi_param(status)
+    return _apply_filters(items, env_list, crit_list, owner_list, status_list)
+
+
 @router.get("", response_model=None)
 def list_posture(
     format: str | None = Query(None, alias="format"),
+    environment: str | None = Query(None, description="Filter by environment (comma-separated)"),
+    criticality: str | None = Query(None, description="Filter by criticality (high,medium,low)"),
+    owner: str | None = Query(None, description="Filter by owner"),
+    status: str | None = Query(None, description="Filter by status (green,amber,red)"),
     db: Session = Depends(get_db),
     _user: str = Depends(require_auth),
 ):
-    """List current posture for all assets (canonical schema). Enriched with Postgres owner/criticality. ?format=csv for CSV export."""
-    total, raw_items = _fetch_posture_list_raw()
+    """List current posture for all assets (canonical schema). Enriched with Postgres. Optional filters: environment, criticality, owner, status. ?format=csv for CSV export."""
+    items = _get_filtered_posture_list(db, environment=environment, criticality=criticality, owner=owner, status=status)
     if format == "csv":
         out = io.StringIO()
-        if not raw_items:
-            return PlainTextResponse(
-                "asset_id,status,last_seen,reason,criticality,name,owner,environment,posture_score\n",
-                media_type="text/csv",
-            )
-        states = _raw_list_to_states(raw_items)
-        meta = _get_asset_metadata_batch(db, [s.asset_id for s in states])
         writer = csv.writer(out)
         writer.writerow(["asset_id", "status", "last_seen", "reason", "criticality", "name", "owner", "environment", "posture_score"])
-        for s in states:
-            d = s.model_dump(mode="json")
-            d = _merge_posture_with_db(d, meta)
+        for d in items:
             writer.writerow([
                 d.get("asset_id"), d.get("status"), d.get("last_seen") or "", d.get("reason") or "",
                 d.get("criticality"), d.get("name") or "", d.get("owner") or "", d.get("environment") or "", d.get("posture_score") or "",
             ])
         return PlainTextResponse(out.getvalue(), media_type="text/csv")
-    states = _raw_list_to_states(raw_items)
-    meta = _get_asset_metadata_batch(db, [s.asset_id for s in states])
-    items = [_merge_posture_with_db(s.model_dump(mode="json"), meta) for s in states]
     return {"total": len(items), "items": items}
 
 
@@ -276,12 +314,136 @@ def _build_report_summary(period: str) -> ReportSummary:
     )
 
 
+@router.get("/overview")
+def posture_overview(
+    environment: str | None = Query(None),
+    criticality: str | None = Query(None),
+    owner: str | None = Query(None),
+    status: str | None = Query(None),
+    db: Session = Depends(get_db),
+    _user: str = Depends(require_auth),
+):
+    """
+    Executive overview: strip (score, assets, alerts, trend vs yesterday), top drivers (worst assets, by reason, recently updated).
+    Same filters as /posture and /summary.
+    """
+    items = _get_filtered_posture_list(db, environment=environment, criticality=criticality, owner=owner, status=status)
+    total_assets = len(items)
+    by_state: dict[str, int] = {"green": 0, "amber": 0, "red": 0}
+    scores: list[float] = []
+    down_assets: list[str] = []
+    for d in items:
+        st = (d.get("status") or "amber").lower()
+        if st in by_state:
+            by_state[st] += 1
+        sc = d.get("posture_score")
+        if sc is not None:
+            try:
+                scores.append(float(sc))
+            except (TypeError, ValueError):
+                pass
+        if st == "red":
+            down_assets.append(d.get("asset_id") or d.get("asset_key") or "")
+    posture_score_avg = round(sum(scores) / len(scores), 1) if scores else None
+    alerts_firing = len(down_assets)
+
+    # Trend vs yesterday: compare to snapshot closest to now()-24h
+    score_trend_vs_yesterday: str | None = None  # "up" | "down" | "same" | null
+    risk_change_24h: int | None = None  # delta red count
+    q_snap = text("""
+      SELECT posture_score_avg, red, created_at
+      FROM posture_report_snapshots
+      WHERE created_at <= now() - interval '23 hours'
+      ORDER BY created_at DESC
+      LIMIT 1
+    """)
+    row = db.execute(q_snap).mappings().first()
+    if row:
+        prev_score = row.get("posture_score_avg")
+        prev_red = row.get("red") or 0
+        if posture_score_avg is not None and prev_score is not None:
+            if posture_score_avg > prev_score:
+                score_trend_vs_yesterday = "up"
+            elif posture_score_avg < prev_score:
+                score_trend_vs_yesterday = "down"
+            else:
+                score_trend_vs_yesterday = "same"
+        risk_change_24h = by_state.get("red", 0) - prev_red
+
+    # Top drivers: worst 5 by score, by reason counts, recently updated (last_seen desc)
+    worst_assets = sorted(
+        [d for d in items if d.get("posture_score") is not None],
+        key=lambda x: (float(x.get("posture_score") or 0)),
+    )[:5]
+    worst_assets = [{"asset_id": d.get("asset_id") or d.get("asset_key"), "name": d.get("name"), "posture_score": d.get("posture_score"), "status": d.get("status")} for d in worst_assets]
+
+    by_reason: dict[str, int] = {}
+    for d in items:
+        r = (d.get("reason") or "unknown").strip() or "unknown"
+        by_reason[r] = by_reason.get(r, 0) + 1
+    by_reason_list = [{"reason": k, "count": v} for k, v in sorted(by_reason.items(), key=lambda x: -x[1])[:5]]
+
+    recently_updated = sorted(
+        items,
+        key=lambda x: (x.get("last_seen") or "") or "",
+        reverse=True,
+    )[:5]
+    recently_updated = [{"asset_id": d.get("asset_id") or d.get("asset_key"), "name": d.get("name"), "last_seen": d.get("last_seen")} for d in recently_updated]
+
+    return {
+        "executive_strip": {
+            "posture_score_avg": posture_score_avg,
+            "total_assets": total_assets,
+            "alerts_firing": alerts_firing,
+            "score_trend_vs_yesterday": score_trend_vs_yesterday,
+            "risk_change_24h": risk_change_24h,
+            "green": by_state.get("green", 0),
+            "amber": by_state.get("amber", 0),
+            "red": by_state.get("red", 0),
+            "down_assets": down_assets,
+        },
+        "top_drivers": {
+            "worst_assets": worst_assets,
+            "by_reason": by_reason_list,
+            "recently_updated": recently_updated,
+        },
+    }
+
+
+@router.get("/trend")
+def posture_trend(
+    range: str = Query("7d", description="24h, 7d, or 30d"),
+    db: Session = Depends(get_db),
+    _user: str = Depends(require_auth),
+):
+    """Time series of posture from report snapshots for charts. Points: created_at, posture_score_avg, green, amber, red."""
+    interval = "24 hours" if range == "24h" else "7 days" if range == "7d" else "30 days"
+    q = text("""
+      SELECT id, created_at, posture_score_avg, green, amber, red
+      FROM posture_report_snapshots
+      WHERE created_at >= now() - CAST(:interval AS interval)
+      ORDER BY created_at ASC
+    """)
+    rows = db.execute(q, {"interval": interval}).mappings().all()
+    points = [
+        {
+            "created_at": r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else str(r["created_at"]),
+            "posture_score_avg": r.get("posture_score_avg"),
+            "green": r.get("green"),
+            "amber": r.get("amber"),
+            "red": r.get("red"),
+        }
+        for r in rows
+    ]
+    return {"range": range, "points": points}
+
+
 @router.get("/reports/summary", response_model=ReportSummary)
 def reports_summary(
     period: str = Query("24h", description="24h or 7d"),
     _user: str = Depends(require_auth),
 ):
-    """Weekly/summary report: uptime %, posture score, avg latency, top incidents (down assets)."""
+    """Weekly/summary report: uptime %, posture score, avg latency, top incidents (down assets). Unfiltered."""
     return _build_report_summary(period)
 
 
@@ -375,19 +537,31 @@ def _send_slack_alert(down_assets: list[str]) -> bool:
 
 
 @router.get("/summary", response_model=PostureSummary)
-def posture_summary(_user: str = Depends(require_auth)):
-    """Summary counts and down_assets. Computed by FastAPI (source of truth)."""
-    _, raw_items = _fetch_posture_list_raw()
-    states = _raw_list_to_states(raw_items)
+def posture_summary(
+    environment: str | None = Query(None),
+    criticality: str | None = Query(None),
+    owner: str | None = Query(None),
+    status: str | None = Query(None),
+    db: Session = Depends(get_db),
+    _user: str = Depends(require_auth),
+):
+    """Summary counts and down_assets. Optional filters: environment, criticality, owner, status."""
+    items = _get_filtered_posture_list(db, environment=environment, criticality=criticality, owner=owner, status=status)
     by_state: dict[str, int] = {"green": 0, "amber": 0, "red": 0}
     scores: list[float] = []
     down_assets: list[str] = []
-    for s in states:
-        by_state[s.status] = by_state.get(s.status, 0) + 1
-        if s.posture_score is not None:
-            scores.append(float(s.posture_score))
-        if s.status == "red":
-            down_assets.append(s.asset_id)
+    for d in items:
+        st = (d.get("status") or "amber").lower()
+        if st in by_state:
+            by_state[st] += 1
+        sc = d.get("posture_score")
+        if sc is not None:
+            try:
+                scores.append(float(sc))
+            except (TypeError, ValueError):
+                pass
+        if st == "red":
+            down_assets.append(d.get("asset_id") or d.get("asset_key") or "")
     avg = round(sum(scores) / len(scores), 1) if scores else None
     return PostureSummary(
         green=by_state.get("green", 0),
