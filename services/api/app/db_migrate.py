@@ -47,6 +47,44 @@ ALTER TABLE findings ADD COLUMN IF NOT EXISTS source TEXT;
 """
 FINDINGS_UNIQUE_INDEX = "CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_finding_key ON findings(finding_key) WHERE finding_key IS NOT NULL;"
 
+# Incidents: SOC workflow (Phase A.1)
+INCIDENTS_SQL = """
+CREATE TABLE IF NOT EXISTS incidents (
+  id            SERIAL PRIMARY KEY,
+  title         TEXT NOT NULL,
+  severity      TEXT NOT NULL DEFAULT 'medium',
+  status        TEXT NOT NULL DEFAULT 'new',
+  assigned_to   TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  resolved_at   TIMESTAMPTZ,
+  closed_at     TIMESTAMPTZ,
+  sla_due_at    TIMESTAMPTZ,
+  metadata      JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);
+CREATE INDEX IF NOT EXISTS idx_incidents_created_at ON incidents(created_at DESC);
+CREATE TABLE IF NOT EXISTS incident_alerts (
+  incident_id   INTEGER NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+  asset_key     TEXT NOT NULL,
+  added_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  added_by      TEXT,
+  PRIMARY KEY (incident_id, asset_key)
+);
+CREATE INDEX IF NOT EXISTS idx_incident_alerts_incident_id ON incident_alerts(incident_id);
+CREATE TABLE IF NOT EXISTS incident_notes (
+  id            SERIAL PRIMARY KEY,
+  incident_id   INTEGER NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+  event_type    TEXT NOT NULL,
+  author        TEXT,
+  body          TEXT,
+  details       JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_incident_notes_incident_id ON incident_notes(incident_id);
+CREATE INDEX IF NOT EXISTS idx_incident_notes_created_at ON incident_notes(incident_id, created_at DESC);
+"""
+
 
 def run_startup_migrations() -> None:
     """Create audit_events and alert_states if missing (e.g. DB created before they were in init.sql)."""
@@ -71,4 +109,14 @@ def run_startup_migrations() -> None:
             logger.info("startup_migration: ensured findings extended columns exist")
         except Exception as e:
             logger.warning("startup_migration: findings extend failed: %s", e)
+            raise
+        # Incidents (Phase A.1)
+        try:
+            for stmt in INCIDENTS_SQL.strip().split(";"):
+                stmt = stmt.strip()
+                if stmt:
+                    conn.execute(text(stmt))
+            logger.info("startup_migration: ensured incidents tables exist")
+        except Exception as e:
+            logger.warning("startup_migration: incidents failed: %s", e)
             raise

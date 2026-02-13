@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
-from .routers import health, assets, jobs, findings, posture, auth, retention, audit as audit_router, alerts
+from .routers import health, assets, jobs, findings, posture, auth, retention, audit as audit_router, alerts, incidents
 from . import metrics
 from .db_migrate import run_startup_migrations
 from .logging_config import configure_logging
@@ -58,5 +58,6 @@ app.include_router(posture.router)
 app.include_router(retention.router)
 app.include_router(audit_router.router)
 app.include_router(alerts.router)
+app.include_router(incidents.router)
 app.include_router(jobs.router, prefix="/jobs", tags=["jobs"])
 app.include_router(findings.router, prefix="/findings", tags=["findings"])

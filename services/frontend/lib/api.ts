@@ -355,3 +355,104 @@ export async function getFindings(filters?: FindingsFilters): Promise<Finding[]>
   const q = p.toString();
   return apiFetch<Finding[]>('/findings' + (q ? `?${q}` : ''));
 }
+
+// Incidents (Phase A.1)
+export type IncidentSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
+export type IncidentStatus = 'new' | 'triaged' | 'contained' | 'resolved' | 'closed';
+
+export type IncidentListItem = {
+  id: number;
+  title: string;
+  severity: IncidentSeverity;
+  status: IncidentStatus;
+  assigned_to: string | null;
+  created_at: string;
+  updated_at: string;
+  resolved_at: string | null;
+  closed_at: string | null;
+  sla_due_at: string | null;
+  alert_count?: number;
+};
+
+export type IncidentAlertLink = {
+  incident_id: number;
+  asset_key: string;
+  added_at: string;
+  added_by: string | null;
+};
+
+export type IncidentTimelineEntry = {
+  id: number;
+  incident_id: number;
+  event_type: 'note' | 'state_change' | 'alert_added' | 'resolution';
+  author: string | null;
+  body: string | null;
+  details: Record<string, unknown>;
+  created_at: string;
+};
+
+export type Incident = IncidentListItem & {
+  metadata?: Record<string, unknown>;
+  alerts: IncidentAlertLink[];
+  timeline: IncidentTimelineEntry[];
+};
+
+export type IncidentsListResponse = { total: number; items: IncidentListItem[] };
+
+export type CreateIncidentBody = {
+  title: string;
+  severity?: IncidentSeverity;
+  assigned_to?: string | null;
+  sla_due_at?: string | null;
+  asset_keys?: string[] | null;
+};
+
+export async function getIncidents(params?: {
+  status?: string;
+  severity?: string;
+  assigned_to?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<IncidentsListResponse> {
+  const p = new URLSearchParams();
+  if (params?.status) p.set('status', params.status);
+  if (params?.severity) p.set('severity', params.severity);
+  if (params?.assigned_to) p.set('assigned_to', params.assigned_to);
+  if (params?.limit != null) p.set('limit', String(params.limit));
+  if (params?.offset != null) p.set('offset', String(params.offset));
+  const q = p.toString();
+  return apiFetch<IncidentsListResponse>('/incidents' + (q ? `?${q}` : ''));
+}
+
+export async function getIncident(id: number): Promise<Incident> {
+  return apiFetch<Incident>(`/incidents/${id}`);
+}
+
+export async function createIncident(body: CreateIncidentBody): Promise<IncidentListItem> {
+  return apiFetch<IncidentListItem>('/incidents', { method: 'POST', body: JSON.stringify(body) });
+}
+
+export async function updateIncidentStatus(id: number, status: IncidentStatus): Promise<IncidentListItem> {
+  return apiFetch<IncidentListItem>(`/incidents/${id}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status }),
+  });
+}
+
+export async function addIncidentNote(id: number, body: string): Promise<IncidentTimelineEntry> {
+  return apiFetch<IncidentTimelineEntry>(`/incidents/${id}/notes`, {
+    method: 'POST',
+    body: JSON.stringify({ body }),
+  });
+}
+
+export async function linkIncidentAlert(id: number, asset_key: string): Promise<IncidentAlertLink & { message?: string }> {
+  return apiFetch(`/incidents/${id}/alerts`, {
+    method: 'POST',
+    body: JSON.stringify({ asset_key }),
+  });
+}
+
+export async function unlinkIncidentAlert(id: number, asset_key: string): Promise<{ ok: boolean }> {
+  return apiFetch(`/incidents/${id}/alerts?asset_key=${encodeURIComponent(asset_key)}`, { method: 'DELETE' });
+}
