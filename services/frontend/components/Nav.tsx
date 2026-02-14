@@ -3,20 +3,27 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { logout } from '@/lib/api';
+import { useAuth } from '@/contexts/AuthContext';
 
-const links = [
+const links: { href: string; label: string; adminOnly?: boolean }[] = [
   { href: '/overview', label: 'Overview' },
   { href: '/assets', label: 'Assets' },
   { href: '/findings', label: 'Findings' },
   { href: '/alerts', label: 'Alerts' },
   { href: '/incidents', label: 'Incidents' },
   { href: '/reports', label: 'Reports' },
+  { href: '/policy', label: 'Policy' },
   { href: '/audit', label: 'Audit' },
+  { href: '/users', label: 'Users', adminOnly: true },
+  { href: '/jobs', label: 'Jobs' },
   { href: '/dashboards', label: 'Dashboards' },
 ];
 
 export default function Nav() {
   const pathname = usePathname();
+  const { isAdmin } = useAuth();
+
+  const visibleLinks = links.filter((link) => !link.adminOnly || isAdmin);
 
   return (
     <header className="sticky top-0 z-50 border-b border-[var(--border)] bg-[var(--surface)]/80 backdrop-blur-xl supports-[backdrop-filter]:bg-[var(--surface)]/70">
@@ -32,7 +39,7 @@ export default function Nav() {
             <span className="hidden sm:inline">SecPlat</span>
           </Link>
           <div className="ml-2 flex items-center gap-0.5 border-l border-[var(--border)] pl-5">
-            {links.map(({ href, label }) => {
+            {visibleLinks.map(({ href, label }) => {
               const isActive = pathname === href || (href !== '/overview' && pathname.startsWith(href));
               return (
                 <Link

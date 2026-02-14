@@ -6,7 +6,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.routers.auth import require_auth
+from app.routers.auth import require_auth, require_role
 from app.routers.posture import _get_down_assets
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
@@ -130,13 +130,13 @@ class AssignBody(BaseModel):
 
 
 @router.post("/ack")
-def alert_ack(body: AckBody, db: Session = Depends(get_db), user: str = Depends(require_auth)):
+def alert_ack(body: AckBody, db: Session = Depends(get_db), user: str = Depends(require_role(["admin", "analyst"]))):
     _upsert_alert_state(db, body.asset_key, "acked", ack_reason=body.reason, acked_by=user)
     return {"ok": True, "asset_key": body.asset_key, "state": "acked"}
 
 
 @router.post("/suppress")
-def alert_suppress(body: SuppressBody, db: Session = Depends(get_db), _user: str = Depends(require_auth)):
+def alert_suppress(body: SuppressBody, db: Session = Depends(get_db), _user: str = Depends(require_role(["admin", "analyst"]))):
     try:
         until = datetime.fromisoformat(body.until_iso.replace("Z", "+00:00"))
     except (ValueError, TypeError):
@@ -146,12 +146,12 @@ def alert_suppress(body: SuppressBody, db: Session = Depends(get_db), _user: str
 
 
 @router.post("/resolve")
-def alert_resolve(body: ResolveBody, db: Session = Depends(get_db), _user: str = Depends(require_auth)):
+def alert_resolve(body: ResolveBody, db: Session = Depends(get_db), _user: str = Depends(require_role(["admin", "analyst"]))):
     _upsert_alert_state(db, body.asset_key, "resolved")
     return {"ok": True, "asset_key": body.asset_key, "state": "resolved"}
 
 
 @router.post("/assign")
-def alert_assign(body: AssignBody, db: Session = Depends(get_db), _user: str = Depends(require_auth)):
+def alert_assign(body: AssignBody, db: Session = Depends(get_db), _user: str = Depends(require_role(["admin", "analyst"]))):
     _upsert_alert_state(db, body.asset_key, "assigned", assigned_to=body.assigned_to)
     return {"ok": True, "asset_key": body.asset_key, "assigned_to": body.assigned_to}

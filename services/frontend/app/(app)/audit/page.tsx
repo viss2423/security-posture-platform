@@ -8,17 +8,17 @@ import { ApiDownHint } from '@/components/EmptyState';
 import { EmptyState } from '@/components/EmptyState';
 import { friendlyApiMessage } from '@/lib/apiError';
 
-const ACTION_OPTIONS = ['', 'login', 'retention_apply', 'asset_edit'];
+const FALLBACK_ACTIONS = ['login', 'retention_apply', 'asset_edit', 'incident_create', 'incident_status', 'finding_status', 'accept_risk'];
 
 export default function AuditPage() {
-  const [data, setData] = useState<{ items: AuditEvent[] } | null>(null);
+  const [data, setData] = useState<{ items: AuditEvent[]; actions?: string[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [userFilter, setUserFilter] = useState('');
   const [actionFilter, setActionFilter] = useState('');
   const [sinceFilter, setSinceFilter] = useState('');
 
   const load = useCallback(() => {
-    const filters: AuditFilters = { limit: 100 };
+    const filters: AuditFilters = { limit: 200 };
     if (userFilter.trim()) filters.user = userFilter.trim();
     if (actionFilter) filters.action = actionFilter;
     if (sinceFilter) {
@@ -63,7 +63,7 @@ export default function AuditPage() {
             className="ml-2 rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-sm text-[var(--text)]"
           >
             <option value="">All</option>
-            {ACTION_OPTIONS.filter(Boolean).map((a) => (
+            {(data?.actions?.length ? Array.from(new Set(data.actions)).sort() : FALLBACK_ACTIONS).map((a) => (
               <option key={a} value={a}>
                 {a}
               </option>
@@ -101,6 +101,7 @@ export default function AuditPage() {
                   <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-[var(--muted)]">Action</th>
                   <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-[var(--muted)]">User</th>
                   <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-[var(--muted)]">Asset</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-[var(--muted)]">Request ID</th>
                   <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-[var(--muted)]">Details</th>
                 </tr>
               </thead>
@@ -121,8 +122,17 @@ export default function AuditPage() {
                         '–'
                       )}
                     </td>
-                    <td className="px-4 py-3 text-[var(--muted)] max-w-[200px] truncate" title={JSON.stringify(ev.details)}>
-                      {Object.keys(ev.details || {}).length ? JSON.stringify(ev.details) : '–'}
+                    <td className="px-4 py-3 text-[var(--muted)] font-mono text-xs max-w-[120px] truncate" title={ev.request_id ?? ''}>
+                      {ev.request_id ?? '–'}
+                    </td>
+                    <td className="px-4 py-3 text-[var(--muted)] max-w-[220px]">
+                      {ev.details && Object.keys(ev.details).length > 0 ? (
+                        <span className="truncate block" title={JSON.stringify(ev.details, null, 2)}>
+                          {JSON.stringify(ev.details)}
+                        </span>
+                      ) : (
+                        '–'
+                      )}
                     </td>
                   </tr>
                 ))}

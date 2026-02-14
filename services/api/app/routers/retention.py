@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.settings import settings
 from app.db import get_db
-from app.routers.auth import require_auth
+from app.routers.auth import require_role
 from app.rate_limit import check_rate_limit
 from app.request_context import request_id_ctx
 from app.audit import log_audit
@@ -28,7 +28,7 @@ def _client_id(request: Request) -> str:
 async def retention_apply(
     request: Request,
     db: Session = Depends(get_db),
-    _user: str = Depends(require_auth),
+    _user: str = Depends(require_role(["admin"])),
 ):
     key = f"retention:{_client_id(request)}"
     if not await check_rate_limit(key, settings.RATE_LIMIT_RETENTION_PER_HOUR, 3600.0):

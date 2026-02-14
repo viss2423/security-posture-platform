@@ -52,4 +52,11 @@ def list_audit(
             }
             for r in rows
         ],
+        "actions": _distinct_actions(db),
     }
+
+
+def _distinct_actions(db: Session) -> list[str]:
+    """Return distinct action values for filter dropdown."""
+    q = text("SELECT DISTINCT action FROM audit_events ORDER BY action")
+    return [r[0] for r in db.execute(q).fetchall() if r[0]]

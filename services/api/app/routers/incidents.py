@@ -1,14 +1,19 @@
-"""Incidents: SOC workflow — group alerts, state machine, notes, SLA (Phase A.1)."""
+"""Incidents: SOC workflow — group alerts, state machine, notes, SLA (Phase A.1). B.4: Jira ticket from incident."""
+import base64
+import json
 from datetime import datetime, timezone
+
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.routers.auth import require_auth
+from app.routers.auth import require_auth, require_role
 from app.audit import log_audit
 from app.request_context import request_id_ctx
+from app.settings import settings
 
 router = APIRouter(prefix="/incidents", tags=["incidents"])
 
@@ -124,7 +129,7 @@ class CreateIncidentBody(BaseModel):
 def create_incident(
     body: CreateIncidentBody,
     db: Session = Depends(get_db),
-    user: str = Depends(require_auth),
+    user: str = Depends(require_role(["admin", "analyst"])),
 ):
     """Create an incident and optionally link alerts by asset_key."""
     if body.severity not in VALID_SEVERITY:
@@ -190,7 +195,7 @@ def update_incident_status(
     incident_id: int,
     body: UpdateStatusBody,
     db: Session = Depends(get_db),
-    user: str = Depends(require_auth),
+    user: str = Depends(require_role(["admin", "analyst"])),
 ):
     """Update incident status (state machine). Sets resolved_at/closed_at when appropriate."""
     if body.status not in VALID_STATUS:
@@ -255,7 +260,7 @@ def add_incident_note(
     incident_id: int,
     body: AddNoteBody,
     db: Session = Depends(get_db),
-    user: str = Depends(require_auth),
+    user: str = Depends(require_role(["admin", "analyst"])),
 ):
     """Add a note to the incident timeline."""
     exists = db.execute(text("SELECT id FROM incidents WHERE id = :id"), {"id": incident_id}).scalar()
@@ -283,7 +288,7 @@ def link_alert(
     incident_id: int,
     body: LinkAlertBody,
     db: Session = Depends(get_db),
-    user: str = Depends(require_auth),
+    user: str = Depends(require_role(["admin", "analyst"])),
 ):
     """Link an alert (by asset_key) to this incident."""
     exists = db.execute(text("SELECT id FROM incidents WHERE id = :id"), {"id": incident_id}).scalar()
@@ -321,7 +326,7 @@ def unlink_alert(
     incident_id: int,
     asset_key: str = Query(..., description="Asset key to unlink"),
     db: Session = Depends(get_db),
-    _user: str = Depends(require_auth),
+    _user: str = Depends(require_role(["admin", "analyst"])),
 ):
     """Remove an alert (asset_key) from this incident."""
     q = text("DELETE FROM incident_alerts WHERE incident_id = :incident_id AND asset_key = :asset_key")
@@ -330,3 +335,146 @@ def unlink_alert(
     if r.rowcount == 0:
         raise HTTPException(status_code=404, detail="Link not found")
     return {"ok": True}
+
+
+def _jira_create_issue(incident: dict, project_key: str, frontend_url: str) -> tuple[str, str]:
+    """Create Jira issue for incident. Returns (issue_key, browse_url). Raises HTTPException on config/API error."""
+    base = (getattr(settings, "JIRA_BASE_URL", None) or "").rstrip("/")
+    email = getattr(settings, "JIRA_EMAIL", None) or ""
+    token = getattr(settings, "JIRA_API_TOKEN", None) or ""
+    if not base or not email or not token:
+        raise HTTPException(
+            status_code=503,
+            detail="Jira not configured (JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN)",
+        )
+    summary = (incident.get("title") or "SecPlat incident")[:255]
+    alert_keys = [a.get("asset_key") for a in incident.get("alerts") or [] if isinstance(a, dict)]
+    desc_lines = [
+        f"SecPlat incident #{incident.get('id')}",
+        f"Severity: {incident.get('severity', '')}",
+        f"Status: {incident.get('status', '')}",
+        f"Linked assets: {', '.join(alert_keys) if alert_keys else 'None'}",
+        "",
+        f"View in SecPlat: {frontend_url}/incidents/{incident.get('id')}",
+    ]
+    description = {
+        "type": "doc",
+        "version": 1,
+        "content": [
+            {
+                "type": "paragraph",
+                "content": [{"type": "text", "text": "\n".join(desc_lines)}],
+            }
+        ],
+    }
+    payload = {
+        "fields": {
+            "project": {"key": project_key},
+            "summary": summary,
+            "issuetype": {"name": "Task"},
+            "description": description,
+        }
+    }
+    auth = base64.b64encode(f"{email}:{token}".encode()).decode()
+    url = f"{base}/rest/api/3/issue"
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            r = client.post(
+                url,
+                json=payload,
+                headers={
+                    "Authorization": f"Basic {auth}",
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+            )
+            r.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        try:
+            err = e.response.json()
+            msg = err.get("errorMessages", [])
+            if not msg and "errors" in err:
+                msg = list(err["errors"].values())
+            raise HTTPException(
+                status_code=502,
+                detail=f"Jira API error: {msg or e.response.text}",
+            )
+        except Exception:
+            raise HTTPException(status_code=502, detail=f"Jira API error: {e.response.text}")
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Jira unreachable: {e!s}")
+
+    data = r.json()
+    issue_key = data.get("key") or ""
+    browse_url = f"{base}/browse/{issue_key}"
+    return issue_key, browse_url
+
+
+class CreateJiraBody(BaseModel):
+    project_key: str | None = None
+
+
+@router.post("/{incident_id}/jira")
+def create_jira_ticket(
+    incident_id: int,
+    body: CreateJiraBody | None = None,
+    db: Session = Depends(get_db),
+    user: str = Depends(require_role(["admin", "analyst"])),
+):
+    """Create a Jira issue for this incident. Stores issue_key and url in incident.metadata. Returns existing if already created."""
+    q = text("""
+        SELECT id, title, severity, status, assigned_to, metadata
+        FROM incidents WHERE id = :id
+    """)
+    row = db.execute(q, {"id": incident_id}).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    incident = dict(row)
+    meta = incident.get("metadata") or {}
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta) if meta else {}
+        except Exception:
+            meta = {}
+    if meta.get("jira_issue_key"):
+        return {
+            "issue_key": meta["jira_issue_key"],
+            "url": meta.get("jira_issue_url") or "",
+            "message": "Jira ticket already created for this incident",
+        }
+
+    project_key = (body and body.project_key) or getattr(settings, "JIRA_PROJECT_KEY", None) or ""
+    if not project_key or not project_key.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="project_key required (pass in body or set JIRA_PROJECT_KEY)",
+        )
+    project_key = project_key.strip().upper()
+
+    alerts_q = text("SELECT asset_key FROM incident_alerts WHERE incident_id = :id")
+    alerts = db.execute(alerts_q, {"id": incident_id}).mappings().all()
+    incident_for_jira = {
+        **incident,
+        "alerts": [{"asset_key": a["asset_key"]} for a in alerts],
+    }
+    frontend_url = (getattr(settings, "FRONTEND_URL", None) or "http://localhost:3000").rstrip("/")
+    issue_key, browse_url = _jira_create_issue(incident_for_jira, project_key, frontend_url)
+
+    new_meta = {**meta, "jira_issue_key": issue_key, "jira_issue_url": browse_url}
+    db.execute(
+        text("UPDATE incidents SET metadata = :meta, updated_at = :now WHERE id = :id"),
+        {"meta": json.dumps(new_meta), "now": datetime.now(timezone.utc), "id": incident_id},
+    )
+    db.commit()
+    log_audit(
+        db,
+        "incident_jira_create",
+        user_name=user,
+        asset_key=None,
+        details={"incident_id": incident_id, "jira_issue_key": issue_key},
+        request_id=request_id_ctx.get(None),
+    )
+    db.commit()
+
+    return {"issue_key": issue_key, "url": browse_url}

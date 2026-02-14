@@ -14,6 +14,7 @@ import {
 import { ApiDownHint } from '@/components/EmptyState';
 import { friendlyApiMessage } from '@/lib/apiError';
 import { formatDateTime } from '@/lib/format';
+import { useAuth } from '@/contexts/AuthContext';
 
 type TabId = 'firing' | 'acked' | 'suppressed' | 'resolved';
 
@@ -31,6 +32,7 @@ function AlertRow({
   onResolve,
   onAssign,
   loading,
+  canMutate,
 }: {
   item: AlertItem;
   onAck: (key: string, reason?: string) => void;
@@ -38,6 +40,7 @@ function AlertRow({
   onResolve: (key: string) => void;
   onAssign: (key: string, who: string) => void;
   loading: string | null;
+  canMutate: boolean;
 }) {
   const [ackReason, setAckReason] = useState('');
   const [showAck, setShowAck] = useState(false);
@@ -64,6 +67,7 @@ function AlertRow({
         {item.assigned_to && <span className="ml-2 text-xs text-[var(--muted)]">assigned to {item.assigned_to}</span>}
         {item.suppressed_until && <span className="ml-2 text-xs text-[var(--muted)]">until {formatDateTime(item.suppressed_until)}</span>}
       </div>
+      {canMutate && (
       <div className="flex flex-wrap items-center gap-2">
         {showAck && (
           <span className="flex items-center gap-2">
@@ -114,11 +118,13 @@ function AlertRow({
           <button type="button" onClick={() => setShowAssign(true)} disabled={isBusy} className="btn-secondary text-sm">Assign</button>
         )}
       </div>
+      )}
     </li>
   );
 }
 
 export default function AlertsPage() {
+  const { canMutate } = useAuth();
   const [data, setData] = useState<AlertsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabId>('firing');
@@ -225,6 +231,7 @@ export default function AlertsPage() {
                   onResolve={handleResolve}
                   onAssign={handleAssign}
                   loading={loading}
+                  canMutate={canMutate}
                 />
               ))}
             </ul>

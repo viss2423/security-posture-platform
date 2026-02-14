@@ -5,6 +5,14 @@ Requires: POSTGRES_DSN and API_SECRET_KEY set; DB with migrations run (incidents
 Run: pytest services/api/tests/test_incidents.py -v
 """
 import os
+import sys
+from pathlib import Path
+
+# Ensure project root is on path (e.g. in Docker: /app when tests live in /app/tests)
+_root = Path(__file__).resolve().parent.parent
+if str(_root) not in sys.path:
+    sys.path.insert(0, str(_root))
+
 import pytest
 from fastapi.testclient import TestClient
 

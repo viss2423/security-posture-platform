@@ -49,13 +49,29 @@ def insert_finding(conn, asset_id: int, category: str, title: str, severity: str
             VALUES (%s,%s,%s,%s,%s,%s,%s)
         """, (asset_id, category, title, severity, confidence, evidence, remediation))
 
-def finish_job(conn, job_id: int, ok: bool, error: str | None = None):
+def set_job_log(conn, job_id: int, log_line: str):
     with conn.cursor() as cur:
         cur.execute("""
             UPDATE scan_jobs
-               SET status=%s, finished_at=NOW(), error=%s
+               SET log_output = COALESCE(log_output, '') || %s || E'\\n'
              WHERE job_id=%s
-        """, ("done" if ok else "failed", error, job_id))
+        """, (log_line, job_id))
+
+
+def finish_job(conn, job_id: int, ok: bool, error: str | None = None, log_line: str | None = None):
+    with conn.cursor() as cur:
+        if log_line:
+            cur.execute("""
+                UPDATE scan_jobs
+                   SET status=%s, finished_at=NOW(), error=%s, log_output = COALESCE(log_output, '') || %s || E'\\n'
+                 WHERE job_id=%s
+            """, ("done" if ok else "failed", error, log_line, job_id))
+        else:
+            cur.execute("""
+                UPDATE scan_jobs
+                   SET status=%s, finished_at=NOW(), error=%s
+                 WHERE job_id=%s
+            """, ("done" if ok else "failed", error, job_id))
 
 def scan_external_web(asset_name: str):
     """
@@ -100,23 +116,26 @@ def main():
 
                 job_id = job["job_id"]
                 asset_id = job["target_asset_id"]
+                set_job_log(conn, job_id, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Started job for asset_id={asset_id}")
                 asset = get_asset(conn, asset_id)
 
                 if not asset:
-                    finish_job(conn, job_id, ok=False, error="Asset not found")
+                    finish_job(conn, job_id, ok=False, error="Asset not found", log_line="Asset not found")
                     continue
 
                 if asset["type"] != "external_web":
-                    finish_job(conn, job_id, ok=False, error="Target is not external_web")
+                    finish_job(conn, job_id, ok=False, error="Target is not external_web", log_line="Target is not external_web")
                     continue
 
                 if REQUIRE_DOMAIN_VERIFICATION and not asset["verified"]:
-                    finish_job(conn, job_id, ok=False, error="Domain not verified")
+                    finish_job(conn, job_id, ok=False, error="Domain not verified", log_line="Domain not verified")
                     continue
 
+                set_job_log(conn, job_id, f"Scanning {asset.get('name', '')} ...")
                 start = time.time()
                 scan = scan_external_web(asset["name"])
                 elapsed = time.time() - start
+                set_job_log(conn, job_id, f"Scan completed in {elapsed:.1f}s: HTTPS={scan['reachable_https']}, missing_headers={len(scan['missing_headers'])}")
 
                 evidence = json.dumps({"scan": scan, "elapsed_seconds": elapsed}, indent=2)
 
@@ -130,6 +149,7 @@ def main():
                         evidence=evidence,
                         remediation="Ensure HTTPS is enabled and reachable. Configure TLS and redirect HTTP to HTTPS."
                     )
+                    set_job_log(conn, job_id, "Finding: HTTPS not reachable")
 
                 if scan["missing_headers"]:
                     insert_finding(
@@ -141,8 +161,9 @@ def main():
                         evidence=evidence,
                         remediation="Add recommended security headers (HSTS, CSP, X-Frame-Options, etc.) via your web server/CDN configuration."
                     )
+                    set_job_log(conn, job_id, f"Finding: Missing headers {scan['missing_headers']}")
 
-                finish_job(conn, job_id, ok=True)
+                finish_job(conn, job_id, ok=True, log_line="Done")
 
         except Exception as e:
             print(f"[worker-web] error: {e}")

@@ -128,6 +128,19 @@ curl http://localhost:8081/.well-known/secplat-verification.txt
 
 ---
 
+## Testing Jobs (scan worker)
+
+1. **Start the worker** (processes queued scan jobs):
+   ```bash
+   docker compose up -d worker-web
+   ```
+2. **Create a job** from the UI: open **Jobs** in the nav, use the **Enqueue job** form (analyst/admin only). Pick type `web_exposure`, optionally set an Asset ID (e.g. an asset with type `external_web`), click **Enqueue**.
+3. **Refresh the Jobs list** — the job appears as queued, then (once the worker picks it up) running, then done or failed. Click a job to see **logs**; use **Retry** on failed jobs.
+
+Without the worker running, jobs stay in **queued** until you start `worker-web`.
+
+---
+
 ## Domain / ownership verification
 
 The platform exposes a **well-known verification path**, similar to real SaaS security tools.
@@ -306,7 +319,9 @@ Endpoints require **Bearer token** (from `POST /auth/login`). The API is the **s
 
 **Report history:** Snapshots are stored in `posture_report_snapshots`. New installs get the table from `init.sql`; for an existing DB run `infra/postgres/migrations/003_report_snapshots.sql`.
 
-Optional env: `SLACK_WEBHOOK_URL` (e.g. Slack Incoming Webhook). When set, `POST /posture/alert/send` notifies Slack only when `down_assets` is non-empty.
+Optional env: `SLACK_WEBHOOK_URL` (Slack Incoming Webhook) and/or **WhatsApp (Twilio)**. When set, `POST /posture/alert/send` notifies when `down_assets` is non-empty. For WhatsApp: set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM` (e.g. `whatsapp:+14155238886` for sandbox), `WHATSAPP_ALERT_TO` (e.g. `whatsapp:+1234567890`). You can use WhatsApp only, Slack only, or both.
+
+**Integrations (B.4):** **Jira** — create a ticket from an incident: set `JIRA_*`; on Incident detail use **Create Jira ticket** (or `POST /incidents/:id/jira`). **Slack interactive** — optional: `SLACK_SIGNING_SECRET` + Interactivity URL to `.../integrations/slack/interactions` for “Create Jira” button. **WhatsApp incoming** — optional: set Twilio WhatsApp webhook to `POST .../integrations/whatsapp/incoming` to receive replies (signature validated if `TWILIO_AUTH_TOKEN` set).
 
 Example (PowerShell): see `scripts/test-api.ps1`. With token: `GET /posture/summary`, `GET /posture/juice-shop/detail`.
 

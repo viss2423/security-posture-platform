@@ -1,11 +1,17 @@
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from ..db import get_db
+from ..audit import log_audit
+from ..request_context import request_id_ctx
+from .auth import require_auth, require_role
 
 router = APIRouter()
+
+VALID_STATUS = ("open", "in_progress", "remediated", "accepted_risk")
 
 
 @router.get("/")
@@ -39,7 +45,8 @@ def list_findings(
         f.time,
         a.asset_key,
         a.name AS asset_name,
-        f.category, f.title, f.severity, f.confidence, f.evidence, f.remediation
+        f.category, f.title, f.severity, f.confidence, f.evidence, f.remediation,
+        f.accepted_risk_at, f.accepted_risk_expires_at, f.accepted_risk_reason, f.accepted_risk_by
       FROM findings f
       LEFT JOIN assets a ON a.asset_id = f.asset_id
       WHERE {where}
@@ -47,14 +54,18 @@ def list_findings(
       LIMIT :limit
     """)
     rows = db.execute(q, params).mappings().all()
-    return [
-        {
-            **dict(r),
-            "first_seen": r["first_seen"].isoformat() if hasattr(r["first_seen"], "isoformat") else str(r["first_seen"]) if r["first_seen"] else None,
-            "last_seen": r["last_seen"].isoformat() if hasattr(r["last_seen"], "isoformat") else str(r["last_seen"]) if r["last_seen"] else None,
-        }
-        for r in rows
-    ]
+
+    def _serialize(r):
+        out = dict(r)
+        for k in ("first_seen", "last_seen", "accepted_risk_at", "accepted_risk_expires_at"):
+            v = out.get(k)
+            if hasattr(v, "isoformat"):
+                out[k] = v.isoformat()
+            elif v is not None and k in out:
+                out[k] = str(v)
+        return out
+
+    return [_serialize(r) for r in rows]
 
 
 class FindingUpsertBody(BaseModel):
@@ -129,3 +140,73 @@ def upsert_finding(body: FindingUpsertBody, db: Session = Depends(get_db)):
         )
         db.commit()
         return {"ok": True, "finding_key": body.finding_key, "updated": False}
+
+
+class UpdateStatusBody(BaseModel):
+    status: str
+
+
+@router.patch("/{finding_id}/status")
+def update_finding_status(
+    finding_id: int,
+    body: UpdateStatusBody,
+    db: Session = Depends(get_db),
+    _user: str = Depends(require_role(["admin", "analyst"])),
+):
+    """Update finding status: open | in_progress | remediated | accepted_risk."""
+    if body.status not in VALID_STATUS:
+        raise HTTPException(status_code=400, detail=f"Invalid status. Use one of: {VALID_STATUS}")
+    row = db.execute(
+        text("SELECT finding_id FROM findings WHERE finding_id = :id"),
+        {"id": finding_id},
+    ).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Finding not found")
+    db.execute(
+        text("UPDATE findings SET status = :status WHERE finding_id = :id"),
+        {"status": body.status, "id": finding_id},
+    )
+    log_audit(db, "finding_status", user_name=_user, asset_key=None, details={"finding_id": finding_id, "status": body.status}, request_id=request_id_ctx.get(None))
+    db.commit()
+    return {"ok": True, "finding_id": finding_id, "status": body.status}
+
+
+class AcceptRiskBody(BaseModel):
+    reason: str
+    expires_at: str  # ISO datetime
+
+
+@router.post("/{finding_id}/accept-risk")
+def accept_finding_risk(
+    finding_id: int,
+    body: AcceptRiskBody,
+    db: Session = Depends(get_db),
+    user: str = Depends(require_role(["admin", "analyst"])),
+):
+    """Set finding to accepted_risk with reason and expiry. Must be reviewed when expires_at passes."""
+    try:
+        expires_at = datetime.fromisoformat(body.expires_at.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="expires_at must be ISO 8601 datetime")
+    row = db.execute(
+        text("SELECT finding_id FROM findings WHERE finding_id = :id"),
+        {"id": finding_id},
+    ).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Finding not found")
+    now = datetime.now(timezone.utc)
+    db.execute(
+        text("""
+          UPDATE findings SET
+            status = 'accepted_risk',
+            accepted_risk_at = :now,
+            accepted_risk_expires_at = :expires_at,
+            accepted_risk_reason = :reason,
+            accepted_risk_by = :user
+          WHERE finding_id = :id
+        """),
+        {"id": finding_id, "now": now, "expires_at": expires_at, "reason": body.reason or "", "user": user},
+    )
+    log_audit(db, "accept_risk", user_name=user, asset_key=None, details={"finding_id": finding_id, "reason": body.reason[:100] if body.reason else "", "expires_at": body.expires_at}, request_id=request_id_ctx.get(None))
+    db.commit()
+    return {"ok": True, "finding_id": finding_id, "status": "accepted_risk"}

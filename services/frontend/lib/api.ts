@@ -1,6 +1,6 @@
 const API = '/api';
 
-function getToken(): string | null {
+export function getToken(): string | null {
   if (typeof window === 'undefined') return null;
   return localStorage.getItem('secplat_token');
 }
@@ -20,7 +20,27 @@ export async function apiFetch<T>(path: string, options?: RequestInit): Promise<
     if (typeof window !== 'undefined') window.location.href = '/login';
     throw new Error('Unauthorized');
   }
-  if (!res.ok) throw new Error(await res.text() || res.statusText);
+  if (!res.ok) {
+    const text = await res.text();
+    let msg = text || res.statusText;
+    if (res.status === 502) {
+      try {
+        const j = JSON.parse(text);
+        if (j?.error) msg = j.error;
+      } catch {
+        msg = 'API unreachable';
+      }
+    }
+    throw new Error(msg);
+  }
+  return res.json();
+}
+
+export type AuthConfig = { oidc_enabled: boolean };
+
+export async function getAuthConfig(): Promise<AuthConfig> {
+  const res = await fetch(API + '/auth/config', { cache: 'no-store' });
+  if (!res.ok) return { oidc_enabled: false };
   return res.json();
 }
 
@@ -30,8 +50,18 @@ export async function login(username: string, password: string): Promise<{ acces
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ username, password }),
   });
-  if (!res.ok) throw new Error(await res.text() || 'Login failed');
-  return res.json();
+  const text = await res.text();
+  if (!res.ok) {
+    let msg = text || 'Login failed';
+    try {
+      const j = JSON.parse(text);
+      if (j?.error) msg = j.error;
+    } catch {
+      /* use text as-is */
+    }
+    throw new Error(msg);
+  }
+  return JSON.parse(text);
 }
 
 export function setToken(token: string) {
@@ -40,6 +70,13 @@ export function setToken(token: string) {
 
 export function logout() {
   localStorage.removeItem('secplat_token');
+  localStorage.removeItem('secplat_role');
+}
+
+export type Me = { username: string; role: string };
+
+export async function getMe(): Promise<Me> {
+  return apiFetch<Me>('/auth/me');
 }
 
 export type PostureSummary = {
@@ -197,6 +234,46 @@ export async function saveReportSnapshot(period: string = '24h'): Promise<Report
   return apiFetch<ReportSnapshot>(`/posture/reports/snapshot?period=${period}`, { method: 'POST' });
 }
 
+/** Download executive summary as PDF. Optional snapshotId to export that snapshot. */
+export async function downloadExecutivePdf(snapshotId?: number): Promise<void> {
+  const token = getToken();
+  const url = snapshotId != null
+    ? `${API}/posture/reports/executive.pdf?snapshot_id=${snapshotId}`
+    : `${API}/posture/reports/executive.pdf`;
+  const res = await fetch(url, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (res.status === 401) {
+    localStorage.removeItem('secplat_token');
+    if (typeof window !== 'undefined') window.location.href = '/login';
+    throw new Error('Unauthorized');
+  }
+  if (!res.ok) throw new Error(await res.text() || 'Download failed');
+  const blob = await res.blob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'secplat-executive.pdf';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+export type ReportWhatChanged = {
+  from: { period: string; uptime_pct: number; posture_score_avg: number | null; total_assets: number; green: number; amber: number; red: number; created_at?: string; id?: number };
+  to: { period: string; uptime_pct: number; posture_score_avg: number | null; total_assets: number; green: number; amber: number; red: number; created_at?: string; id?: number | string };
+  score_delta: number | null;
+  green_delta: number;
+  amber_delta: number;
+  red_delta: number;
+  incidents_added: string[];
+  incidents_removed: string[];
+};
+
+export async function getReportWhatChanged(fromId: number, toId?: number): Promise<ReportWhatChanged> {
+  const params = new URLSearchParams({ from_id: String(fromId) });
+  if (toId != null) params.set('to_id', String(toId));
+  return apiFetch<ReportWhatChanged>(`/posture/reports/what-changed?${params}`);
+}
+
 export type AuditEvent = {
   id: number;
   created_at: string;
@@ -214,14 +291,108 @@ export type AuditFilters = {
   limit?: number;
 };
 
-export async function getAuditLog(filters?: AuditFilters): Promise<{ items: AuditEvent[] }> {
+export async function getAuditLog(filters?: AuditFilters): Promise<{ items: AuditEvent[]; actions?: string[] }> {
   const p = new URLSearchParams();
   if (filters?.user) p.set('user', filters.user);
   if (filters?.action) p.set('action', filters.action);
   if (filters?.since) p.set('since', filters.since);
   if (filters?.limit != null) p.set('limit', String(filters.limit));
   const q = p.toString();
-  return apiFetch<{ items: AuditEvent[] }>('/audit' + (q ? `?${q}` : ''));
+  return apiFetch<{ items: AuditEvent[]; actions?: string[] }>('/audit' + (q ? `?${q}` : ''));
+}
+
+export type User = {
+  username: string;
+  role: string;
+  source: string;
+  disabled?: boolean;
+};
+
+export async function getUsers(): Promise<{ items: User[] }> {
+  return apiFetch<{ items: User[] }>('/auth/users');
+}
+
+// Policy bundles (Phase B.2)
+export type PolicyBundle = {
+  id: number;
+  name: string;
+  description: string | null;
+  status: 'draft' | 'approved';
+  created_at: string | null;
+  updated_at: string | null;
+  approved_at: string | null;
+  approved_by: string | null;
+};
+
+export type PolicyBundleDetail = PolicyBundle & { definition: string };
+
+export type PolicyEvaluateResult = {
+  bundle_id: number;
+  bundle_name: string;
+  score: number;
+  rules: { id: string; name: string; type: string; passed: number; failed: number; total: number; pass_pct: number }[];
+};
+
+export async function getPolicyBundles(status?: string): Promise<{ items: PolicyBundle[] }> {
+  const q = status ? `?status=${encodeURIComponent(status)}` : '';
+  return apiFetch<{ items: PolicyBundle[] }>(`/policy/bundles${q}`);
+}
+
+export async function getPolicyBundle(id: number): Promise<PolicyBundleDetail> {
+  return apiFetch<PolicyBundleDetail>(`/policy/bundles/${id}`);
+}
+
+export async function createPolicyBundle(body: { name: string; description?: string; definition: string }): Promise<{ id: number; name: string; status: string; created_at: string }> {
+  return apiFetch(`/policy/bundles`, { method: 'POST', body: JSON.stringify(body) });
+}
+
+export async function updatePolicyBundle(id: number, body: { name?: string; description?: string; definition?: string }): Promise<PolicyBundleDetail> {
+  return apiFetch<PolicyBundleDetail>(`/policy/bundles/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
+}
+
+export async function approvePolicyBundle(id: number): Promise<{ ok: boolean; status: string }> {
+  return apiFetch(`/policy/bundles/${id}/approve`, { method: 'POST' });
+}
+
+export async function evaluatePolicyBundle(id: number): Promise<PolicyEvaluateResult> {
+  return apiFetch<PolicyEvaluateResult>(`/policy/bundles/${id}/evaluate`, { method: 'POST' });
+}
+
+export async function deletePolicyBundle(id: number): Promise<{ ok: boolean }> {
+  return apiFetch(`/policy/bundles/${id}`, { method: 'DELETE' });
+}
+
+// Jobs (Phase B.3)
+export type JobItem = {
+  job_id: number;
+  job_type: string;
+  target_asset_id: number | null;
+  requested_by: string | null;
+  status: string;
+  created_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+  retry_count?: number;
+};
+
+export type JobDetail = JobItem & { log_output: string | null };
+
+export async function getJobs(status?: string): Promise<{ items: JobItem[] }> {
+  const q = status ? `?status=${encodeURIComponent(status)}&limit=100` : '?limit=100';
+  return apiFetch<{ items: JobItem[] }>(`/jobs${q}`);
+}
+
+export async function getJob(id: number): Promise<JobDetail> {
+  return apiFetch<JobDetail>(`/jobs/${id}`);
+}
+
+export async function createJob(payload: { job_type: string; target_asset_id?: number; requested_by?: string }): Promise<JobItem> {
+  return apiFetch<JobItem>('/jobs', { method: 'POST', body: JSON.stringify(payload) });
+}
+
+export async function retryJob(id: number): Promise<{ ok: boolean; status: string }> {
+  return apiFetch(`/jobs/${id}/retry`, { method: 'POST' });
 }
 
 export type AlertItem = {
@@ -320,7 +491,9 @@ export async function downloadPostureCsv(): Promise<void> {
   URL.revokeObjectURL(url);
 }
 
-// Findings
+// Findings (Phase A.2: lifecycle + risk acceptance)
+export type FindingStatus = 'open' | 'in_progress' | 'remediated' | 'accepted_risk';
+
 export type Finding = {
   finding_id: number;
   finding_key: string | null;
@@ -337,6 +510,10 @@ export type Finding = {
   confidence: string;
   evidence: string | null;
   remediation: string | null;
+  accepted_risk_at?: string | null;
+  accepted_risk_expires_at?: string | null;
+  accepted_risk_reason?: string | null;
+  accepted_risk_by?: string | null;
 };
 
 export type FindingsFilters = {
@@ -354,6 +531,21 @@ export async function getFindings(filters?: FindingsFilters): Promise<Finding[]>
   if (filters?.limit != null) p.set('limit', String(filters.limit));
   const q = p.toString();
   return apiFetch<Finding[]>('/findings' + (q ? `?${q}` : ''));
+}
+
+export async function updateFindingStatus(finding_id: number, status: FindingStatus): Promise<{ ok: boolean; finding_id: number; status: string }> {
+  return apiFetch(`/findings/${finding_id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) });
+}
+
+export async function acceptFindingRisk(
+  finding_id: number,
+  reason: string,
+  expires_at: string
+): Promise<{ ok: boolean; finding_id: number; status: string }> {
+  return apiFetch(`/findings/${finding_id}/accept-risk`, {
+    method: 'POST',
+    body: JSON.stringify({ reason, expires_at }),
+  });
 }
 
 // Incidents (Phase A.1)
@@ -455,4 +647,16 @@ export async function linkIncidentAlert(id: number, asset_key: string): Promise<
 
 export async function unlinkIncidentAlert(id: number, asset_key: string): Promise<{ ok: boolean }> {
   return apiFetch(`/incidents/${id}/alerts?asset_key=${encodeURIComponent(asset_key)}`, { method: 'DELETE' });
+}
+
+export type CreateJiraResponse = { issue_key: string; url: string; message?: string };
+
+export async function createIncidentJiraTicket(
+  incidentId: number,
+  projectKey?: string
+): Promise<CreateJiraResponse> {
+  return apiFetch<CreateJiraResponse>(`/incidents/${incidentId}/jira`, {
+    method: 'POST',
+    body: JSON.stringify(projectKey != null ? { project_key: projectKey } : {}),
+  });
 }

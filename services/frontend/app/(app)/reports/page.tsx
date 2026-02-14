@@ -8,11 +8,15 @@ import {
   getReportSnapshot,
   saveReportSnapshot,
   downloadPostureCsv,
+  downloadExecutivePdf,
+  getReportWhatChanged,
   type ReportSummary,
   type ReportSnapshot,
+  type ReportWhatChanged,
 } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
 import { EmptyState } from '@/components/EmptyState';
+import { useAuth } from '@/contexts/AuthContext';
 
 function SummaryCards({ s }: { s: ReportSummary | ReportSnapshot }) {
   return (
@@ -45,11 +49,17 @@ function topIncidentsList(s: ReportSummary | ReportSnapshot): string[] {
 }
 
 export default function ReportsPage() {
+  const { canMutate } = useAuth();
   const [summary, setSummary] = useState<ReportSummary | null>(null);
   const [history, setHistory] = useState<ReportSnapshot[]>([]);
   const [viewSnapshot, setViewSnapshot] = useState<ReportSnapshot | null>(null);
   const [loading, setLoading] = useState(false);
+  const [pdfLoading, setPdfLoading] = useState(false);
   const [saveLoading, setSaveLoading] = useState(false);
+  const [whatChangedFromId, setWhatChangedFromId] = useState<number | ''>('');
+  const [whatChangedToId, setWhatChangedToId] = useState<number | 'current'>('current');
+  const [whatChangedResult, setWhatChangedResult] = useState<ReportWhatChanged | null>(null);
+  const [whatChangedLoading, setWhatChangedLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   function loadSummary() {
@@ -96,6 +106,35 @@ export default function ReportsPage() {
       setViewSnapshot(snap);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Load failed');
+    }
+  }
+
+  async function handleDownloadPdf() {
+    setPdfLoading(true);
+    setError(null);
+    try {
+      const snapshotId = viewSnapshot?.id;
+      await downloadExecutivePdf(snapshotId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'PDF download failed');
+    } finally {
+      setPdfLoading(false);
+    }
+  }
+
+  async function handleWhatChanged() {
+    if (whatChangedFromId === '') return;
+    setWhatChangedLoading(true);
+    setError(null);
+    setWhatChangedResult(null);
+    try {
+      const toId = whatChangedToId === 'current' ? undefined : whatChangedToId;
+      const res = await getReportWhatChanged(whatChangedFromId, toId);
+      setWhatChangedResult(res);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Compare failed');
+    } finally {
+      setWhatChangedLoading(false);
     }
   }
 
@@ -156,15 +195,17 @@ export default function ReportsPage() {
         </section>
       )}
 
-      <section className="mb-10">
-        <h2 className="section-title">Save snapshot</h2>
-        <p className="mb-3 text-sm text-[var(--muted)]">
-          Store current 24h summary in the database for report history.
-        </p>
-        <button type="button" onClick={handleSaveSnapshot} disabled={saveLoading} className="btn-secondary">
-          {saveLoading ? 'Saving…' : 'Save current as snapshot'}
-        </button>
-      </section>
+      {canMutate && (
+        <section className="mb-10">
+          <h2 className="section-title">Save snapshot</h2>
+          <p className="mb-3 text-sm text-[var(--muted)]">
+            Store current 24h summary in the database for report history.
+          </p>
+          <button type="button" onClick={handleSaveSnapshot} disabled={saveLoading} className="btn-secondary">
+            {saveLoading ? 'Saving…' : 'Save current as snapshot'}
+          </button>
+        </section>
+      )}
 
       <section className="mb-10">
         <h2 className="section-title">Report history</h2>
@@ -210,14 +251,101 @@ export default function ReportsPage() {
         )}
       </section>
 
+      <section className="mb-10">
+        <h2 className="section-title">What changed</h2>
+        <p className="mb-3 text-sm text-[var(--muted)]">
+          Compare two snapshots or a snapshot to current state (score, G/A/R, incidents added/removed).
+        </p>
+        <div className="mb-4 flex flex-wrap items-center gap-3">
+          <select
+            value={whatChangedFromId}
+            onChange={(e) => setWhatChangedFromId(e.target.value === '' ? '' : Number(e.target.value))}
+            className="input"
+          >
+            <option value="">From snapshot…</option>
+            {history.map((row) => (
+              <option key={row.id} value={row.id}>#{row.id} {formatDateTime(row.created_at)}</option>
+            ))}
+          </select>
+          <span className="text-[var(--muted)]">→</span>
+          <select
+            value={whatChangedToId === 'current' ? 'current' : whatChangedToId}
+            onChange={(e) => setWhatChangedToId(e.target.value === 'current' ? 'current' : Number(e.target.value))}
+            className="input"
+          >
+            <option value="current">Current</option>
+            {history.map((row) => (
+              <option key={row.id} value={row.id}>#{row.id} {formatDateTime(row.created_at)}</option>
+            ))}
+          </select>
+          <button type="button" onClick={handleWhatChanged} disabled={whatChangedLoading || whatChangedFromId === ''} className="btn-secondary">
+            {whatChangedLoading ? 'Comparing…' : 'Compare'}
+          </button>
+        </div>
+        {whatChangedResult && (
+          <div className="card animate-in">
+            <div className="grid gap-4 sm:grid-cols-2 text-sm mb-4">
+              <div>
+                <div className="font-medium text-[var(--muted)] mb-1">From (snapshot #{whatChangedResult.from.id ?? '?'})</div>
+                <div>Score: {whatChangedResult.from.posture_score_avg ?? '–'} · G/A/R: {whatChangedResult.from.green}/{whatChangedResult.from.amber}/{whatChangedResult.from.red}</div>
+              </div>
+              <div>
+                <div className="font-medium text-[var(--muted)] mb-1">To ({String(whatChangedResult.to.id)})</div>
+                <div>Score: {whatChangedResult.to.posture_score_avg ?? '–'} · G/A/R: {whatChangedResult.to.green}/{whatChangedResult.to.amber}/{whatChangedResult.to.red}</div>
+              </div>
+            </div>
+            <div className="border-t border-[var(--border)] pt-4">
+              <div className="font-medium text-[var(--muted)] mb-2">Deltas</div>
+              <div className="flex flex-wrap gap-4">
+                {whatChangedResult.score_delta != null && (
+                  <span>Score: {whatChangedResult.score_delta >= 0 ? '+' : ''}{whatChangedResult.score_delta}</span>
+                )}
+                <span>Green: {whatChangedResult.green_delta >= 0 ? '+' : ''}{whatChangedResult.green_delta}</span>
+                <span>Amber: {whatChangedResult.amber_delta >= 0 ? '+' : ''}{whatChangedResult.amber_delta}</span>
+                <span>Red: {whatChangedResult.red_delta >= 0 ? '+' : ''}{whatChangedResult.red_delta}</span>
+              </div>
+            </div>
+            {(whatChangedResult.incidents_added.length > 0 || whatChangedResult.incidents_removed.length > 0) && (
+              <div className="border-t border-[var(--border)] pt-4 mt-4 grid gap-4 sm:grid-cols-2">
+                {whatChangedResult.incidents_added.length > 0 && (
+                  <div>
+                    <div className="font-medium text-[var(--red)] mb-1">Incidents added (down)</div>
+                    <ul className="list-disc list-inside">
+                      {whatChangedResult.incidents_added.map((id) => (
+                        <li key={id}><Link href={`/assets/${encodeURIComponent(id)}`} className="hover:underline">{id}</Link></li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {whatChangedResult.incidents_removed.length > 0 && (
+                  <div>
+                    <div className="font-medium text-[var(--green)] mb-1">Incidents removed (recovered)</div>
+                    <ul className="list-disc list-inside">
+                      {whatChangedResult.incidents_removed.map((id) => (
+                        <li key={id}><Link href={`/assets/${encodeURIComponent(id)}`} className="hover:underline">{id}</Link></li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </section>
+
       <section>
         <h2 className="section-title">Export</h2>
         <p className="mb-3 text-sm text-[var(--muted)]">
-          Export current posture as CSV for weekly reports.
+          Export current or viewed snapshot as PDF, or posture as CSV for weekly reports.
         </p>
-        <button type="button" onClick={handleDownload} disabled={loading} className="btn-primary">
-          {loading ? 'Preparing…' : 'Download CSV'}
-        </button>
+        <div className="flex flex-wrap gap-3">
+          <button type="button" onClick={handleDownloadPdf} disabled={pdfLoading} className="btn-primary">
+            {pdfLoading ? 'Preparing…' : viewSnapshot ? `Download PDF (snapshot #${viewSnapshot.id})` : 'Download PDF (current)'}
+          </button>
+          <button type="button" onClick={handleDownload} disabled={loading} className="btn-secondary">
+            {loading ? 'Preparing…' : 'Download CSV'}
+          </button>
+        </div>
       </section>
     </main>
   );

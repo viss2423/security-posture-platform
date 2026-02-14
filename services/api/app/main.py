@@ -7,20 +7,37 @@ from fastapi import FastAPI
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
-from .routers import health, assets, jobs, findings, posture, auth, retention, audit as audit_router, alerts, incidents
+from .routers import health, assets, jobs, findings, posture, auth, retention, audit as audit_router, alerts, incidents, policy, integrations
 from . import metrics
 from .db_migrate import run_startup_migrations
 from .logging_config import configure_logging
 from .request_context import request_id_ctx
+from .settings import settings
 
 configure_logging()
 logger = logging.getLogger("secplat")
+
+
+async def _scheduled_snapshot_loop():
+    """Background loop: save snapshot every N hours when ENABLE_SCHEDULED_SNAPSHOTS (Phase A.3)."""
+    if not getattr(settings, "ENABLE_SCHEDULED_SNAPSHOTS", False):
+        return
+    interval_sec = max(60, int(getattr(settings, "SCHEDULED_SNAPSHOT_INTERVAL_HOURS", 24.0) * 3600))
+    await asyncio.sleep(300)  # first run after 5 min
+    while True:
+        try:
+            await asyncio.to_thread(posture.run_scheduled_snapshot)
+            logger.info("scheduled_snapshot completed")
+        except Exception as e:
+            logger.exception("scheduled_snapshot failed: %s", e)
+        await asyncio.sleep(interval_sec)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Ensure audit_events + alert_states exist (e.g. existing DB from before those tables were in init.sql)
     await asyncio.to_thread(run_startup_migrations)
+    asyncio.create_task(_scheduled_snapshot_loop())
     yield
 
 
@@ -61,3 +78,5 @@ app.include_router(alerts.router)
 app.include_router(incidents.router)
 app.include_router(jobs.router, prefix="/jobs", tags=["jobs"])
 app.include_router(findings.router, prefix="/findings", tags=["findings"])
+app.include_router(policy.router)
+app.include_router(integrations.router)

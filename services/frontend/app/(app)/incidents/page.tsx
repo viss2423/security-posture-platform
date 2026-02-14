@@ -12,6 +12,7 @@ import {
 import { ApiDownHint } from '@/components/EmptyState';
 import { friendlyApiMessage } from '@/lib/apiError';
 import { formatDateTime } from '@/lib/format';
+import { useAuth } from '@/contexts/AuthContext';
 
 const STATUS_OPTIONS: IncidentStatus[] = ['new', 'triaged', 'contained', 'resolved', 'closed'];
 const SEVERITY_OPTIONS: IncidentSeverity[] = ['critical', 'high', 'medium', 'low', 'info'];
@@ -33,6 +34,7 @@ function severityColor(s: string): string {
 }
 
 export default function IncidentsPage() {
+  const { canMutate } = useAuth();
   const [data, setData] = useState<{ total: number; items: IncidentListItem[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('');
@@ -106,9 +108,11 @@ export default function IncidentsPage() {
               </option>
             ))}
           </select>
-          <button type="button" onClick={() => setShowCreate(true)} className="btn-primary">
-            New incident
-          </button>
+          {canMutate && (
+            <button type="button" onClick={() => setShowCreate(true)} className="btn-primary">
+              New incident
+            </button>
+          )}
         </div>
       </div>
 
@@ -119,7 +123,7 @@ export default function IncidentsPage() {
         </div>
       )}
 
-      {showCreate && (
+      {canMutate && showCreate && (
         <div className="card mb-6 animate-in">
           <h2 className="section-title mb-3">Create incident</h2>
           {createError && <p className="mb-2 text-sm text-[var(--red)]">{createError}</p>}

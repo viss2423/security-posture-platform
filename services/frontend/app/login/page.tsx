@@ -1,8 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { login, setToken } from '@/lib/api';
+import { getAuthConfig, login, setToken } from '@/lib/api';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -10,6 +10,33 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [oidcEnabled, setOidcEnabled] = useState(false);
+
+  useEffect(() => {
+    getAuthConfig().then((c) => setOidcEnabled(c.oidc_enabled));
+  }, []);
+
+  useEffect(() => {
+    const hash = typeof window !== 'undefined' ? window.location.hash.slice(1) : '';
+    if (!hash) return;
+    const params = Object.fromEntries(new URLSearchParams(hash));
+    if (params.access_token) {
+      setToken(params.access_token);
+      window.history.replaceState(null, '', '/login');
+      router.replace('/overview');
+      router.refresh();
+      return;
+    }
+    if (params.error) {
+      const msg = params.error === 'user_not_found'
+        ? 'Your account is not in SecPlat. Ask an admin to add you.'
+        : params.error === 'invalid_callback'
+          ? 'SSO sign-in was invalid or expired. Try again.'
+          : `SSO error: ${params.error}`;
+      setError(msg);
+      window.history.replaceState(null, '', '/login');
+    }
+  }, [router]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -77,6 +104,24 @@ export default function LoginPage() {
           <button type="submit" disabled={loading} className="btn-primary w-full py-3.5">
             {loading ? 'Signing in…' : 'Sign in'}
           </button>
+          {oidcEnabled && (
+            <div className="relative my-4">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-[var(--border)]" />
+              </div>
+              <div className="relative flex justify-center text-sm">
+                <span className="bg-[var(--card)] px-2 text-[var(--muted)]">or</span>
+              </div>
+            </div>
+          )}
+          {oidcEnabled && (
+            <a
+              href="/api/auth/oidc/login"
+              className="btn-secondary flex w-full items-center justify-center gap-2 py-3.5"
+            >
+              Sign in with SSO
+            </a>
+          )}
         </form>
       </div>
     </div>

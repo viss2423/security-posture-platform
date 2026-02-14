@@ -4,7 +4,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from .auth import require_auth
+from .auth import require_auth, require_role
 from ..verification import generate_token, verify_domain_ownership
 from ..audit import log_audit
 from ..request_context import request_id_ctx
@@ -122,7 +122,7 @@ def get_asset_by_key(asset_key: str, db: Session = Depends(get_db)):
 
 
 @router.post("/")
-def create_asset(payload: dict, db: Session = Depends(get_db), _user: str = Depends(require_auth)):
+def create_asset(payload: dict, db: Session = Depends(get_db), _user: str = Depends(require_role(["admin", "analyst"]))):
     """
     Create asset inventory record.
     - Preserves your external_web verification_token generation
@@ -197,7 +197,7 @@ def create_asset(payload: dict, db: Session = Depends(get_db), _user: str = Depe
 
 
 @router.patch("/by-key/{asset_key}")
-def update_asset_by_key(asset_key: str, payload: dict, db: Session = Depends(get_db), _user: str = Depends(require_auth)):
+def update_asset_by_key(asset_key: str, payload: dict, db: Session = Depends(get_db), _user: str = Depends(require_role(["admin", "analyst"]))):
     """
     Partial update. We keep this safe and explicit.
     Notes:
@@ -259,7 +259,7 @@ def update_asset_by_key(asset_key: str, payload: dict, db: Session = Depends(get
 
 
 @router.delete("/by-key/{asset_key}")
-def delete_asset_by_key(asset_key: str, db: Session = Depends(get_db), _user: str = Depends(require_auth)):
+def delete_asset_by_key(asset_key: str, db: Session = Depends(get_db), _user: str = Depends(require_role(["admin"]))):
     """
     Delete by asset_key. If findings references asset_id, this will fail (FK).
     """
@@ -281,7 +281,7 @@ def delete_asset_by_key(asset_key: str, db: Session = Depends(get_db), _user: st
 
 
 @router.post("/{asset_id}/verify")
-def verify_asset(asset_id: int, payload: dict, db: Session = Depends(get_db), _user: str = Depends(require_auth)):
+def verify_asset(asset_id: int, payload: dict, db: Session = Depends(get_db), _user: str = Depends(require_role(["admin", "analyst"]))):
     """
     Keep your original verification flow:
     Only external_web assets can be verified.

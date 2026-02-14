@@ -63,7 +63,7 @@ services:
     image: bkimminich/juice-shop:latest
     container_name: secplat-juiceshop
     ports:
-      - "127.0.0.1:${JUICESHOP_PORT}:3000"
+      - "127.0.0.1:${JUICESHOP_PORT:-3002}:3000"
 
   api:
     build:
@@ -84,6 +84,20 @@ services:
       EXPECTED_CHECK_INTERVAL_SECONDS: ${EXPECTED_CHECK_INTERVAL_SECONDS:-60}
       LATENCY_SLO_MS: ${LATENCY_SLO_MS:-200}
       SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET:-}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_WHATSAPP_FROM: ${TWILIO_WHATSAPP_FROM:-}
+      WHATSAPP_ALERT_TO: ${WHATSAPP_ALERT_TO:-}
+      JIRA_BASE_URL: ${JIRA_BASE_URL:-}
+      JIRA_EMAIL: ${JIRA_EMAIL:-}
+      JIRA_API_TOKEN: ${JIRA_API_TOKEN:-}
+      JIRA_PROJECT_KEY: ${JIRA_PROJECT_KEY:-}
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
     ports:
       - "127.0.0.1:${API_PORT}:8000"
     depends_on:
@@ -122,7 +136,7 @@ services:
     environment:
       API_URL: http://api:8000
     ports:
-      - "127.0.0.1:${FRONTEND_PORT:-3002}:3000"
+      - "127.0.0.1:${FRONTEND_PORT:-3000}:3000"
     depends_on:
       - api
 
@@ -163,6 +177,21 @@ services:
     depends_on:
       api:
         condition: service_started
+    restart: unless-stopped
+
+  worker-web:
+    build:
+      context: ./services/worker-web
+      dockerfile: Dockerfile
+    container_name: secplat-worker-web
+    environment:
+      # psycopg expects postgresql:// (no +psycopg)
+      POSTGRES_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      MAX_SCAN_DURATION_SECONDS: ${MAX_SCAN_DURATION_SECONDS:-900}
+      REQUIRE_DOMAIN_VERIFICATION: ${REQUIRE_DOMAIN_VERIFICATION:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:

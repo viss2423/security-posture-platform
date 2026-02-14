@@ -7,6 +7,7 @@ import { getAssetDetail, updateAssetByKey, type AssetDetail } from '@/lib/api';
 import { AssetDetailSkeleton } from '@/components/Skeleton';
 import { ApiDownHint } from '@/components/EmptyState';
 import { formatDateTime } from '@/lib/format';
+import { useAuth } from '@/contexts/AuthContext';
 
 type TabId = 'summary' | 'timeline' | 'evidence' | 'config';
 
@@ -18,16 +19,17 @@ function lastUpdatedAgo(lastSeen: string | null | undefined): string {
   return `${Math.floor(sec / 3600)}h ago`;
 }
 
-const TABS: { id: TabId; label: string }[] = [
+const ALL_TABS: { id: TabId; label: string; mutateOnly?: boolean }[] = [
   { id: 'summary', label: 'Summary' },
   { id: 'timeline', label: 'Timeline' },
   { id: 'evidence', label: 'Evidence' },
-  { id: 'config', label: 'Config' },
+  { id: 'config', label: 'Config', mutateOnly: true },
 ];
 
 export default function AssetDetailPage() {
   const params = useParams();
   const assetKey = params.assetKey as string;
+  const { canMutate } = useAuth();
   const [detail, setDetail] = useState<AssetDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabId>('summary');
@@ -118,7 +120,7 @@ export default function AssetDetailPage() {
           </p>
 
           <div className="mb-6 flex gap-1 border-b border-[var(--border)]">
-            {TABS.map(({ id, label }) => (
+            {ALL_TABS.filter((t) => !t.mutateOnly || canMutate).map(({ id, label }) => (
               <button
                 key={id}
                 type="button"
@@ -159,11 +161,13 @@ export default function AssetDetailPage() {
                   <dt className="text-[var(--muted)]">Error rate (24h)</dt>
                   <dd>{detail.error_rate_24h ?? 0}%</dd>
                 </dl>
-                <div className="mt-4">
-                  <button type="button" onClick={openEdit} className="btn-secondary text-sm">
-                    Edit metadata (owner, criticality, name)
-                  </button>
-                </div>
+                {canMutate && (
+                  <div className="mt-4">
+                    <button type="button" onClick={openEdit} className="btn-secondary text-sm">
+                      Edit metadata (owner, criticality, name)
+                    </button>
+                  </div>
+                )}
               </div>
               {detail.recommendations.length > 0 && (
                 <div>
@@ -240,7 +244,7 @@ export default function AssetDetailPage() {
             </div>
           )}
 
-          {activeTab === 'config' && (
+          {canMutate && activeTab === 'config' && (
             <div className="animate-in">
               <h2 className="section-title">Config</h2>
               <div className="card">

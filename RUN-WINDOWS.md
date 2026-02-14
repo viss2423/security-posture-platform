@@ -56,7 +56,15 @@ docker compose logs -f ingestion
 docker compose logs -f api
 ```
 
-## 7. Stop
+## 7. Running the frontend locally (optional)
+
+If you run the frontend with `npm run dev` in `services/frontend` (instead of using the Dockerized frontend), it will try to reach the API at **http://127.0.0.1:8000**. Ensure the API is running (e.g. `docker compose up -d` so the API container is on 8000). To use a different API URL, create `services/frontend/.env.local` with:
+
+```
+API_URL=http://127.0.0.1:8000
+```
+
+## 8. Stop
 
 ```powershell
 docker compose down

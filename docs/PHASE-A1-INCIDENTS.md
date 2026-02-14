@@ -62,25 +62,19 @@ Tests need a running Postgres and env vars. Two options:
 ### Option A: Run tests inside the API container (recommended)
 
 ```bash
-docker compose exec api bash -c 'cd /app && pytest tests/test_incidents.py -v'
+docker compose exec api bash -c 'cd /app && PYTHONPATH=/app pytest tests/test_incidents.py -v'
 ```
 
-The API container already has `POSTGRES_DSN` and admin credentials from compose.
+The API container already has `POSTGRES_DSN` and admin credentials from compose. (`PYTHONPATH=/app` is needed so `from app.main import app` resolves; it’s also set via `pythonpath = ["."]` in pyproject.toml after a rebuild.)
 
 ### Option B: Run tests on the host
 
-1. Ensure Postgres is reachable and migrations have run (e.g. stack was started with `docker compose up`).
-2. Set env (adjust if your DSN differs):
-   ```bash
-   export POSTGRES_DSN="postgresql://secplat:secplat@127.0.0.1:5432/secplat"
-   export API_SECRET_KEY="change_me"
-   export ADMIN_USERNAME=admin
-   export ADMIN_PASSWORD=admin
-   ```
-3. From repo root:
-   ```bash
-   cd services/api && pytest tests/test_incidents.py -v
-   ```
+1. Install API deps (from repo root): `cd services/api && pip install -e .` (or `uv sync`). This installs FastAPI, pytest, etc.
+2. Ensure Postgres is reachable and migrations have run (e.g. stack was started with `docker compose up`).
+3. Set env (adjust if your DSN differs):
+   - **Linux/macOS:** `export POSTGRES_DSN="postgresql://secplat:secplat@127.0.0.1:5432/secplat"` (and optionally API_SECRET_KEY, ADMIN_USERNAME, ADMIN_PASSWORD).
+   - **Windows PowerShell:** `$env:POSTGRES_DSN="postgresql://secplat:secplat@127.0.0.1:5432/secplat"`.
+4. From `services/api`: `pytest tests/test_incidents.py -v`.
 
 If `POSTGRES_DSN` is not set, the incident tests are **skipped** (see `pytestmark` in `test_incidents.py`).
 

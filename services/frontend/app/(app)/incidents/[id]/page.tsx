@@ -9,6 +9,7 @@ import {
   addIncidentNote,
   linkIncidentAlert,
   unlinkIncidentAlert,
+  createIncidentJiraTicket,
   type Incident,
   type IncidentStatus,
   type IncidentTimelineEntry,
@@ -16,6 +17,7 @@ import {
 import { ApiDownHint } from '@/components/EmptyState';
 import { friendlyApiMessage } from '@/lib/apiError';
 import { formatDateTime } from '@/lib/format';
+import { useAuth } from '@/contexts/AuthContext';
 
 const STATUS_FLOW: IncidentStatus[] = ['new', 'triaged', 'contained', 'resolved', 'closed'];
 
@@ -82,6 +84,7 @@ function TimelineEntry({ entry }: { entry: IncidentTimelineEntry }) {
 export default function IncidentDetailPage() {
   const params = useParams();
   const id = params.id != null ? Number(params.id) : NaN;
+  const { canMutate } = useAuth();
   const [incident, setIncident] = useState<Incident | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [noteBody, setNoteBody] = useState('');
@@ -89,6 +92,8 @@ export default function IncidentDetailPage() {
   const [loadingStatus, setLoadingStatus] = useState(false);
   const [loadingNote, setLoadingNote] = useState(false);
   const [loadingLink, setLoadingLink] = useState(false);
+  const [loadingJira, setLoadingJira] = useState(false);
+  const [jiraProjectKey, setJiraProjectKey] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
 
   const load = useCallback(() => {
@@ -155,6 +160,19 @@ export default function IncidentDetailPage() {
     }
   };
 
+  const handleCreateJira = async () => {
+    setActionError(null);
+    setLoadingJira(true);
+    try {
+      await createIncidentJiraTicket(id, jiraProjectKey.trim() || undefined);
+      load();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : 'Failed to create Jira ticket');
+    } finally {
+      setLoadingJira(false);
+    }
+  };
+
   if (!Number.isInteger(id) || id < 1) {
     return (
       <main className="mx-auto max-w-4xl px-4 py-10">
@@ -215,23 +233,25 @@ export default function IncidentDetailPage() {
             )}
           </div>
         </div>
-        <div className="flex flex-wrap gap-2">
-          {STATUS_FLOW.map((s) => (
-            <button
-              key={s}
-              type="button"
-              onClick={() => handleStatusChange(s)}
-              disabled={loadingStatus || incident.status === s}
-              className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${
-                incident.status === s
-                  ? 'bg-[var(--green)] text-white'
-                  : 'bg-[var(--border)]/50 text-[var(--muted)] hover:bg-[var(--border)]'
-              }`}
-            >
-              {s}
-            </button>
-          ))}
-        </div>
+        {canMutate && (
+          <div className="flex flex-wrap gap-2">
+            {STATUS_FLOW.map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => handleStatusChange(s)}
+                disabled={loadingStatus || incident.status === s}
+                className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${
+                  incident.status === s
+                    ? 'bg-[var(--green)] text-white'
+                    : 'bg-[var(--border)]/50 text-[var(--muted)] hover:bg-[var(--border)]'
+                }`}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {actionError && (
@@ -255,34 +275,38 @@ export default function IncidentDetailPage() {
                   >
                     {a.asset_key}
                   </Link>
-                  <button
-                    type="button"
-                    onClick={() => handleUnlink(a.asset_key)}
-                    className="text-xs text-[var(--muted)] underline hover:text-[var(--red)]"
-                  >
-                    Unlink
-                  </button>
+                  {canMutate && (
+                    <button
+                      type="button"
+                      onClick={() => handleUnlink(a.asset_key)}
+                      className="text-xs text-[var(--muted)] underline hover:text-[var(--red)]"
+                    >
+                      Unlink
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>
           )}
-          <div className="mt-4 flex gap-2">
-            <input
-              type="text"
-              value={linkAssetKey}
-              onChange={(e) => setLinkAssetKey(e.target.value)}
-              placeholder="Asset key (e.g. secplat-api)"
-              className="input flex-1 max-w-xs"
-            />
-            <button
-              type="button"
-              onClick={handleLinkAlert}
-              disabled={loadingLink || !linkAssetKey.trim()}
-              className="btn-secondary text-sm"
-            >
-              {loadingLink ? 'Linking…' : 'Link alert'}
-            </button>
-          </div>
+          {canMutate && (
+            <div className="mt-4 flex gap-2">
+              <input
+                type="text"
+                value={linkAssetKey}
+                onChange={(e) => setLinkAssetKey(e.target.value)}
+                placeholder="Asset key (e.g. secplat-api)"
+                className="input flex-1 max-w-xs"
+              />
+              <button
+                type="button"
+                onClick={handleLinkAlert}
+                disabled={loadingLink || !linkAssetKey.trim()}
+                className="btn-secondary text-sm"
+              >
+                {loadingLink ? 'Linking…' : 'Link alert'}
+              </button>
+            </div>
+          )}
         </div>
       </section>
 
@@ -298,26 +322,69 @@ export default function IncidentDetailPage() {
               ))}
             </div>
           )}
-          <div className="mt-4 border-t border-[var(--border)] pt-4">
-            <label className="mb-2 block text-sm font-medium text-[var(--muted)]">Add note</label>
-            <textarea
-              value={noteBody}
-              onChange={(e) => setNoteBody(e.target.value)}
-              placeholder="Note or update…"
-              rows={3}
-              className="input w-full"
-            />
-            <button
-              type="button"
-              onClick={handleAddNote}
-              disabled={loadingNote}
-              className="mt-2 btn-primary text-sm"
-            >
-              {loadingNote ? 'Adding…' : 'Add note'}
-            </button>
-          </div>
+          {canMutate && (
+            <div className="mt-4 border-t border-[var(--border)] pt-4">
+              <label className="mb-2 block text-sm font-medium text-[var(--muted)]">Add note</label>
+              <textarea
+                value={noteBody}
+                onChange={(e) => setNoteBody(e.target.value)}
+                placeholder="Note or update…"
+                rows={3}
+                className="input w-full"
+              />
+              <button
+                type="button"
+                onClick={handleAddNote}
+                disabled={loadingNote}
+                className="mt-2 btn-primary text-sm"
+              >
+                {loadingNote ? 'Adding…' : 'Add note'}
+              </button>
+            </div>
+          )}
         </div>
       </section>
+
+      {(incident.metadata?.jira_issue_key || canMutate) && (
+        <section className="mb-8">
+          <h2 className="section-title mb-3">Jira</h2>
+          <div className="card">
+            {incident.metadata?.jira_issue_key ? (
+              <p className="text-sm">
+                <a
+                  href={incident.metadata.jira_issue_url as string}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-medium text-[var(--green)] hover:underline"
+                >
+                  View in Jira: {String(incident.metadata.jira_issue_key)}
+                </a>
+              </p>
+            ) : (
+              <div className="flex flex-wrap items-end gap-3">
+                <label className="text-sm text-[var(--muted)]">
+                  Project key (optional if set in env)
+                  <input
+                    type="text"
+                    value={jiraProjectKey}
+                    onChange={(e) => setJiraProjectKey(e.target.value)}
+                    placeholder="e.g. SEC"
+                    className="ml-2 w-24 rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-sm text-[var(--text)]"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={handleCreateJira}
+                  disabled={loadingJira}
+                  className="btn-primary text-sm"
+                >
+                  {loadingJira ? 'Creating…' : 'Create Jira ticket'}
+                </button>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
 
       <section>
         <h2 className="section-title mb-2">Details</h2>
