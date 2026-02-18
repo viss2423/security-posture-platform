@@ -1,0 +1,2 @@
+# Localhost / dev-only links are intentional; avoid false positives in CI
+infra/web/index.html

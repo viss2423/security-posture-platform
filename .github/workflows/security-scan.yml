@@ -1,5 +1,5 @@
 # PR/merge gate: full repo security scan (same as local post-commit).
-# Blocks merge if gitleaks, semgrep, or osv-scanner fails.
+# Blocks merge if gitleaks or semgrep fails.
 name: Security scan
 
 on:
