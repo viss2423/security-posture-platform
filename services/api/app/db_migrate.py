@@ -1,5 +1,7 @@
 """Ensure audit_events and alert_states exist. Safe to run on every startup (CREATE TABLE IF NOT EXISTS)."""
+
 import logging
+
 from sqlalchemy import text
 
 from app.db import engine
@@ -128,7 +130,9 @@ CREATE INDEX IF NOT EXISTS idx_scan_jobs_status ON scan_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_scan_jobs_created_at ON scan_jobs(created_at DESC);
 """
 ALTER_SCAN_JOBS_LOG = "ALTER TABLE scan_jobs ADD COLUMN IF NOT EXISTS log_output TEXT;"
-ALTER_SCAN_JOBS_RETRY = "ALTER TABLE scan_jobs ADD COLUMN IF NOT EXISTS retry_count INTEGER NOT NULL DEFAULT 0;"
+ALTER_SCAN_JOBS_RETRY = (
+    "ALTER TABLE scan_jobs ADD COLUMN IF NOT EXISTS retry_count INTEGER NOT NULL DEFAULT 0;"
+)
 
 # Phase B.2: policy bundles
 POLICY_BUNDLES_SQL = """
@@ -144,6 +148,35 @@ CREATE TABLE IF NOT EXISTS policy_bundles (
   approved_by   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_policy_bundles_status ON policy_bundles(status);
+"""
+
+# Phase 3.2: Maintenance windows + suppression rules
+MAINTENANCE_WINDOWS_SQL = """
+CREATE TABLE IF NOT EXISTS maintenance_windows (
+  id          SERIAL PRIMARY KEY,
+  asset_key   TEXT NOT NULL,
+  start_at    TIMESTAMPTZ NOT NULL,
+  end_at      TIMESTAMPTZ NOT NULL,
+  reason      TEXT,
+  created_by  TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_maintenance_windows_asset ON maintenance_windows(asset_key);
+CREATE INDEX IF NOT EXISTS idx_maintenance_windows_times ON maintenance_windows(start_at, end_at);
+"""
+SUPPRESSION_RULES_SQL = """
+CREATE TABLE IF NOT EXISTS suppression_rules (
+  id           SERIAL PRIMARY KEY,
+  scope        TEXT NOT NULL CHECK (scope IN ('asset', 'finding', 'all')),
+  scope_value  TEXT,
+  starts_at    TIMESTAMPTZ NOT NULL,
+  ends_at      TIMESTAMPTZ NOT NULL,
+  reason       TEXT,
+  created_by   TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_suppression_rules_scope ON suppression_rules(scope, scope_value);
+CREATE INDEX IF NOT EXISTS idx_suppression_rules_times ON suppression_rules(starts_at, ends_at);
 """
 
 
@@ -199,7 +232,9 @@ def run_startup_migrations() -> None:
                     conn.execute(text(stmt))
             conn.execute(text(USERS_ADD_PASSWORD_COLUMN))
             conn.execute(
-                text("INSERT INTO users (username, role) VALUES (:u, 'admin') ON CONFLICT (username) DO NOTHING"),
+                text(
+                    "INSERT INTO users (username, role) VALUES (:u, 'admin') ON CONFLICT (username) DO NOTHING"
+                ),
                 {"u": settings.ADMIN_USERNAME},
             )
             # Seed viewer account (password: viewer). Pre-computed hash to avoid passlib/bcrypt
@@ -240,3 +275,17 @@ def run_startup_migrations() -> None:
         except Exception as e:
             logger.warning("startup_migration: policy_bundles failed: %s", e)
             raise
+        # Phase 3.2: maintenance_windows + suppression_rules
+        for name, sql in [
+            ("maintenance_windows", MAINTENANCE_WINDOWS_SQL),
+            ("suppression_rules", SUPPRESSION_RULES_SQL),
+        ]:
+            try:
+                for stmt in sql.strip().split(";"):
+                    stmt = stmt.strip()
+                    if stmt:
+                        conn.execute(text(stmt))
+                logger.info("startup_migration: ensured table %s exists", name)
+            except Exception as e:
+                logger.warning("startup_migration: %s failed: %s", name, e)
+                raise

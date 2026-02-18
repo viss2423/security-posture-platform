@@ -1,0 +1,42 @@
+# Security + quality: fast checks on commit (secrets, SAST, format, lint).
+# Install: pip install pre-commit && pre-commit install
+# Run all: pre-commit run --all-files
+# commit-msg: strip Co-authored-by lines from message (never store in history).
+
+repos:
+  - repo: local
+    hooks:
+      - id: strip-coauthor-commit-msg
+        name: strip co-author lines from commit message
+        entry: powershell -ExecutionPolicy Bypass -File scripts/strip-coauthor.ps1
+        language: system
+        stages: [commit-msg]
+        pass_filenames: true
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/returntocorp/semgrep
+    rev: v1.91.0
+    hooks:
+      - id: semgrep
+        args: ["--config=auto", "--error", "--disable-version-check", "--skip-unknown-extensions"]
+        files: \.(py|js|ts|tsx)$
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: frontend-eslint
+        name: eslint (frontend)
+        entry: node scripts/lint-frontend-precommit.cjs
+        language: system
+        files: ^services/frontend/.*\.(js|ts|tsx)$
+        pass_filenames: true

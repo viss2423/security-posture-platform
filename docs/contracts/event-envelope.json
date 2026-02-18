@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SecPlat Standard Event Envelope",
+  "description": "Canonical shape for all events (scan, posture, finding, incident). Use everywhere for consistency and correlation.",
+  "type": "object",
+  "required": ["event_id", "event_type", "ts", "org_id"],
+  "properties": {
+    "event_id": { "type": "string", "format": "uuid", "description": "Unique event id" },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "scan.requested",
+        "scan.completed",
+        "scan.failed",
+        "posture.changed",
+        "finding.created",
+        "finding.updated",
+        "incident.created",
+        "incident.updated",
+        "incident.closed",
+        "alert.triggered",
+        "notify.sent",
+        "notify.failed"
+      ],
+      "description": "Event kind for routing and correlation"
+    },
+    "ts": { "type": "string", "format": "date-time", "description": "Event time ISO8601 UTC" },
+    "request_id": { "type": "string", "description": "Propagated X-Request-Id from API when applicable" },
+    "org_id": { "type": "string", "default": "default" },
+    "asset_key": { "type": "string", "description": "Asset this event relates to" },
+    "severity": {
+      "type": "string",
+      "enum": ["info", "low", "medium", "high", "critical"]
+    },
+    "payload": {
+      "type": "object",
+      "description": "Event-specific data; structure depends on event_type"
+    }
+  },
+  "additionalProperties": true
+}

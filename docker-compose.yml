@@ -17,6 +17,17 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    container_name: secplat-redis
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   opensearch:
     image: opensearchproject/opensearch:2.14.0
     container_name: secplat-opensearch
@@ -76,6 +87,7 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
       POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       OPENSEARCH_URL: http://opensearch:9200
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       MAX_SCAN_DURATION_SECONDS: ${MAX_SCAN_DURATION_SECONDS}
       MAX_REQUESTS_PER_SECOND: ${MAX_REQUESTS_PER_SECOND}
       BLOCK_PRIVATE_IPS: ${BLOCK_PRIVATE_IPS}
@@ -104,6 +116,8 @@ services:
       postgres:
         condition: service_healthy
       opensearch:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   verify-web:
@@ -185,14 +199,72 @@ services:
       dockerfile: Dockerfile
     container_name: secplat-worker-web
     environment:
-      # psycopg expects postgresql:// (no +psycopg)
       POSTGRES_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       MAX_SCAN_DURATION_SECONDS: ${MAX_SCAN_DURATION_SECONDS:-900}
       REQUIRE_DOMAIN_VERIFICATION: ${REQUIRE_DOMAIN_VERIFICATION:-true}
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
+
+  # Phase 2.1: Deriver writes secplat-asset-status from secplat-events (replaces build_asset_status.sh in ingestion when used)
+  deriver:
+    build:
+      context: ./services/deriver
+      dockerfile: Dockerfile
+    container_name: secplat-deriver
+    environment:
+      OPENSEARCH_URL: http://opensearch:9200
+      STALE_THRESHOLD_SECONDS: ${STALE_THRESHOLD_SECONDS:-300}
+      DERIVER_INTERVAL_SECONDS: ${DERIVER_INTERVAL_SECONDS:-60}
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles:
+      - roadmap
+
+  notifier:
+    build:
+      context: ./services/notifier
+      dockerfile: Dockerfile
+    container_name: secplat-notifier
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_WHATSAPP_FROM: ${TWILIO_WHATSAPP_FROM:-}
+      WHATSAPP_ALERT_TO: ${WHATSAPP_ALERT_TO:-}
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles:
+      - roadmap
+
+  # Phase 3.1: Correlator consumes secplat.events.correlation, creates incidents via API
+  correlator:
+    build:
+      context: ./services/correlator
+      dockerfile: Dockerfile
+    container_name: secplat-correlator
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      API_URL: http://api:8000
+      CORRELATOR_USER: ${ADMIN_USERNAME:-admin}
+      CORRELATOR_PASSWORD: ${ADMIN_PASSWORD:-admin}
+    depends_on:
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
+    restart: unless-stopped
+    profiles:
+      - roadmap
 
 volumes:
   postgres-data:

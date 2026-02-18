@@ -26,6 +26,7 @@ Everything runs locally using **Docker Compose**, is easy to inspect and break, 
 | API (FastAPI)      | Core backend, JWT auth, posture API (source of truth) | 8000 |
 | PostgreSQL         | Asset inventory & metadata                 | 5432 |
 | OpenSearch         | Events + derived asset status              | 9200 |
+| Redis              | Queue (Phase 1+); streams for jobs/notify  | 6379 |
 | Grafana            | Dashboards & alerting (read-only on OpenSearch) | 3001 |
 | Juice Shop         | Demo health-check target                   | 3000 |
 | verify-web (nginx) | Domain / ownership verification            | 8081 |
@@ -228,6 +229,14 @@ Scoring logic:
 
 ---
 
+## Corporate roadmap (multi-service workflow)
+
+A phased plan to split the system into queue-driven services (deriver, scan-workers, notifier, correlator) and eventually Kubernetes is in **[docs/SECPLAT-CORPORATE-ROADMAP.md](docs/SECPLAT-CORPORATE-ROADMAP.md)**. One-page architecture (current + target) and service boundaries: **[docs/architecture.md](docs/architecture.md)**. Canonical event envelope and idempotency keys: **[docs/contracts/](docs/contracts/)**.
+
+**Minimal MVP split (implement first):** Redis Streams queue → Deriver → Scan worker pool → Notifier → Correlator (Phase 3.1). **Phase 3.2:** Maintenance windows and suppression rules (DB + API under `/suppression/*`); down-asset alerts and finding→incident correlation exclude suppressed assets.
+
+---
+
 ## Architecture & design principles
 
 - **Events ≠ state** — `secplat-events` is append-only; posture decisions use **current** state in `secplat-asset-status`, not historical queries.
@@ -312,6 +321,7 @@ Endpoints require **Bearer token** (from `POST /auth/login`). The API is the **s
 | `GET /posture/reports/summary?period=24h` | Report: uptime %, avg latency, top incidents |
 | `GET /posture/{asset_key}` | One asset (current state) |
 | `GET /posture/{asset_key}/detail?hours=24` | State + timeline + evidence + recommendations + completeness/SLO |
+| `GET /queue/health` | Phase 1: Redis status and stream depths (`secplat.jobs.scan`). Returns `not_configured` if REDIS_URL unset. |
 | `POST /posture/alert/send` | If any assets are down and `SLACK_WEBHOOK_URL` is set, send Slack message; returns `sent`, `down_assets`, `message`. Call from cron or manually. |
 | `POST /posture/reports/snapshot?period=24h` | Save current report summary to DB; returns stored snapshot with `id`, `created_at`. |
 | `GET /posture/reports/history?limit=20` | List stored report snapshots (newest first). |

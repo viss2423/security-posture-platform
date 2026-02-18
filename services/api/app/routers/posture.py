@@ -4,24 +4,27 @@ import csv
 import io
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse, Response
-import httpx
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.settings import settings
 from app.db import get_db
+from app.queue import publish_correlation_event, publish_notify
 from app.routers.auth import require_auth, require_role
 from app.schemas.posture import (
-    AssetState,
     AssetDetailResponse,
+    AssetState,
     DataCompleteness,
     PostureSummary,
     ReportSummary,
     raw_to_asset_state,
 )
+from app.settings import settings
+from app.suppression import is_asset_suppressed
 
 router = APIRouter(prefix="/posture", tags=["posture"])
 
@@ -106,9 +109,7 @@ def _events_for_asset(asset_key: str, hours: int = 24, size: int = 50) -> list[d
         },
     }
     if hours > 0:
-        body["query"]["bool"]["filter"].append(
-            {"range": {"@timestamp": {"gte": f"now-{hours}h"}}}
-        )
+        body["query"]["bool"]["filter"].append({"range": {"@timestamp": {"gte": f"now-{hours}h"}}})
     try:
         data = _opensearch_post("/_search", body, EVENTS_INDEX)
     except Exception:
@@ -117,7 +118,9 @@ def _events_for_asset(asset_key: str, hours: int = 24, size: int = 50) -> list[d
     return [h["_source"] for h in hits]
 
 
-def _recommendations(state: AssetState, latency_slo_ok: bool = True, latency_slo_ms: int = 200) -> list[str]:
+def _recommendations(
+    state: AssetState, latency_slo_ok: bool = True, latency_slo_ms: int = 200
+) -> list[str]:
     """Derive recommended actions from current state. Uses STALE_THRESHOLD from settings conceptually (300s)."""
     stale_threshold = getattr(settings, "STALE_THRESHOLD_SECONDS", 300)
     recs: list[str] = []
@@ -214,7 +217,9 @@ def _apply_filters(
     if criticality:
         out = [d for d in out if (d.get("criticality") or "").strip().lower() in criticality]
     if owner:
-        out = [d for d in out if (d.get("owner") or "").strip().lower() in [o.lower() for o in owner]]
+        out = [
+            d for d in out if (d.get("owner") or "").strip().lower() in [o.lower() for o in owner]
+        ]
     if status:
         out = [d for d in out if (d.get("status") or "").strip().lower() in status]
     return out
@@ -250,16 +255,39 @@ def list_posture(
     _user: str = Depends(require_auth),
 ):
     """List current posture for all assets (canonical schema). Enriched with Postgres. Optional filters: environment, criticality, owner, status. ?format=csv for CSV export."""
-    items = _get_filtered_posture_list(db, environment=environment, criticality=criticality, owner=owner, status=status)
+    items = _get_filtered_posture_list(
+        db, environment=environment, criticality=criticality, owner=owner, status=status
+    )
     if format == "csv":
         out = io.StringIO()
         writer = csv.writer(out)
-        writer.writerow(["asset_id", "status", "last_seen", "reason", "criticality", "name", "owner", "environment", "posture_score"])
+        writer.writerow(
+            [
+                "asset_id",
+                "status",
+                "last_seen",
+                "reason",
+                "criticality",
+                "name",
+                "owner",
+                "environment",
+                "posture_score",
+            ]
+        )
         for d in items:
-            writer.writerow([
-                d.get("asset_id"), d.get("status"), d.get("last_seen") or "", d.get("reason") or "",
-                d.get("criticality"), d.get("name") or "", d.get("owner") or "", d.get("environment") or "", d.get("posture_score") or "",
-            ])
+            writer.writerow(
+                [
+                    d.get("asset_id"),
+                    d.get("status"),
+                    d.get("last_seen") or "",
+                    d.get("reason") or "",
+                    d.get("criticality"),
+                    d.get("name") or "",
+                    d.get("owner") or "",
+                    d.get("environment") or "",
+                    d.get("posture_score") or "",
+                ]
+            )
         return PlainTextResponse(out.getvalue(), media_type="text/csv")
     return {"total": len(items), "items": items}
 
@@ -329,7 +357,9 @@ def posture_overview(
     Executive overview: strip (score, assets, alerts, trend vs yesterday), top drivers (worst assets, by reason, recently updated).
     Same filters as /posture and /summary.
     """
-    items = _get_filtered_posture_list(db, environment=environment, criticality=criticality, owner=owner, status=status)
+    items = _get_filtered_posture_list(
+        db, environment=environment, criticality=criticality, owner=owner, status=status
+    )
     total_assets = len(items)
     by_state: dict[str, int] = {"green": 0, "amber": 0, "red": 0}
     scores: list[float] = []
@@ -377,20 +407,37 @@ def posture_overview(
         [d for d in items if d.get("posture_score") is not None],
         key=lambda x: (float(x.get("posture_score") or 0)),
     )[:5]
-    worst_assets = [{"asset_id": d.get("asset_id") or d.get("asset_key"), "name": d.get("name"), "posture_score": d.get("posture_score"), "status": d.get("status")} for d in worst_assets]
+    worst_assets = [
+        {
+            "asset_id": d.get("asset_id") or d.get("asset_key"),
+            "name": d.get("name"),
+            "posture_score": d.get("posture_score"),
+            "status": d.get("status"),
+        }
+        for d in worst_assets
+    ]
 
     by_reason: dict[str, int] = {}
     for d in items:
         r = (d.get("reason") or "unknown").strip() or "unknown"
         by_reason[r] = by_reason.get(r, 0) + 1
-    by_reason_list = [{"reason": k, "count": v} for k, v in sorted(by_reason.items(), key=lambda x: -x[1])[:5]]
+    by_reason_list = [
+        {"reason": k, "count": v} for k, v in sorted(by_reason.items(), key=lambda x: -x[1])[:5]
+    ]
 
     recently_updated = sorted(
         items,
         key=lambda x: (x.get("last_seen") or "") or "",
         reverse=True,
     )[:5]
-    recently_updated = [{"asset_id": d.get("asset_id") or d.get("asset_key"), "name": d.get("name"), "last_seen": d.get("last_seen")} for d in recently_updated]
+    recently_updated = [
+        {
+            "asset_id": d.get("asset_id") or d.get("asset_key"),
+            "name": d.get("name"),
+            "last_seen": d.get("last_seen"),
+        }
+        for d in recently_updated
+    ]
 
     return {
         "executive_strip": {
@@ -429,7 +476,9 @@ def posture_trend(
     rows = db.execute(q, {"interval": interval}).mappings().all()
     points = [
         {
-            "created_at": r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else str(r["created_at"]),
+            "created_at": r["created_at"].isoformat()
+            if hasattr(r["created_at"], "isoformat")
+            else str(r["created_at"]),
             "posture_score_avg": r.get("posture_score_avg"),
             "green": r.get("green"),
             "amber": r.get("amber"),
@@ -515,7 +564,16 @@ def reports_history_one(
     return dict(row)
 
 
-def _draw_pdf_header(c, width: float, height: float, org: str, env: str, period: str, generated_ts: str, report_id: str) -> None:
+def _draw_pdf_header(
+    c,
+    width: float,
+    height: float,
+    org: str,
+    env: str,
+    period: str,
+    generated_ts: str,
+    report_id: str,
+) -> None:
     """Draw corporate header on current page."""
     c.setFont("Helvetica-Bold", 10)
     c.drawString(72, height - 36, "SecPlat — Security Posture Snapshot")
@@ -585,12 +643,20 @@ def _build_executive_pdf_bytes(
     c.setFont("Helvetica", 11)
     c.drawString(margin, y, f"Posture score (0–100): {score_str}{trend_str}")
     if trend_red_delta is not None and trend_red_delta != 0:
-        c.drawString(margin + 280, y, f"(Red count: {'+' if trend_red_delta > 0 else ''}{trend_red_delta} vs previous)")
+        c.drawString(
+            margin + 280,
+            y,
+            f"(Red count: {'+' if trend_red_delta > 0 else ''}{trend_red_delta} vs previous)",
+        )
     y -= 18
 
     c.drawString(margin, y, f"Assets monitored: {report.total_assets}")
     y -= 14
-    c.drawString(margin, y, f"Uptime: {report.uptime_pct}%  |  Latency (avg): {report.avg_latency_ms if report.avg_latency_ms is not None else '–'} ms")
+    c.drawString(
+        margin,
+        y,
+        f"Uptime: {report.uptime_pct}%  |  Latency (avg): {report.avg_latency_ms if report.avg_latency_ms is not None else '–'} ms",
+    )
     y -= 14
     c.drawString(margin, y, f"Green / Amber / Red: {report.green} / {report.amber} / {report.red}")
     y -= 28
@@ -658,7 +724,11 @@ def _build_executive_pdf_bytes(
                     str(r.get("last_seen") or "–")[:22],
                 ]
                 for i, cell in enumerate(cells):
-                    c.drawString(margin + sum(col_w[:i]), y2, cell[:col_w[i] // 7] if col_w[i] < 200 else cell)
+                    c.drawString(
+                        margin + sum(col_w[:i]),
+                        y2,
+                        cell[: col_w[i] // 7] if col_w[i] < 200 else cell,
+                    )
                 y2 -= 11
                 if y2 < margin + 50:
                     break
@@ -695,7 +765,13 @@ def _build_executive_pdf_bytes(
             elif isinstance(ts, str) and len(ts) > 16:
                 ts = ts[:16].replace("T", " ")
             c.drawString(margin, y, str(ts)[:18])
-            c.drawString(margin + 100, y, str(pt.get("posture_score_avg") if pt.get("posture_score_avg") is not None else "–"))
+            c.drawString(
+                margin + 100,
+                y,
+                str(
+                    pt.get("posture_score_avg") if pt.get("posture_score_avg") is not None else "–"
+                ),
+            )
             c.drawString(margin + 160, y, str(pt.get("green") or "–"))
             c.drawString(margin + 190, y, str(pt.get("amber") or "–"))
             c.drawString(margin + 220, y, str(pt.get("red") or "–"))
@@ -740,14 +816,16 @@ def _get_trend_7d(db: Session) -> list[dict]:
 
 @router.get("/reports/executive.pdf", response_class=Response)
 def reports_executive_pdf(
-    snapshot_id: int | None = Query(None, description="Use this snapshot; if omitted, use current 24h summary"),
+    snapshot_id: int | None = Query(
+        None, description="Use this snapshot; if omitted, use current 24h summary"
+    ),
     period: str = Query("24h", description="24h or 7d (used when snapshot_id is not set)"),
     db: Session = Depends(get_db),
     _user: str = Depends(require_auth),
 ):
     """Download Executive Security Posture Report (corporate format): Page 1 summary + trend, Page 2 red/amber, Page 3 trends."""
     report_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     generated_ts = now.strftime("%Y-%m-%d %H:%M (%Z)")
     org = getattr(settings, "REPORT_ORG_NAME", "SecPlat") or "SecPlat"
     env = getattr(settings, "REPORT_ENV", "All") or "All"
@@ -803,13 +881,15 @@ def reports_executive_pdf(
         amber_assets = [d for d in items if (d.get("status") or "").lower() == "amber"]
         top_incidents_detail = []
         for d in red_assets[:5]:
-            top_incidents_detail.append({
-                "asset_id": d.get("asset_id") or d.get("asset_key"),
-                "name": d.get("name"),
-                "owner": d.get("owner"),
-                "reason": d.get("reason"),
-                "last_seen": d.get("last_seen"),
-            })
+            top_incidents_detail.append(
+                {
+                    "asset_id": d.get("asset_id") or d.get("asset_key"),
+                    "name": d.get("name"),
+                    "owner": d.get("owner"),
+                    "reason": d.get("reason"),
+                    "last_seen": d.get("last_seen"),
+                }
+            )
         recs = []
         _, raw_items = _fetch_posture_list_raw()
         states = _raw_list_to_states(raw_items)
@@ -854,6 +934,7 @@ def reports_executive_pdf(
 def run_scheduled_snapshot() -> None:
     """Save current 24h report as a snapshot. Uses its own DB session. Call from background task (e.g. scheduler)."""
     from app.db import SessionLocal
+
     db = SessionLocal()
     try:
         report = _build_report_summary("24h")
@@ -902,7 +983,9 @@ def _snapshot_row_to_summary(row) -> tuple[ReportSummary, list]:
 @router.get("/reports/what-changed")
 def reports_what_changed(
     from_id: int = Query(..., description="Snapshot id to compare from"),
-    to_id: int | None = Query(None, description="Snapshot id to compare to; omit for current state"),
+    to_id: int | None = Query(
+        None, description="Snapshot id to compare to; omit for current state"
+    ),
     db: Session = Depends(get_db),
     _user: str = Depends(require_auth),
 ):
@@ -953,7 +1036,9 @@ def reports_what_changed(
             "red": r.red,
         }
         if created_at is not None:
-            d["created_at"] = created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at)
+            d["created_at"] = (
+                created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at)
+            )
         if id_label is not None:
             d["id"] = id_label
         return d
@@ -1028,7 +1113,9 @@ def posture_summary(
     _user: str = Depends(require_auth),
 ):
     """Summary counts and down_assets. Optional filters: environment, criticality, owner, status."""
-    items = _get_filtered_posture_list(db, environment=environment, criticality=criticality, owner=owner, status=status)
+    items = _get_filtered_posture_list(
+        db, environment=environment, criticality=criticality, owner=owner, status=status
+    )
     by_state: dict[str, int] = {"green": 0, "amber": 0, "red": 0}
     scores: list[float] = []
     down_assets: list[str] = []
@@ -1055,15 +1142,30 @@ def posture_summary(
 
 
 @router.post("/alert/send")
-def posture_alert_send(_user: str = Depends(require_auth)):
+def posture_alert_send(
+    db: Session = Depends(get_db),
+    _user: str = Depends(require_auth),
+):
     """
-    Check current posture; if any assets are down, send notification to Slack and/or WhatsApp (whichever is configured).
-    Call from cron or manually. Only sends when down_assets is non-empty.
+    Check current posture; if any assets are down, send notification.
+    Assets in a maintenance window or under a suppression rule are excluded (Phase 3.2).
+    When REDIS_URL is set: publishes to secplat.events.notify (notifier sends Slack/Twilio).
+    Otherwise: calls Slack/WhatsApp directly (legacy).
     """
     down_assets = _get_down_assets()
+    down_assets = [a for a in down_assets if not is_asset_suppressed(db, a)]
     if not down_assets:
-        return {"sent": False, "down_assets": [], "message": "No down assets; no notification sent."}
+        return {
+            "sent": False,
+            "down_assets": [],
+            "message": "No down assets; no notification sent.",
+        }
 
+    if publish_notify(down_assets):
+        publish_correlation_event("alert.triggered", down_assets=down_assets)
+        return {"queued": True, "down_assets": down_assets, "message": "Alert queued for notifier."}
+
+    publish_correlation_event("alert.triggered", down_assets=down_assets)
     slack_ok = _send_slack_alert(down_assets)
     whatsapp_ok = _send_whatsapp_alert(down_assets)
     any_ok = slack_ok or whatsapp_ok
@@ -1072,7 +1174,9 @@ def posture_alert_send(_user: str = Depends(require_auth)):
         channels.append("Slack")
     if whatsapp_ok:
         channels.append("WhatsApp")
-    if not (getattr(settings, "SLACK_WEBHOOK_URL", None) or getattr(settings, "WHATSAPP_ALERT_TO", None)):
+    if not (
+        getattr(settings, "SLACK_WEBHOOK_URL", None) or getattr(settings, "WHATSAPP_ALERT_TO", None)
+    ):
         return {
             "sent": False,
             "down_assets": down_assets,
@@ -1111,7 +1215,9 @@ def get_posture_detail(
     meta = _get_asset_metadata_batch(db, [asset_key])
     if meta.get(asset_key):
         m = meta[asset_key]
-        updates = {k: m[k] for k in ("owner", "criticality", "name", "environment") if m.get(k) is not None}
+        updates = {
+            k: m[k] for k in ("owner", "criticality", "name", "environment") if m.get(k) is not None
+        }
         if updates:
             state = state.model_copy(update=updates)
 
@@ -1123,14 +1229,18 @@ def get_posture_detail(
 
     # SLO: last check latency
     last_latency = evidence.get("latency_ms") if evidence else None
-    latency_slo_ok = last_latency is None or (isinstance(last_latency, (int, float)) and last_latency <= latency_slo_ms)
+    latency_slo_ok = last_latency is None or (
+        isinstance(last_latency, (int, float)) and last_latency <= latency_slo_ms
+    )
 
     # Data completeness (24h and 1h)
     expected_24h = (86400 // interval_sec) if interval_sec else 0
     expected_1h = (3600 // interval_sec) if interval_sec else 0
     checks = len(timeline)
     pct_24h = round(100.0 * checks / expected_24h, 1) if expected_24h else None
-    pct_1h = round(100.0 * min(checks, expected_1h) / expected_1h, 1) if expected_1h and checks else None
+    pct_1h = (
+        round(100.0 * min(checks, expected_1h) / expected_1h, 1) if expected_1h and checks else None
+    )
     completeness = DataCompleteness(
         checks=checks,
         expected=expected_24h,
@@ -1150,7 +1260,9 @@ def get_posture_detail(
     error_rate_24h = round(100.0 * errors / checks, 1) if checks else 0.0
 
     reason_display = state.reason or ("latency_slo_breach" if not latency_slo_ok else None)
-    recommendations = _recommendations(state, latency_slo_ok=latency_slo_ok, latency_slo_ms=latency_slo_ms)
+    recommendations = _recommendations(
+        state, latency_slo_ok=latency_slo_ok, latency_slo_ms=latency_slo_ms
+    )
 
     return AssetDetailResponse(
         state=state,

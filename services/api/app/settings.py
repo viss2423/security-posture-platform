@@ -1,14 +1,18 @@
 from pydantic_settings import BaseSettings
 
+
 class Settings(BaseSettings):
     ENV: str = "dev"
     API_SECRET_KEY: str = "change_me"
     ADMIN_USERNAME: str = "admin"
     ADMIN_PASSWORD: str = "admin"  # dev only; use ADMIN_PASSWORD_HASH in prod
-    ADMIN_PASSWORD_HASH: str | None = None  # bcrypt hash; when set, login uses this instead of ADMIN_PASSWORD
+    ADMIN_PASSWORD_HASH: str | None = (
+        None  # bcrypt hash; when set, login uses this instead of ADMIN_PASSWORD
+    )
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24h; shorten for higher security
     POSTGRES_DSN: str
     OPENSEARCH_URL: str = "http://opensearch:9200"
+    REDIS_URL: str | None = None  # Phase 1: when set, API publishes scan jobs to Redis stream
     MAX_SCAN_DURATION_SECONDS: int = 900
     MAX_REQUESTS_PER_SECOND: int = 2
     BLOCK_PRIVATE_IPS: bool = True
@@ -27,7 +31,9 @@ class Settings(BaseSettings):
     # WhatsApp via Twilio: when set, POST /posture/alert/send can notify (optional, use instead of or with Slack)
     TWILIO_ACCOUNT_SID: str | None = None
     TWILIO_AUTH_TOKEN: str | None = None
-    TWILIO_WHATSAPP_FROM: str | None = None  # e.g. whatsapp:+14155238886 (sandbox) or your Twilio WhatsApp number
+    TWILIO_WHATSAPP_FROM: str | None = (
+        None  # e.g. whatsapp:+14155238886 (sandbox) or your Twilio WhatsApp number
+    )
     WHATSAPP_ALERT_TO: str | None = None  # e.g. whatsapp:+1234567890
 
     # Jira (B.4): create ticket from incident. Base URL e.g. https://your.atlassian.net
@@ -63,5 +69,5 @@ class Settings(BaseSettings):
     OIDC_SCOPES: str = "openid profile email"
     FRONTEND_URL: str = "http://localhost:3000"  # redirect here after SSO with #access_token=...
 
-settings = Settings()
 
+settings = Settings()

@@ -1,12 +1,14 @@
-"""Liveness (/health), readiness (/ready), and metrics for load balancers and orchestrators."""
+"""Liveness (/health), readiness (/ready), queue health, and metrics for load balancers and orchestrators."""
+
 import httpx
 from fastapi import APIRouter, Response
 from fastapi.responses import PlainTextResponse
 from sqlalchemy import text
 
-from app.settings import settings
-from app.db import engine
 from app import metrics as metrics_module
+from app.db import engine
+from app.queue import queue_health
+from app.settings import settings
 
 router = APIRouter()
 
@@ -49,6 +51,21 @@ def ready(response: Response):
     if status != 200:
         out["status"] = "degraded"
         response.status_code = status
+    return out
+
+
+@router.get("/queue/health")
+def queue_health_endpoint(response: Response):
+    """Phase 1: Redis and stream depths. 200 when queue is configured and reachable."""
+    try:
+        out = queue_health()
+    except Exception as e:
+        response.status_code = 503
+        return {"redis": "error", "error": str(e)}
+    if out is None:
+        return {"status": "not_configured", "message": "REDIS_URL not set"}
+    if out.get("redis") == "error":
+        response.status_code = 503
     return out
 
 

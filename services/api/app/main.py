@@ -1,17 +1,31 @@
 import asyncio
 import logging
 import uuid
-
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
-from .routers import health, assets, jobs, findings, posture, auth, retention, audit as audit_router, alerts, incidents, policy, integrations
 from . import metrics
 from .db_migrate import run_startup_migrations
 from .logging_config import configure_logging
 from .request_context import request_id_ctx
+from .routers import (
+    alerts,
+    assets,
+    auth,
+    findings,
+    health,
+    incidents,
+    integrations,
+    jobs,
+    policy,
+    posture,
+    retention,
+    suppression,
+)
+from .routers import audit as audit_router
 from .settings import settings
 
 configure_logging()
@@ -80,3 +94,4 @@ app.include_router(jobs.router, prefix="/jobs", tags=["jobs"])
 app.include_router(findings.router, prefix="/findings", tags=["findings"])
 app.include_router(policy.router)
 app.include_router(integrations.router)
+app.include_router(suppression.router)

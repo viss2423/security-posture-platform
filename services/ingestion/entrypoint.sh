@@ -49,10 +49,15 @@ seed_assets
 INTERVAL="${INGESTION_INTERVAL:-60}"
 echo "[ingestion] running scripts every ${INTERVAL}s..."
 
+# When deriver is running (profile roadmap), set SKIP_BUILD_ASSET_STATUS=true so only deriver writes asset-status
+SKIP_BUILD_ASSET_STATUS="${SKIP_BUILD_ASSET_STATUS:-false}"
+
 while true; do
   INDEX=secplat-assets /app/scripts/assets_to_opensearch.sh || true
   /app/scripts/health_to_opensearch.sh || true
   /app/scripts/juice_health_to_opensearch.sh || true
-  /app/scripts/build_asset_status.sh || true
+  if [ "$SKIP_BUILD_ASSET_STATUS" != "true" ]; then
+    /app/scripts/build_asset_status.sh || true
+  fi
   sleep "$INTERVAL"
 done

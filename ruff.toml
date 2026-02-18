@@ -1,0 +1,23 @@
+# Ruff: fast Python linter and formatter (services/api, services/worker-web, scripts)
+target-version = "py311"
+line-length = 100
+
+[lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
+ignore = [
+  "E501",   # line length (formatter)
+  "B008",   # FastAPI Depends() in defaults
+  "E402",   # imports not at top (tests with path setup)
+  "E731",   # lambda assign (style)
+  "B904",   # raise from (noisy in HTTPException)
+  "SIM102", "SIM105", "SIM117",  # style: combine if/with
+  "UP038",  # isinstance(X, (A,B)) -> X|Y (py311)
+  "UP041",  # socket.timeout -> TimeoutError
+  "N806",   # constant in function (e.g. VIEWER_BCRYPT_HASH)
+]
+
+[lint.isort]
+known-first-party = ["app"]
+
+[format]
+quote-style = "double"

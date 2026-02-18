@@ -1,13 +1,16 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from ..db import get_db
 from ..audit import log_audit
+from ..db import get_db
+from ..queue import publish_correlation_event
 from ..request_context import request_id_ctx
-from .auth import require_auth, require_role
+from ..suppression import is_asset_suppressed
+from .auth import require_role
 
 router = APIRouter()
 
@@ -89,20 +92,28 @@ def upsert_finding(body: FindingUpsertBody, db: Session = Depends(get_db)):
     """
     asset_id = body.asset_id
     if asset_id is None and body.asset_key:
-        row = db.execute(
-            text("SELECT asset_id FROM assets WHERE asset_key = :k"),
-            {"k": body.asset_key},
-        ).mappings().first()
+        row = (
+            db.execute(
+                text("SELECT asset_id FROM assets WHERE asset_key = :k"),
+                {"k": body.asset_key},
+            )
+            .mappings()
+            .first()
+        )
         if not row:
             raise HTTPException(status_code=400, detail=f"Asset not found: {body.asset_key}")
         asset_id = row["asset_id"]
     if asset_id is None:
         raise HTTPException(status_code=400, detail="Provide asset_id or asset_key")
 
-    existing = db.execute(
-        text("SELECT finding_id, last_seen FROM findings WHERE finding_key = :k"),
-        {"k": body.finding_key},
-    ).mappings().first()
+    existing = (
+        db.execute(
+            text("SELECT finding_id, last_seen FROM findings WHERE finding_key = :k"),
+            {"k": body.finding_key},
+        )
+        .mappings()
+        .first()
+    )
 
     if existing:
         db.execute(
@@ -139,6 +150,23 @@ def upsert_finding(body: FindingUpsertBody, db: Session = Depends(get_db)):
             },
         )
         db.commit()
+        ak = body.asset_key
+        if not ak:
+            row = (
+                db.execute(
+                    text("SELECT asset_key FROM assets WHERE asset_id = :id"), {"id": asset_id}
+                )
+                .mappings()
+                .first()
+            )
+            ak = (row["asset_key"] or "") if row else ""
+        if ak and not is_asset_suppressed(db, ak):
+            publish_correlation_event(
+                "finding.created",
+                asset_key=ak,
+                finding_key=body.finding_key,
+                severity=body.severity,
+            )
         return {"ok": True, "finding_key": body.finding_key, "updated": False}
 
 
@@ -156,17 +184,28 @@ def update_finding_status(
     """Update finding status: open | in_progress | remediated | accepted_risk."""
     if body.status not in VALID_STATUS:
         raise HTTPException(status_code=400, detail=f"Invalid status. Use one of: {VALID_STATUS}")
-    row = db.execute(
-        text("SELECT finding_id FROM findings WHERE finding_id = :id"),
-        {"id": finding_id},
-    ).mappings().first()
+    row = (
+        db.execute(
+            text("SELECT finding_id FROM findings WHERE finding_id = :id"),
+            {"id": finding_id},
+        )
+        .mappings()
+        .first()
+    )
     if not row:
         raise HTTPException(status_code=404, detail="Finding not found")
     db.execute(
         text("UPDATE findings SET status = :status WHERE finding_id = :id"),
         {"status": body.status, "id": finding_id},
     )
-    log_audit(db, "finding_status", user_name=_user, asset_key=None, details={"finding_id": finding_id, "status": body.status}, request_id=request_id_ctx.get(None))
+    log_audit(
+        db,
+        "finding_status",
+        user_name=_user,
+        asset_key=None,
+        details={"finding_id": finding_id, "status": body.status},
+        request_id=request_id_ctx.get(None),
+    )
     db.commit()
     return {"ok": True, "finding_id": finding_id, "status": body.status}
 
@@ -188,13 +227,17 @@ def accept_finding_risk(
         expires_at = datetime.fromisoformat(body.expires_at.replace("Z", "+00:00"))
     except ValueError:
         raise HTTPException(status_code=400, detail="expires_at must be ISO 8601 datetime")
-    row = db.execute(
-        text("SELECT finding_id FROM findings WHERE finding_id = :id"),
-        {"id": finding_id},
-    ).mappings().first()
+    row = (
+        db.execute(
+            text("SELECT finding_id FROM findings WHERE finding_id = :id"),
+            {"id": finding_id},
+        )
+        .mappings()
+        .first()
+    )
     if not row:
         raise HTTPException(status_code=404, detail="Finding not found")
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     db.execute(
         text("""
           UPDATE findings SET
@@ -205,8 +248,25 @@ def accept_finding_risk(
             accepted_risk_by = :user
           WHERE finding_id = :id
         """),
-        {"id": finding_id, "now": now, "expires_at": expires_at, "reason": body.reason or "", "user": user},
+        {
+            "id": finding_id,
+            "now": now,
+            "expires_at": expires_at,
+            "reason": body.reason or "",
+            "user": user,
+        },
     )
-    log_audit(db, "accept_risk", user_name=user, asset_key=None, details={"finding_id": finding_id, "reason": body.reason[:100] if body.reason else "", "expires_at": body.expires_at}, request_id=request_id_ctx.get(None))
+    log_audit(
+        db,
+        "accept_risk",
+        user_name=user,
+        asset_key=None,
+        details={
+            "finding_id": finding_id,
+            "reason": body.reason[:100] if body.reason else "",
+            "expires_at": body.expires_at,
+        },
+        request_id=request_id_ctx.get(None),
+    )
     db.commit()
     return {"ok": True, "finding_id": finding_id, "status": "accepted_risk"}
