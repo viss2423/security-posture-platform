@@ -86,6 +86,7 @@ class Settings(BaseSettings):
     AI_TEMPERATURE: float = 0.2
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "llama3.1:8b"
+    OLLAMA_KEEP_ALIVE: str | None = "30m"
     OPENAI_API_KEY: str | None = None
     OPENAI_BASE_URL: str = "https://api.openai.com/v1"
     OPENAI_MODEL: str = "gpt-4.1-mini"

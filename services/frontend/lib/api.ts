@@ -506,6 +506,8 @@ export type JobItem = {
   job_id: number;
   job_type: string;
   target_asset_id: number | null;
+  asset_key?: string | null;
+  asset_name?: string | null;
   requested_by: string | null;
   status: string;
   created_at: string | null;
@@ -515,7 +517,13 @@ export type JobItem = {
   retry_count?: number;
 };
 
-export type JobDetail = JobItem & { log_output: string | null };
+export type JobDetail = JobItem & {
+  log_output: string | null;
+  asset_type?: string | null;
+  asset_environment?: string | null;
+  asset_criticality?: string | null;
+  asset_verified?: boolean | null;
+};
 
 export async function getJobs(status?: string): Promise<{ items: JobItem[] }> {
   const q = status ? `?status=${encodeURIComponent(status)}&limit=100` : '?limit=100';
@@ -534,14 +542,67 @@ export async function retryJob(id: number): Promise<{ ok: boolean; status: strin
   return apiFetch(`/jobs/${id}/retry`, { method: 'POST' });
 }
 
+export type AIJobTriage = {
+  job_id: number;
+  triage_text: string;
+  provider: string;
+  model: string;
+  generated_by?: string | null;
+  generated_at: string;
+  context_json?: Record<string, unknown>;
+  cached?: boolean;
+};
+
+export async function getJobAITriage(jobId: number): Promise<AIJobTriage> {
+  return apiFetch<AIJobTriage>(`/ai/jobs/${jobId}/triage`);
+}
+
+export async function generateJobAITriage(
+  jobId: number,
+  force: boolean = false
+): Promise<AIJobTriage> {
+  return apiFetch<AIJobTriage>(`/ai/jobs/${jobId}/triage/generate`, {
+    method: 'POST',
+    body: JSON.stringify({ force }),
+  });
+}
+
 export type AlertItem = {
   asset_key: string;
   state?: string;
+  asset_name?: string | null;
+  owner?: string | null;
+  environment?: string | null;
+  criticality?: 'high' | 'medium' | 'low' | null;
+  asset_type?: string | null;
+  verified?: boolean | null;
+  posture_status?: 'green' | 'amber' | 'red' | null;
+  posture_score?: number | null;
+  reason?: string | null;
+  last_seen?: string | null;
+  staleness_seconds?: number | null;
+  active_finding_count?: number;
+  top_risk_score?: number | null;
+  top_risk_level?: 'critical' | 'high' | 'medium' | 'low' | null;
+  open_incident_count?: number;
+  open_incident_ids?: number[];
+  open_incident_severities?: string[];
+  maintenance_active?: boolean;
+  maintenance_reason?: string | null;
+  maintenance_end_at?: string | null;
+  suppression_rule_active?: boolean;
+  suppression_reason?: string | null;
+  suppression_end_at?: string | null;
+  ai_recommended_action?: 'ack' | 'suppress' | 'assign' | 'escalate' | 'resolve' | 'monitor' | null;
+  ai_urgency?: 'critical' | 'high' | 'medium' | 'low' | null;
+  ai_generated_at?: string | null;
   ack_reason?: string | null;
   acked_by?: string | null;
   acked_at?: string | null;
   suppressed_until?: string | null;
   assigned_to?: string | null;
+  resolved_at?: string | null;
+  updated_at?: string | null;
 };
 
 export type AlertsResponse = {
@@ -580,6 +641,35 @@ export async function postAlertAssign(asset_key: string, assigned_to: string): P
   return apiFetch<{ ok: boolean }>('/alerts/assign', {
     method: 'POST',
     body: JSON.stringify({ asset_key, assigned_to }),
+  });
+}
+
+export type AIAlertGuidance = {
+  asset_key: string;
+  guidance_text: string;
+  recommended_action?: 'ack' | 'suppress' | 'assign' | 'escalate' | 'resolve' | 'monitor' | null;
+  urgency?: 'critical' | 'high' | 'medium' | 'low' | null;
+  provider: string;
+  model: string;
+  generated_by?: string | null;
+  generated_at: string;
+  context_signature?: string;
+  context_json?: Record<string, unknown>;
+  cached?: boolean;
+  stale?: boolean;
+};
+
+export async function getAlertAIGuidance(assetKey: string): Promise<AIAlertGuidance> {
+  return apiFetch<AIAlertGuidance>(`/ai/alerts/${encodeURIComponent(assetKey)}/guidance`);
+}
+
+export async function generateAlertAIGuidance(
+  assetKey: string,
+  force: boolean = false
+): Promise<AIAlertGuidance> {
+  return apiFetch<AIAlertGuidance>(`/ai/alerts/${encodeURIComponent(assetKey)}/guidance/generate`, {
+    method: 'POST',
+    body: JSON.stringify({ force }),
   });
 }
 
@@ -1139,6 +1229,61 @@ export async function generateIncidentAISummary(
   force: boolean = false
 ): Promise<AIIncidentSummary> {
   return apiFetch<AIIncidentSummary>(`/ai/incidents/${incidentId}/summary/generate`, {
+    method: 'POST',
+    body: JSON.stringify({ force }),
+  });
+}
+
+export type AIPolicyEvaluationSummary = {
+  evaluation_id: number;
+  summary_text: string;
+  provider: string;
+  model: string;
+  generated_by?: string | null;
+  generated_at: string;
+  context_json?: Record<string, unknown>;
+  cached?: boolean;
+};
+
+export async function getPolicyEvaluationAISummary(
+  evaluationId: number
+): Promise<AIPolicyEvaluationSummary> {
+  return apiFetch<AIPolicyEvaluationSummary>(`/ai/policy/evaluations/${evaluationId}/summary`);
+}
+
+export async function generatePolicyEvaluationAISummary(
+  evaluationId: number,
+  force: boolean = false
+): Promise<AIPolicyEvaluationSummary> {
+  return apiFetch<AIPolicyEvaluationSummary>(
+    `/ai/policy/evaluations/${evaluationId}/summary/generate`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ force }),
+    }
+  );
+}
+
+export type AIAssetDiagnosis = {
+  asset_key: string;
+  diagnosis_text: string;
+  provider: string;
+  model: string;
+  generated_by?: string | null;
+  generated_at: string;
+  context_json?: Record<string, unknown>;
+  cached?: boolean;
+};
+
+export async function getAssetAIDiagnosis(assetKey: string): Promise<AIAssetDiagnosis> {
+  return apiFetch<AIAssetDiagnosis>(`/ai/assets/${encodeURIComponent(assetKey)}/diagnosis`);
+}
+
+export async function generateAssetAIDiagnosis(
+  assetKey: string,
+  force: boolean = false
+): Promise<AIAssetDiagnosis> {
+  return apiFetch<AIAssetDiagnosis>(`/ai/assets/${encodeURIComponent(assetKey)}/diagnose`, {
     method: 'POST',
     body: JSON.stringify({ force }),
   });

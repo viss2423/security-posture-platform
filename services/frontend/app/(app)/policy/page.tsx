@@ -6,10 +6,13 @@ import {
   createPolicyBundle,
   deletePolicyBundle,
   evaluatePolicyBundle,
+  generatePolicyEvaluationAISummary,
   getPolicyBundle,
   getPolicyBundles,
   getPolicyEvaluation,
+  getPolicyEvaluationAISummary,
   getPolicyEvaluationHistory,
+  type AIPolicyEvaluationSummary,
   updatePolicyBundle,
   type PolicyBundle,
   type PolicyBundleDetail,
@@ -18,6 +21,7 @@ import {
 } from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
 import { ApiDownHint, EmptyState } from '@/components/EmptyState';
+import { friendlyApiMessage } from '@/lib/apiError';
 
 const DEFAULT_YAML = `rules:
   - id: asset-green
@@ -60,6 +64,10 @@ export default function PolicyPage() {
   const [createDesc, setCreateDesc] = useState('');
   const [createDef, setCreateDef] = useState(DEFAULT_YAML);
   const [editDef, setEditDef] = useState('');
+  const [aiSummary, setAiSummary] = useState<AIPolicyEvaluationSummary | null>(null);
+  const [aiSummaryLoading, setAiSummaryLoading] = useState(false);
+  const [aiSummaryGenerating, setAiSummaryGenerating] = useState(false);
+  const [aiSummaryMessage, setAiSummaryMessage] = useState<string | null>(null);
 
   const loadBundles = useCallback(() => {
     setLoading(true);
@@ -88,10 +96,34 @@ export default function PolicyPage() {
         setDetail(b);
         setEditDef(b.definition);
         setEvaluateResult(null);
+        setAiSummary(null);
+        setAiSummaryMessage(null);
         setEvaluationHistory(history.items || []);
       })
       .catch((e) => setError(e.message));
   };
+
+  useEffect(() => {
+    const evaluationId = evaluateResult?.evaluation_id;
+    if (!evaluationId) {
+      setAiSummary(null);
+      setAiSummaryLoading(false);
+      setAiSummaryMessage(null);
+      return;
+    }
+    setAiSummaryLoading(true);
+    setAiSummaryMessage(null);
+    getPolicyEvaluationAISummary(evaluationId)
+      .then(setAiSummary)
+      .catch((e) => {
+        const message = e instanceof Error ? e.message : 'Failed to load AI summary';
+        if (!message.toLowerCase().includes('not found')) {
+          setAiSummaryMessage(message);
+        }
+        setAiSummary(null);
+      })
+      .finally(() => setAiSummaryLoading(false));
+  }, [evaluateResult?.evaluation_id]);
 
   const handleCreate = () => {
     if (!createName.trim()) return;
@@ -136,6 +168,8 @@ export default function PolicyPage() {
     evaluatePolicyBundle(detail.id)
       .then((r) => {
         setEvaluateResult(r);
+        setAiSummary(null);
+        setAiSummaryMessage(null);
         return loadEvaluationHistory(detail.id);
       })
       .catch((e) => setError(e.message));
@@ -145,8 +179,30 @@ export default function PolicyPage() {
     if (!detail) return;
     setError(null);
     getPolicyEvaluation(detail.id, evaluationId)
-      .then((r) => setEvaluateResult(r.result))
+      .then((r) =>
+        setEvaluateResult({
+          ...r.result,
+          evaluation_id: r.id,
+          evaluated_at: r.evaluated_at ?? r.result.evaluated_at,
+          bundle_approved_by: r.bundle_approved_by ?? r.result.bundle_approved_by,
+        })
+      )
       .catch((e) => setError(e.message));
+  };
+
+  const handleGenerateAISummary = async (force: boolean) => {
+    if (!evaluateResult?.evaluation_id) return;
+    setAiSummaryGenerating(true);
+    setAiSummaryMessage(null);
+    try {
+      const out = await generatePolicyEvaluationAISummary(evaluateResult.evaluation_id, force);
+      setAiSummary(out);
+      setAiSummaryMessage(out.cached ? 'Showing cached AI summary.' : 'AI summary generated.');
+    } catch (e) {
+      setAiSummaryMessage(e instanceof Error ? e.message : 'AI summary generation failed');
+    } finally {
+      setAiSummaryGenerating(false);
+    }
   };
 
   const handleDelete = () => {
@@ -157,6 +213,8 @@ export default function PolicyPage() {
         setDetail(null);
         setEvaluateResult(null);
         setEvaluationHistory([]);
+        setAiSummary(null);
+        setAiSummaryMessage(null);
         loadBundles();
       })
       .catch((e) => setError(e.message));
@@ -323,6 +381,8 @@ export default function PolicyPage() {
                   setDetail(null);
                   setEvaluateResult(null);
                   setEvaluationHistory([]);
+                  setAiSummary(null);
+                  setAiSummaryMessage(null);
                 }}
                 className="btn-secondary"
               >
@@ -386,6 +446,60 @@ export default function PolicyPage() {
                 Evaluation #{evaluateResult.evaluation_id ?? '-'} - evaluated {fmtDate(evaluateResult.evaluated_at)} -
                 approved by {evaluateResult.bundle_approved_by || 'n/a'} - {totalViolations} violations
               </p>
+
+              <div className="mb-6 rounded-lg border border-[var(--border)] bg-[var(--surface-elevated)] p-4">
+                <h4 className="mb-2 text-base font-semibold text-[var(--text)]">AI summary</h4>
+                {aiSummaryLoading ? (
+                  <p className="text-sm text-[var(--muted)]">Loading summary...</p>
+                ) : aiSummary?.summary_text ? (
+                  <>
+                    <p className="whitespace-pre-wrap text-sm leading-6 text-[var(--text)]">
+                      {aiSummary.summary_text}
+                    </p>
+                    <p className="mt-3 text-xs text-[var(--muted)]">
+                      Generated {fmtDate(aiSummary.generated_at)} via {aiSummary.provider}/{aiSummary.model}
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-sm text-[var(--muted)]">
+                    No AI summary generated yet for this evaluation.
+                  </p>
+                )}
+                {aiSummaryMessage && (
+                  <p
+                    className={`mt-3 text-xs ${
+                      aiSummaryMessage.toLowerCase().includes('failed')
+                        ? 'text-[var(--red)]'
+                        : 'text-[var(--muted)]'
+                    }`}
+                  >
+                    {friendlyApiMessage(aiSummaryMessage)}
+                  </p>
+                )}
+                {canMutate && evaluateResult.evaluation_id != null && (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleGenerateAISummary(false)}
+                      disabled={aiSummaryGenerating}
+                      className="btn-primary"
+                    >
+                      {aiSummaryGenerating ? 'Generating...' : aiSummary ? 'Refresh summary' : 'Generate summary'}
+                    </button>
+                    {aiSummary && (
+                      <button
+                        type="button"
+                        onClick={() => handleGenerateAISummary(true)}
+                        disabled={aiSummaryGenerating}
+                        className="btn-secondary"
+                      >
+                        Force regenerate
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>

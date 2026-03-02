@@ -270,6 +270,20 @@ CREATE TABLE IF NOT EXISTS incident_ai_summaries (
 CREATE INDEX IF NOT EXISTS idx_incident_ai_summaries_generated_at
   ON incident_ai_summaries(generated_at DESC);
 """
+POLICY_EVALUATION_AI_SUMMARIES_SQL = """
+CREATE TABLE IF NOT EXISTS policy_evaluation_ai_summaries (
+  id              SERIAL PRIMARY KEY,
+  evaluation_id   INTEGER NOT NULL UNIQUE REFERENCES policy_evaluation_runs(id) ON DELETE CASCADE,
+  summary_text    TEXT NOT NULL,
+  provider        TEXT NOT NULL,
+  model           TEXT NOT NULL,
+  generated_by    TEXT,
+  generated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  context_json    JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_policy_eval_ai_summaries_generated_at
+  ON policy_evaluation_ai_summaries(generated_at DESC);
+"""
 FINDING_AI_EXPLANATIONS_SQL = """
 CREATE TABLE IF NOT EXISTS finding_ai_explanations (
   id                 SERIAL PRIMARY KEY,
@@ -302,6 +316,53 @@ CREATE INDEX IF NOT EXISTS idx_posture_anomalies_detected_at
   ON posture_anomalies(detected_at DESC);
 CREATE INDEX IF NOT EXISTS idx_posture_anomalies_metric
   ON posture_anomalies(metric);
+"""
+ASSET_AI_DIAGNOSES_SQL = """
+CREATE TABLE IF NOT EXISTS asset_ai_diagnoses (
+  id              SERIAL PRIMARY KEY,
+  asset_key       TEXT NOT NULL UNIQUE,
+  diagnosis_text  TEXT NOT NULL,
+  provider        TEXT NOT NULL,
+  model           TEXT NOT NULL,
+  generated_by    TEXT,
+  generated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  context_json    JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_asset_ai_diagnoses_generated_at
+  ON asset_ai_diagnoses(generated_at DESC);
+"""
+JOB_AI_TRIAGES_SQL = """
+CREATE TABLE IF NOT EXISTS job_ai_triages (
+  id              SERIAL PRIMARY KEY,
+  job_id          INTEGER NOT NULL UNIQUE REFERENCES scan_jobs(job_id) ON DELETE CASCADE,
+  triage_text     TEXT NOT NULL,
+  provider        TEXT NOT NULL,
+  model           TEXT NOT NULL,
+  generated_by    TEXT,
+  generated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  context_json    JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_job_ai_triages_generated_at
+  ON job_ai_triages(generated_at DESC);
+"""
+ALERT_AI_GUIDANCE_SQL = """
+CREATE TABLE IF NOT EXISTS alert_ai_guidance (
+  id                  SERIAL PRIMARY KEY,
+  asset_key           TEXT NOT NULL UNIQUE,
+  guidance_text       TEXT NOT NULL,
+  recommended_action  TEXT,
+  urgency             TEXT,
+  provider            TEXT NOT NULL,
+  model               TEXT NOT NULL,
+  generated_by        TEXT,
+  generated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  context_signature   TEXT NOT NULL DEFAULT '',
+  context_json        JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_alert_ai_guidance_generated_at
+  ON alert_ai_guidance(generated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_alert_ai_guidance_action
+  ON alert_ai_guidance(recommended_action, generated_at DESC);
 """
 
 
@@ -503,8 +564,12 @@ def run_startup_migrations() -> None:
                 raise
         for name, sql in [
             ("incident_ai_summaries", INCIDENT_AI_SUMMARIES_SQL),
+            ("policy_evaluation_ai_summaries", POLICY_EVALUATION_AI_SUMMARIES_SQL),
             ("finding_ai_explanations", FINDING_AI_EXPLANATIONS_SQL),
             ("posture_anomalies", POSTURE_ANOMALIES_SQL),
+            ("asset_ai_diagnoses", ASSET_AI_DIAGNOSES_SQL),
+            ("job_ai_triages", JOB_AI_TRIAGES_SQL),
+            ("alert_ai_guidance", ALERT_AI_GUIDANCE_SQL),
         ]:
             try:
                 for stmt in sql.strip().split(";"):

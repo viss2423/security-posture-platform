@@ -61,7 +61,7 @@ export default function AssetsPage() {
     getPostureList(filterParams)
       .then(setData)
       .catch((e) => setError(e.message));
-  }, [filterParams.environment, filterParams.criticality, filterParams.owner, filterParams.status]);
+  }, [filterParams]);
 
   const filteredAndSorted = useMemo(() => {
     if (!data?.items) return [];

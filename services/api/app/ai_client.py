@@ -82,6 +82,9 @@ def _generate_ollama(
             "num_predict": max(64, max_tokens),
         },
     }
+    keep_alive = getattr(settings, "OLLAMA_KEEP_ALIVE", None)
+    if keep_alive:
+        payload["keep_alive"] = keep_alive
     timeout = (
         float(timeout_seconds)
         if timeout_seconds is not None

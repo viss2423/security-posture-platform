@@ -3,7 +3,14 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { getAssetDetail, updateAssetByKey, type AssetDetail } from '@/lib/api';
+import {
+  generateAssetAIDiagnosis,
+  getAssetAIDiagnosis,
+  getAssetDetail,
+  updateAssetByKey,
+  type AIAssetDiagnosis,
+  type AssetDetail,
+} from '@/lib/api';
 import { AssetDetailSkeleton } from '@/components/Skeleton';
 import { ApiDownHint } from '@/components/EmptyState';
 import { formatDateTime } from '@/lib/format';
@@ -26,6 +33,10 @@ const ALL_TABS: { id: TabId; label: string; mutateOnly?: boolean }[] = [
   { id: 'config', label: 'Config', mutateOnly: true },
 ];
 
+function isFallbackProvider(provider: string | null | undefined): boolean {
+  return (provider || '').toLowerCase().includes('fallback');
+}
+
 export default function AssetDetailPage() {
   const params = useParams();
   const assetKey = params.assetKey as string;
@@ -33,15 +44,19 @@ export default function AssetDetailPage() {
   const [detail, setDetail] = useState<AssetDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabId>('summary');
-  const [editing, setEditing] = useState(false);
   const [editOwner, setEditOwner] = useState('');
   const [editCriticality, setEditCriticality] = useState<'high' | 'medium' | 'low'>('medium');
   const [editName, setEditName] = useState('');
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [aiDiagnosis, setAiDiagnosis] = useState<AIAssetDiagnosis | null>(null);
+  const [loadingDiagnosis, setLoadingDiagnosis] = useState(false);
+  const [generatingDiagnosis, setGeneratingDiagnosis] = useState(false);
+  const [diagnosisMessage, setDiagnosisMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (!assetKey) return;
+    setDiagnosisMessage(null);
     getAssetDetail(assetKey)
       .then((d) => {
         setDetail(d);
@@ -50,6 +65,18 @@ export default function AssetDetailPage() {
         setEditName(d?.state?.name?.trim() ?? '');
       })
       .catch((e) => setError(e.message));
+
+    setLoadingDiagnosis(true);
+    getAssetAIDiagnosis(assetKey)
+      .then((out) => setAiDiagnosis(out))
+      .catch((e) => {
+        const message = e instanceof Error ? e.message : 'Failed to load AI diagnosis';
+        if (!message.toLowerCase().includes('not found')) {
+          setDiagnosisMessage(message);
+        }
+        setAiDiagnosis(null);
+      })
+      .finally(() => setLoadingDiagnosis(false));
   }, [assetKey]);
 
   const openEdit = () => {
@@ -59,7 +86,6 @@ export default function AssetDetailPage() {
       setEditName(detail.state.name?.trim() ?? '');
     }
     setSaveError(null);
-    setEditing(true);
     setActiveTab('config');
   };
   const saveEdit = async () => {
@@ -73,7 +99,6 @@ export default function AssetDetailPage() {
       });
       const d = await getAssetDetail(assetKey);
       setDetail(d);
-      setEditing(false);
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : 'Save failed');
     } finally {
@@ -90,6 +115,26 @@ export default function AssetDetailPage() {
     navigator.clipboard.writeText(JSON.stringify(detail.evidence, null, 2));
   };
   const openSearchUrl = process.env.NEXT_PUBLIC_OPENSEARCH_DASHBOARDS_URL;
+
+  const handleGenerateDiagnosis = async (force: boolean) => {
+    setGeneratingDiagnosis(true);
+    setDiagnosisMessage(null);
+    try {
+      const out = await generateAssetAIDiagnosis(assetKey, force);
+      setAiDiagnosis(out);
+      setDiagnosisMessage(
+        isFallbackProvider(out.provider)
+          ? 'Diagnosis generated with fallback guidance because the AI provider was temporarily slow or unavailable.'
+          : out.cached
+            ? 'Showing cached AI diagnosis.'
+            : 'AI diagnosis generated.'
+      );
+    } catch (e) {
+      setDiagnosisMessage(e instanceof Error ? e.message : 'AI diagnosis generation failed');
+    } finally {
+      setGeneratingDiagnosis(false);
+    }
+  };
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-10 sm:px-6 lg:px-8">
@@ -179,6 +224,70 @@ export default function AssetDetailPage() {
                   </ul>
                 </div>
               )}
+              <div>
+                <h2 className="section-title">AI diagnosis</h2>
+                <div className="card">
+                  {loadingDiagnosis ? (
+                    <p className="text-sm text-[var(--muted)]">Loading diagnosis...</p>
+                  ) : aiDiagnosis?.diagnosis_text ? (
+                    <>
+                      <p className="whitespace-pre-wrap text-sm leading-6 text-[var(--text)]">
+                        {aiDiagnosis.diagnosis_text}
+                      </p>
+                      <p className="mt-3 text-xs text-[var(--muted)]">
+                        Generated {formatDateTime(aiDiagnosis.generated_at)} via {aiDiagnosis.provider}/
+                        {aiDiagnosis.model}
+                      </p>
+                      {isFallbackProvider(aiDiagnosis.provider) && (
+                        <p className="mt-2 text-xs text-[var(--amber)]">
+                          Showing fallback diagnosis. Use Force regenerate to retry with full model output.
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-sm text-[var(--muted)]">
+                      No AI diagnosis generated yet for this asset.
+                    </p>
+                  )}
+                  {diagnosisMessage && (
+                    <p
+                      className={`mt-3 text-xs ${
+                        diagnosisMessage.toLowerCase().includes('failed')
+                          ? 'text-[var(--red)]'
+                          : 'text-[var(--muted)]'
+                      }`}
+                    >
+                      {diagnosisMessage}
+                    </p>
+                  )}
+                  {canMutate && (
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleGenerateDiagnosis(false)}
+                        disabled={generatingDiagnosis}
+                        className="btn-primary text-sm"
+                      >
+                        {generatingDiagnosis
+                          ? 'Generating...'
+                          : aiDiagnosis
+                            ? 'Refresh diagnosis'
+                            : 'Generate diagnosis'}
+                      </button>
+                      {aiDiagnosis && (
+                        <button
+                          type="button"
+                          onClick={() => handleGenerateDiagnosis(true)}
+                          disabled={generatingDiagnosis}
+                          className="btn-secondary text-sm"
+                        >
+                          Force regenerate
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           )}
 
@@ -268,7 +377,7 @@ export default function AssetDetailPage() {
                   </div>
                   <div className="flex gap-2">
                     <button type="button" onClick={saveEdit} disabled={saving} className="btn-primary">{saving ? 'Saving…' : 'Save'}</button>
-                    <button type="button" onClick={() => { setEditing(false); setSaveError(null); }} disabled={saving} className="btn-secondary">Cancel</button>
+                    <button type="button" onClick={() => { setSaveError(null); }} disabled={saving} className="btn-secondary">Cancel</button>
                   </div>
                 </div>
               </div>

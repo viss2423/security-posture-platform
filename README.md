@@ -263,6 +263,9 @@ Service identities are supported for internal workloads (scanner, ingestion, cor
 SecPlat now supports optional AI-driven enrichments (disabled by default):
 
 - Incident executive summaries (persisted per incident)
+- Asset diagnosis briefs (persisted per asset)
+- Alert response guidance (persisted per asset alert context)
+- Failed job triage guidance (persisted per job)
 - Finding triage explanations (persisted per finding)
 - Posture anomaly detection over trend metrics (persisted history)
 - ML-ready risk scoring pipeline with heuristic fallback and trainable artifact support
@@ -271,6 +274,14 @@ SecPlat now supports optional AI-driven enrichments (disabled by default):
 
 - `POST /ai/incidents/{incident_id}/summary/generate`
 - `GET /ai/incidents/{incident_id}/summary`
+- `POST /ai/assets/{asset_key}/diagnose`
+- `GET /ai/assets/{asset_key}/diagnosis`
+- `POST /ai/alerts/{asset_key}/guidance/generate`
+- `GET /ai/alerts/{asset_key}/guidance`
+- `POST /ai/policy/evaluations/{evaluation_id}/summary/generate`
+- `GET /ai/policy/evaluations/{evaluation_id}/summary`
+- `POST /ai/jobs/{job_id}/triage/generate`
+- `GET /ai/jobs/{job_id}/triage`
 - `POST /ai/findings/{finding_id}/explain`
 - `GET /ai/findings/{finding_id}/explanation`
 - `POST /ai/posture/anomalies/detect`
@@ -289,13 +300,17 @@ Use `env.example` keys:
 
 - `AI_ENABLED=true`
 - `AI_PROVIDER=ollama` (or `openai`)
-- `OLLAMA_BASE_URL`, `OLLAMA_MODEL` (for local models)
+- `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `OLLAMA_KEEP_ALIVE` (for local models)
 - `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL` (for API model)
 - `RISK_MODEL_ENABLED`, `RISK_MODEL_ARTIFACT_PATH` (for trainable finding risk scoring)
 
 The frontend integrates these on:
 
 - Incident detail: **AI executive summary**
+- Asset detail: **AI asset diagnosis**
+- Alerts page: **AI response guidance + enriched alert context**
+- Policy page: **AI evaluation summary**
+- Jobs page: **AI job failure triage**
 - Findings page: **Explain risk**
 - Overview page: **AI anomalies**
 - Findings page: **ML risk model status, analyst labels, bootstrap, and training controls**

@@ -29,12 +29,29 @@ def list_jobs(
     _user: str = Depends(require_auth),
 ):
     """List recent jobs (optional status filter)."""
-    q = "SELECT job_id, job_type, target_asset_id, requested_by, status, created_at, started_at, finished_at, error, retry_count FROM scan_jobs WHERE 1=1"
+    q = """
+    SELECT
+      j.job_id,
+      j.job_type,
+      j.target_asset_id,
+      j.requested_by,
+      j.status,
+      j.created_at,
+      j.started_at,
+      j.finished_at,
+      j.error,
+      j.retry_count,
+      a.asset_key,
+      a.name AS asset_name
+    FROM scan_jobs j
+    LEFT JOIN assets a ON a.asset_id = j.target_asset_id
+    WHERE 1=1
+    """
     params = {"limit": limit}
     if status:
-        q += " AND status = :status"
+        q += " AND j.status = :status"
         params["status"] = status
-    q += " ORDER BY created_at DESC LIMIT :limit"
+    q += " ORDER BY j.created_at DESC LIMIT :limit"
     rows = db.execute(text(q), params).mappings().all()
     return {"items": [_serialize_job(r) for r in rows]}
 
@@ -49,7 +66,29 @@ def get_job(
     row = (
         db.execute(
             text(
-                "SELECT job_id, job_type, target_asset_id, requested_by, status, created_at, started_at, finished_at, error, log_output, retry_count FROM scan_jobs WHERE job_id = :id"
+                """
+                SELECT
+                  j.job_id,
+                  j.job_type,
+                  j.target_asset_id,
+                  j.requested_by,
+                  j.status,
+                  j.created_at,
+                  j.started_at,
+                  j.finished_at,
+                  j.error,
+                  j.log_output,
+                  j.retry_count,
+                  a.asset_key,
+                  a.name AS asset_name,
+                  a.type AS asset_type,
+                  a.environment AS asset_environment,
+                  a.criticality AS asset_criticality,
+                  a.verified AS asset_verified
+                FROM scan_jobs j
+                LEFT JOIN assets a ON a.asset_id = j.target_asset_id
+                WHERE j.job_id = :id
+                """
             ),
             {"id": job_id},
         )

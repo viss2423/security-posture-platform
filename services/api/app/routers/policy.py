@@ -408,6 +408,12 @@ def get_bundle_evaluation(
             payload = {}
     if not isinstance(payload, dict):
         payload = {}
+    payload.setdefault("evaluation_id", row["id"])
+    payload.setdefault(
+        "evaluated_at",
+        row["evaluated_at"].isoformat() if row.get("evaluated_at") else None,
+    )
+    payload.setdefault("bundle_approved_by", row.get("bundle_approved_by"))
     return {
         "id": row["id"],
         "bundle_id": row["bundle_id"],
