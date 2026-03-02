@@ -1,17 +1,17 @@
 """Phase B.2: Policy-as-code bundles — YAML definitions, draft/approved, evaluate against posture + findings."""
+
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.routers.auth import require_auth, require_role, decode_token_payload
-from app.routers.auth import security
-from fastapi.security import HTTPAuthorizationCredentials
+from app.policy_eval import evaluate_rules, parse_bundle_yaml
+from app.routers.auth import decode_token_payload, require_auth, require_role, security
 from app.routers.posture import _get_filtered_posture_list
-from app.policy_eval import parse_bundle_yaml, evaluate_rules
 
 router = APIRouter(prefix="/policy", tags=["policy"])
 
@@ -78,10 +78,16 @@ def get_bundle(
     _user: str = Depends(require_auth),
 ):
     """Get one policy bundle by id."""
-    row = db.execute(
-        text("SELECT id, name, description, definition, status, created_at, updated_at, approved_at, approved_by FROM policy_bundles WHERE id = :id"),
-        {"id": bundle_id},
-    ).mappings().first()
+    row = (
+        db.execute(
+            text(
+                "SELECT id, name, description, definition, status, created_at, updated_at, approved_at, approved_by FROM policy_bundles WHERE id = :id"
+            ),
+            {"id": bundle_id},
+        )
+        .mappings()
+        .first()
+    )
     if not row:
         raise HTTPException(status_code=404, detail="Bundle not found")
     return {
@@ -116,19 +122,34 @@ def create_bundle(
         {"name": body.name, "description": body.description or "", "definition": body.definition},
     )
     db.commit()
-    row = db.execute(text("SELECT id, name, status, created_at FROM policy_bundles ORDER BY id DESC LIMIT 1")).mappings().first()
-    return {"id": row["id"], "name": row["name"], "status": row["status"], "created_at": row["created_at"].isoformat()}
+    row = (
+        db.execute(
+            text("SELECT id, name, status, created_at FROM policy_bundles ORDER BY id DESC LIMIT 1")
+        )
+        .mappings()
+        .first()
+    )
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "status": row["status"],
+        "created_at": row["created_at"].isoformat(),
+    }
 
 
 @router.patch("/bundles/{bundle_id}")
 def update_bundle(
-  bundle_id: int,
-  body: BundleUpdate,
-  db: Session = Depends(get_db),
-  _user: str = Depends(require_role(["admin", "analyst"])),
+    bundle_id: int,
+    body: BundleUpdate,
+    db: Session = Depends(get_db),
+    _user: str = Depends(require_role(["admin", "analyst"])),
 ):
     """Update a draft bundle. Approved bundles cannot be edited."""
-    row = db.execute(text("SELECT id, status FROM policy_bundles WHERE id = :id"), {"id": bundle_id}).mappings().first()
+    row = (
+        db.execute(text("SELECT id, status FROM policy_bundles WHERE id = :id"), {"id": bundle_id})
+        .mappings()
+        .first()
+    )
     if not row:
         raise HTTPException(status_code=404, detail="Bundle not found")
     if row["status"] == "approved":
@@ -158,16 +179,22 @@ def update_bundle(
 
 @router.post("/bundles/{bundle_id}/approve")
 def approve_bundle(
-  bundle_id: int,
-  db: Session = Depends(get_db),
-  _user: str = Depends(require_role(["admin"])),
+    bundle_id: int,
+    db: Session = Depends(get_db),
+    _user: str = Depends(require_role(["admin"])),
 ):
     """Mark bundle as approved. Only admins."""
-    row = db.execute(text("SELECT id, status FROM policy_bundles WHERE id = :id"), {"id": bundle_id}).mappings().first()
+    row = (
+        db.execute(text("SELECT id, status FROM policy_bundles WHERE id = :id"), {"id": bundle_id})
+        .mappings()
+        .first()
+    )
     if not row:
         raise HTTPException(status_code=404, detail="Bundle not found")
     db.execute(
-        text("UPDATE policy_bundles SET status = 'approved', approved_at = NOW(), approved_by = :by WHERE id = :id"),
+        text(
+            "UPDATE policy_bundles SET status = 'approved', approved_at = NOW(), approved_by = :by WHERE id = :id"
+        ),
         {"id": bundle_id, "by": _user},
     )
     db.commit()
@@ -176,15 +203,21 @@ def approve_bundle(
 
 @router.post("/bundles/{bundle_id}/evaluate")
 def evaluate_bundle(
-  bundle_id: int,
-  db: Session = Depends(get_db),
-  _user: str = Depends(require_auth),
+    bundle_id: int,
+    db: Session = Depends(get_db),
+    _user: str = Depends(require_auth),
 ):
     """Run bundle rules, persist evaluation with evidence, and return the payload."""
-    row = db.execute(
-        text("SELECT id, name, definition, status, approved_by FROM policy_bundles WHERE id = :id"),
-        {"id": bundle_id},
-    ).mappings().first()
+    row = (
+        db.execute(
+            text(
+                "SELECT id, name, definition, status, approved_by FROM policy_bundles WHERE id = :id"
+            ),
+            {"id": bundle_id},
+        )
+        .mappings()
+        .first()
+    )
     if not row:
         raise HTTPException(status_code=404, detail="Bundle not found")
     try:
@@ -192,8 +225,9 @@ def evaluate_bundle(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     assets = _get_filtered_posture_list(db)
-    findings_rows = db.execute(
-        text("""
+    findings_rows = (
+        db.execute(
+            text("""
             SELECT
               f.finding_id,
               COALESCE(f.status, 'open') AS status,
@@ -209,7 +243,10 @@ def evaluate_bundle(
             FROM findings f
             LEFT JOIN assets a ON a.asset_id = f.asset_id
         """)
-    ).mappings().all()
+        )
+        .mappings()
+        .all()
+    )
     findings_by_asset: dict[str, list[dict]] = {}
     for r in findings_rows:
         key = r.get("asset_key") or ""
@@ -237,8 +274,9 @@ def evaluate_bundle(
         bundle_approved_by=row.get("approved_by"),
     )
     payload = {"bundle_id": bundle_id, "bundle_name": row["name"], **result}
-    ins = db.execute(
-        text("""
+    ins = (
+        db.execute(
+            text("""
             INSERT INTO policy_evaluation_runs (
               bundle_id,
               evaluated_by,
@@ -257,15 +295,18 @@ def evaluate_bundle(
             )
             RETURNING id, evaluated_at
         """),
-        {
-            "bundle_id": bundle_id,
-            "evaluated_by": _user,
-            "bundle_approved_by": row.get("approved_by"),
-            "score": result.get("score"),
-            "violations_count": len(result.get("violations") or []),
-            "result_json": json.dumps(payload),
-        },
-    ).mappings().first()
+            {
+                "bundle_id": bundle_id,
+                "evaluated_by": _user,
+                "bundle_approved_by": row.get("approved_by"),
+                "score": result.get("score"),
+                "violations_count": len(result.get("violations") or []),
+                "result_json": json.dumps(payload),
+            },
+        )
+        .mappings()
+        .first()
+    )
     db.commit()
     return {
         "evaluation_id": ins["id"],
@@ -276,20 +317,25 @@ def evaluate_bundle(
 
 @router.get("/bundles/{bundle_id}/evaluations")
 def list_bundle_evaluations(
-  bundle_id: int,
-  limit: int = Query(20, ge=1, le=200),
-  db: Session = Depends(get_db),
-  _user: str = Depends(require_auth),
+    bundle_id: int,
+    limit: int = Query(20, ge=1, le=200),
+    db: Session = Depends(get_db),
+    _user: str = Depends(require_auth),
 ):
     """List recent persisted evaluations for one bundle (newest first)."""
-    exists = db.execute(
-        text("SELECT id FROM policy_bundles WHERE id = :id"),
-        {"id": bundle_id},
-    ).mappings().first()
+    exists = (
+        db.execute(
+            text("SELECT id FROM policy_bundles WHERE id = :id"),
+            {"id": bundle_id},
+        )
+        .mappings()
+        .first()
+    )
     if not exists:
         raise HTTPException(status_code=404, detail="Bundle not found")
-    rows = db.execute(
-        text("""
+    rows = (
+        db.execute(
+            text("""
             SELECT
               id,
               bundle_id,
@@ -303,8 +349,11 @@ def list_bundle_evaluations(
             ORDER BY evaluated_at DESC
             LIMIT :limit
         """),
-        {"bundle_id": bundle_id, "limit": limit},
-    ).mappings().all()
+            {"bundle_id": bundle_id, "limit": limit},
+        )
+        .mappings()
+        .all()
+    )
     return {
         "items": [
             {
@@ -323,14 +372,15 @@ def list_bundle_evaluations(
 
 @router.get("/bundles/{bundle_id}/evaluations/{evaluation_id}")
 def get_bundle_evaluation(
-  bundle_id: int,
-  evaluation_id: int,
-  db: Session = Depends(get_db),
-  _user: str = Depends(require_auth),
+    bundle_id: int,
+    evaluation_id: int,
+    db: Session = Depends(get_db),
+    _user: str = Depends(require_auth),
 ):
     """Get one persisted evaluation (full payload including evidence)."""
-    row = db.execute(
-        text("""
+    row = (
+        db.execute(
+            text("""
             SELECT
               id,
               bundle_id,
@@ -343,8 +393,11 @@ def get_bundle_evaluation(
             FROM policy_evaluation_runs
             WHERE bundle_id = :bundle_id AND id = :evaluation_id
         """),
-        {"bundle_id": bundle_id, "evaluation_id": evaluation_id},
-    ).mappings().first()
+            {"bundle_id": bundle_id, "evaluation_id": evaluation_id},
+        )
+        .mappings()
+        .first()
+    )
     if not row:
         raise HTTPException(status_code=404, detail="Evaluation not found")
     payload = row.get("result_json")
@@ -369,12 +422,14 @@ def get_bundle_evaluation(
 
 @router.delete("/bundles/{bundle_id}")
 def delete_bundle(
-  bundle_id: int,
-  db: Session = Depends(get_db),
-  _user: str = Depends(require_role(["admin"])),
+    bundle_id: int,
+    db: Session = Depends(get_db),
+    _user: str = Depends(require_role(["admin"])),
 ):
     """Delete a bundle. Only admins. Draft only (or allow approved with confirmation — we allow any)."""
-    r = db.execute(text("DELETE FROM policy_bundles WHERE id = :id RETURNING id"), {"id": bundle_id})
+    r = db.execute(
+        text("DELETE FROM policy_bundles WHERE id = :id RETURNING id"), {"id": bundle_id}
+    )
     db.commit()
     if not r.fetchone():
         raise HTTPException(status_code=404, detail="Bundle not found")

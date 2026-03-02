@@ -4,11 +4,11 @@ Canonical asset state schema. This is the single source of truth for:
 - Alerts (what is "down" / "failing")
 - Grafana should visualize this, not derive its own logic.
 """
+
 from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, computed_field
-
 
 AssetStatusLevel = Literal["green", "amber", "red"]
 CriticalityLevel = Literal["high", "medium", "low"]
@@ -86,10 +86,11 @@ class AssetState(BaseModel):
 
 class DataCompleteness(BaseModel):
     """How many checks we got vs expected in the window."""
+
     checks: int = 0
     expected: int = 0
     label_24h: str = ""  # e.g. "42/1440"
-    label_1h: str = ""   # e.g. "42/60"
+    label_1h: str = ""  # e.g. "42/60"
     pct_24h: float | None = None
     pct_1h: float | None = None
 
@@ -113,11 +114,14 @@ class AssetDetailResponse(BaseModel):
 
 class ReportSummary(BaseModel):
     """Weekly/summary report: exec-facing metrics."""
+
     period: str = "24h"
     uptime_pct: float = 0.0
     posture_score_avg: float | None = None
     avg_latency_ms: float | None = None
-    top_incidents: list[str] = Field(default_factory=list, description="Asset IDs currently down or with most errors")
+    top_incidents: list[str] = Field(
+        default_factory=list, description="Asset IDs currently down or with most errors"
+    )
     total_assets: int = 0
     green: int = 0
     amber: int = 0
@@ -131,7 +135,9 @@ class PostureSummary(BaseModel):
     amber: int = 0
     red: int = 0
     posture_score_avg: float | None = None
-    down_assets: list[str] = Field(default_factory=list, description="asset_ids currently red (down)")
+    down_assets: list[str] = Field(
+        default_factory=list, description="asset_ids currently red (down)"
+    )
 
     class Config:
         json_schema_extra = {

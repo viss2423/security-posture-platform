@@ -1,9 +1,10 @@
 """Integrations: Slack interactive, Jira from incident (Phase B.4), WhatsApp (Twilio)."""
+
 import base64
 import hashlib
 import hmac
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -24,7 +25,9 @@ def _verify_twilio_signature(url: str, params: dict, signature: str | None) -> b
         return False
     sorted_params = urlencode(sorted(params.items()), safe="")
     payload = url + sorted_params
-    expected = base64.b64encode(hmac.new(token, payload.encode("utf-8"), hashlib.sha1).digest()).decode()
+    expected = base64.b64encode(
+        hmac.new(token, payload.encode("utf-8"), hashlib.sha1).digest()
+    ).decode()
     return hmac.compare_digest(signature, expected)
 
 
@@ -35,14 +38,15 @@ def _verify_slack_signature(body: bytes, signature: str | None, timestamp: str |
         return False
     try:
         import time
+
         if abs(time.time() - int(timestamp)) > 60 * 5:
             return False
     except ValueError:
         return False
     sig_basestring = f"v0:{timestamp}:{body.decode('utf-8')}"
-    expected = "v0=" + hmac.new(
-        secret.encode(), sig_basestring.encode(), hashlib.sha256
-    ).hexdigest()
+    expected = (
+        "v0=" + hmac.new(secret.encode(), sig_basestring.encode(), hashlib.sha256).hexdigest()
+    )
     return hmac.compare_digest(expected, signature)
 
 
@@ -78,7 +82,7 @@ def _create_jira_for_incident(incident_id: int, db: Session) -> tuple[str, str] 
     new_meta = {**meta, "jira_issue_key": issue_key, "jira_issue_url": browse_url}
     db.execute(
         text("UPDATE incidents SET metadata = :meta, updated_at = :now WHERE id = :id"),
-        {"meta": json.dumps(new_meta), "now": datetime.now(timezone.utc), "id": incident_id},
+        {"meta": json.dumps(new_meta), "now": datetime.now(UTC), "id": incident_id},
     )
     db.commit()
     return (issue_key, browse_url)
@@ -92,7 +96,9 @@ async def slack_interactions(request: Request, db: Session = Depends(get_db)):
     """
     body = await request.body()
     signature = request.headers.get("x-slack-signature") or request.headers.get("X-Slack-Signature")
-    timestamp = request.headers.get("x-slack-request-timestamp") or request.headers.get("X-Slack-Request-Timestamp")
+    timestamp = request.headers.get("x-slack-request-timestamp") or request.headers.get(
+        "X-Slack-Request-Timestamp"
+    )
     if not _verify_slack_signature(body, signature, timestamp):
         return PlainTextResponse("Invalid signature", status_code=401)
 
@@ -100,6 +106,7 @@ async def slack_interactions(request: Request, db: Session = Depends(get_db)):
     content_type = request.headers.get("content-type") or ""
     if "application/x-www-form-urlencoded" in content_type:
         from urllib.parse import parse_qs
+
         parsed = parse_qs(body.decode("utf-8"))
         payload_str = (parsed.get("payload") or [None])[0]
         if not payload_str:
@@ -119,12 +126,15 @@ async def slack_interactions(request: Request, db: Session = Depends(get_db)):
                     return PlainTextResponse("Invalid incident_id", status_code=400)
                 result = _create_jira_for_incident(incident_id, db)
                 if result is None:
-                    return PlainTextResponse("Jira not configured or incident not found", status_code=200)
+                    return PlainTextResponse(
+                        "Jira not configured or incident not found", status_code=200
+                    )
                 issue_key, url = result
                 # Optionally update the message via response_url
                 response_url = payload.get("response_url")
                 if response_url:
                     import httpx
+
                     with httpx.Client(timeout=5.0) as client:
                         client.post(
                             response_url,
@@ -134,7 +144,10 @@ async def slack_interactions(request: Request, db: Session = Depends(get_db)):
                                 "blocks": [
                                     {
                                         "type": "section",
-                                        "text": {"type": "mrkdwn", "text": f"*Jira ticket created:* <{url}|{issue_key}>"},
+                                        "text": {
+                                            "type": "mrkdwn",
+                                            "text": f"*Jira ticket created:* <{url}|{issue_key}>",
+                                        },
                                     }
                                 ],
                             },
@@ -152,7 +165,9 @@ async def whatsapp_incoming(request: Request):
     """
     form = await request.form()
     params = dict(form)
-    signature = request.headers.get("X-Twilio-Signature") or request.headers.get("x-twilio-signature")
+    signature = request.headers.get("X-Twilio-Signature") or request.headers.get(
+        "x-twilio-signature"
+    )
     url = str(request.url)
     if getattr(settings, "TWILIO_AUTH_TOKEN", None) and signature:
         if not _verify_twilio_signature(url, params, signature):

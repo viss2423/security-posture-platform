@@ -1,6 +1,7 @@
 """Prometheus-style metrics: in-memory counters updated by middleware."""
-from collections import defaultdict
+
 import time
+from collections import defaultdict
 
 # (method, path_template, status_class) -> count. path_template normalizes path (e.g. /assets/{id} -> /assets/).
 _request_counts: dict[tuple[str, str, str], int] = defaultdict(int)
@@ -36,9 +37,11 @@ def format_prometheus() -> str:
         labels = f'method="{method}",path="{path}",status="{status_class}"'
         lines.append(f"http_requests_total{{{labels}}} {count}")
     lines.append("")
-    lines.extend([
-        "# HELP process_uptime_seconds Process uptime in seconds.",
-        "# TYPE process_uptime_seconds gauge",
-        f"process_uptime_seconds {get_uptime_seconds():.2f}",
-    ])
+    lines.extend(
+        [
+            "# HELP process_uptime_seconds Process uptime in seconds.",
+            "# TYPE process_uptime_seconds gauge",
+            f"process_uptime_seconds {get_uptime_seconds():.2f}",
+        ]
+    )
     return "\n".join(lines) + "\n"

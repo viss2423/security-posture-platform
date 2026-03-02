@@ -1,9 +1,11 @@
 """Scanner config: scope (internal_only | internal_and_verified), API, internal URLs, interval."""
+
 import os
 
 SCOPE = os.environ.get("SCANNER_SCOPE", "internal_only")  # internal_only | internal_and_verified
 API_URL = os.environ.get("API_URL", "http://api:8000").rstrip("/")
 SCAN_INTERVAL_SECONDS = int(os.environ.get("SCAN_INTERVAL_SECONDS", "21600"))  # 6h default
+
 
 # Internal lab targets: list of (base_url, asset_key). Used for internal_only and always included for internal_and_verified.
 # INTERNAL_TARGETS = "http://verify-web|verify-web,http://juiceshop:3000|juice-shop,http://api:8000|secplat-api"
@@ -20,13 +22,18 @@ def _internal_targets() -> list[tuple[str, str]]:
             else:
                 url = part
                 from urllib.parse import urlparse
+
                 p = urlparse(url if url.startswith("http") else "http://" + url)
                 key = (p.hostname or "internal").replace(".", "-")
                 out.append((url if url.startswith("http") else "http://" + url, key))
         return out
     # Default mapping from common env vars to asset_keys (match ingestion seed)
     targets = []
-    for var, default_key in (("VERIFY_WEB_URL", "verify-web"), ("JUICE_URL", "juice-shop"), ("API_URL", "secplat-api")):
+    for var, default_key in (
+        ("VERIFY_WEB_URL", "verify-web"),
+        ("JUICE_URL", "juice-shop"),
+        ("API_URL", "secplat-api"),
+    ):
         val = os.environ.get(var, "").strip()
         if not val:
             continue
@@ -34,6 +41,7 @@ def _internal_targets() -> list[tuple[str, str]]:
             val = "http://" + val
         try:
             from urllib.parse import urlparse
+
             p = urlparse(val)
             base = f"{p.scheme}://{p.netloc}"
             if not any(b == base for b, _ in targets):
@@ -41,6 +49,7 @@ def _internal_targets() -> list[tuple[str, str]]:
         except Exception:
             targets.append((val, default_key))
     return targets
+
 
 INTERNAL_TARGETS = _internal_targets()  # list of (url, asset_key)
 

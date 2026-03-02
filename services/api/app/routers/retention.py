@@ -1,17 +1,19 @@
 """Data retention: prune old events (OpenSearch) and report snapshots (Postgres)."""
+
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
+
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.settings import settings
+from app.audit import log_audit
 from app.db import get_db
-from app.routers.auth import require_role
 from app.rate_limit import check_rate_limit
 from app.request_context import request_id_ctx
-from app.audit import log_audit
+from app.routers.auth import require_role
+from app.settings import settings
 
 audit = logging.getLogger("secplat.audit")
 
@@ -21,7 +23,11 @@ EVENTS_INDEX = "secplat-events"
 
 
 def _client_id(request: Request) -> str:
-    return request.client.host if request.client else request.headers.get("x-forwarded-for", "unknown").split(",")[0].strip()
+    return (
+        request.client.host
+        if request.client
+        else request.headers.get("x-forwarded-for", "unknown").split(",")[0].strip()
+    )
 
 
 @router.post("/apply")
@@ -32,11 +38,15 @@ async def retention_apply(
 ):
     key = f"retention:{_client_id(request)}"
     if not await check_rate_limit(key, settings.RATE_LIMIT_RETENTION_PER_HOUR, 3600.0):
-        raise HTTPException(status_code=429, detail="Retention apply rate limited. Try again later.")
+        raise HTTPException(
+            status_code=429, detail="Retention apply rate limited. Try again later."
+        )
     result = {"events_deleted": None, "snapshots_deleted": None, "errors": []}
 
     # OpenSearch: delete events older than EVENTS_RETENTION_DAYS
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=settings.EVENTS_RETENTION_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    cutoff = (datetime.now(UTC) - timedelta(days=settings.EVENTS_RETENTION_DAYS)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
     url = f"{settings.OPENSEARCH_URL.rstrip('/')}/{EVENTS_INDEX}/_delete_by_query"
     body = {
         "query": {"range": {"@timestamp": {"lt": cutoff}}},
@@ -71,7 +81,9 @@ async def retention_apply(
         result["errors"].append(f"postgres: {e!s}")
 
     if result["errors"]:
-        raise HTTPException(status_code=502, detail={"message": "Retention applied with errors", "result": result})
+        raise HTTPException(
+            status_code=502, detail={"message": "Retention applied with errors", "result": result}
+        )
     req_id = request_id_ctx.get("")
     audit.info(
         "action=retention_apply user=%s events_deleted=%s snapshots_deleted=%s request_id=%s",
@@ -84,7 +96,10 @@ async def retention_apply(
         db,
         "retention_apply",
         user_name=_user,
-        details={"events_deleted": result["events_deleted"], "snapshots_deleted": result["snapshots_deleted"]},
+        details={
+            "events_deleted": result["events_deleted"],
+            "snapshots_deleted": result["snapshots_deleted"],
+        },
         request_id=req_id or None,
     )
     db.commit()

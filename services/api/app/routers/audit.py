@@ -1,4 +1,5 @@
 """Audit log API: list persisted audit events with filters."""
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -43,7 +44,9 @@ def list_audit(
         "items": [
             {
                 "id": r["id"],
-                "created_at": r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else str(r["created_at"]),
+                "created_at": r["created_at"].isoformat()
+                if hasattr(r["created_at"], "isoformat")
+                else str(r["created_at"]),
                 "action": r["action"],
                 "user_name": r["user_name"],
                 "asset_key": r["asset_key"],

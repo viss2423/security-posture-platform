@@ -1,4 +1,5 @@
 """Persist audit events to DB for audit log UI."""
+
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -17,10 +18,14 @@ def log_audit(
         VALUES (:action, :user_name, :asset_key, CAST(:details AS jsonb), :request_id)
     """)
     import json
-    db.execute(q, {
-        "action": action,
-        "user_name": user_name,
-        "asset_key": asset_key,
-        "details": json.dumps(details or {}),
-        "request_id": request_id,
-    })
+
+    db.execute(
+        q,
+        {
+            "action": action,
+            "user_name": user_name,
+            "asset_key": asset_key,
+            "details": json.dumps(details or {}),
+            "request_id": request_id,
+        },
+    )

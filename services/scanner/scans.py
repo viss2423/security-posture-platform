@@ -1,20 +1,35 @@
 """TLS and security-headers checks. Returns list of finding dicts (category, title, severity, evidence, remediation, finding_key)."""
+
 import hashlib
-import ssl
 import socket
-from datetime import datetime, timezone
+import ssl
+from datetime import UTC, datetime
 from urllib.parse import urlparse
 
 import httpx
-
 from config import REQUEST_TIMEOUT
 
 # Headers we care about (presence = good; absence = finding)
 SECURITY_HEADERS = [
-    ("Strict-Transport-Security", "HSTS", "high", "Add Strict-Transport-Security (e.g. max-age=31536000; includeSubDomains)."),
+    (
+        "Strict-Transport-Security",
+        "HSTS",
+        "high",
+        "Add Strict-Transport-Security (e.g. max-age=31536000; includeSubDomains).",
+    ),
     ("Content-Security-Policy", "CSP", "medium", "Add Content-Security-Policy to reduce XSS risk."),
-    ("X-Frame-Options", "X-Frame-Options", "medium", "Add X-Frame-Options (e.g. DENY or SAMEORIGIN)."),
-    ("X-Content-Type-Options", "X-Content-Type-Options", "low", "Add X-Content-Type-Options: nosniff."),
+    (
+        "X-Frame-Options",
+        "X-Frame-Options",
+        "medium",
+        "Add X-Frame-Options (e.g. DENY or SAMEORIGIN).",
+    ),
+    (
+        "X-Content-Type-Options",
+        "X-Content-Type-Options",
+        "low",
+        "Add X-Content-Type-Options: nosniff.",
+    ),
 ]
 
 
@@ -55,58 +70,67 @@ def scan_tls(url: str, asset_key: str) -> list[dict]:
                 cert = ssock.getpeercert()
                 exp = datetime.strptime(cert["notAfter"], "%b %d %H:%M:%S %Y %Z")
                 if exp.tzinfo is None:
-                    exp = exp.replace(tzinfo=timezone.utc)
-                days_left = (exp - datetime.now(timezone.utc)).days
+                    exp = exp.replace(tzinfo=UTC)
+                days_left = (exp - datetime.now(UTC)).days
                 issuer = dict(x[0] for x in cert.get("issuer", []))
                 issuer_cn = issuer.get("commonName", "—")
-                protocol = ssock.version()
     except ssl.SSLCertVerificationError as e:
-        findings.append({
-            "finding_key": _finding_key(asset_key, "tls", "Certificate verification failed"),
-            "category": "tls",
-            "title": "Certificate verification failed",
-            "severity": "high",
-            "confidence": "high",
-            "evidence": str(e)[:500],
-            "remediation": "Fix certificate chain or hostname mismatch.",
-            "source": "tls_scan",
-        })
+        findings.append(
+            {
+                "finding_key": _finding_key(asset_key, "tls", "Certificate verification failed"),
+                "category": "tls",
+                "title": "Certificate verification failed",
+                "severity": "high",
+                "confidence": "high",
+                "evidence": str(e)[:500],
+                "remediation": "Fix certificate chain or hostname mismatch.",
+                "source": "tls_scan",
+            }
+        )
         return findings
     except (socket.timeout, OSError, ssl.SSLError) as e:
-        findings.append({
-            "finding_key": _finding_key(asset_key, "tls", "TLS connection failed"),
-            "category": "tls",
-            "title": "TLS connection failed",
-            "severity": "medium",
-            "confidence": "high",
-            "evidence": str(e)[:500],
-            "remediation": "Ensure TLS is enabled and reachable.",
-            "source": "tls_scan",
-        })
+        findings.append(
+            {
+                "finding_key": _finding_key(asset_key, "tls", "TLS connection failed"),
+                "category": "tls",
+                "title": "TLS connection failed",
+                "severity": "medium",
+                "confidence": "high",
+                "evidence": str(e)[:500],
+                "remediation": "Ensure TLS is enabled and reachable.",
+                "source": "tls_scan",
+            }
+        )
         return findings
 
     if days_left <= 0:
-        findings.append({
-            "finding_key": _finding_key(asset_key, "tls", "Certificate expired"),
-            "category": "tls",
-            "title": "Certificate expired",
-            "severity": "critical",
-            "confidence": "high",
-            "evidence": f"Expired {exp.isoformat()}",
-            "remediation": "Renew the certificate.",
-            "source": "tls_scan",
-        })
+        findings.append(
+            {
+                "finding_key": _finding_key(asset_key, "tls", "Certificate expired"),
+                "category": "tls",
+                "title": "Certificate expired",
+                "severity": "critical",
+                "confidence": "high",
+                "evidence": f"Expired {exp.isoformat()}",
+                "remediation": "Renew the certificate.",
+                "source": "tls_scan",
+            }
+        )
     elif days_left <= 14:
-        findings.append({
-            "finding_key": _finding_key(asset_key, "tls", "Certificate expiring within 14 days"),
-            "category": "tls",
-            "title": f"Certificate expiring in {days_left} days",
-            "severity": "high",
-            "confidence": "high",
-            "evidence": f"Expires {exp.isoformat()}, issuer {issuer_cn}",
-            "remediation": "Renew the certificate before expiry.",
-            "source": "tls_scan",
-        })
+        findings.append(
+            {
+                "finding_key": _finding_key(
+                    asset_key, "tls", "Certificate expiring within 14 days"
+                ),
+                "category": "tls",
+                "title": f"Certificate expiring in {days_left} days",
+                "severity": "high",
+                "confidence": "high",
+                "evidence": f"Expires {exp.isoformat()}, issuer {issuer_cn}",
+                "remediation": "Renew the certificate before expiry.",
+                "source": "tls_scan",
+            }
+        )
     # Optional: low-severity metadata finding for visibility (cert OK)
     # findings.append({ "title": "TLS OK", "severity": "info", ... })  # skip to avoid noise
     return findings
@@ -119,30 +143,34 @@ def scan_headers(url: str, asset_key: str) -> list[dict]:
         r = httpx.get(url, follow_redirects=True, timeout=REQUEST_TIMEOUT)
         headers_lower = {k.lower(): v for k, v in r.headers.items()}
     except httpx.HTTPError as e:
-        findings.append({
-            "finding_key": _finding_key(asset_key, "headers", "HTTP request failed"),
-            "category": "security_headers",
-            "title": "HTTP request failed",
-            "severity": "medium",
-            "confidence": "high",
-            "evidence": str(e)[:500],
-            "remediation": "Ensure the URL is reachable.",
-            "source": "header_scan",
-        })
+        findings.append(
+            {
+                "finding_key": _finding_key(asset_key, "headers", "HTTP request failed"),
+                "category": "security_headers",
+                "title": "HTTP request failed",
+                "severity": "medium",
+                "confidence": "high",
+                "evidence": str(e)[:500],
+                "remediation": "Ensure the URL is reachable.",
+                "source": "header_scan",
+            }
+        )
         return findings
 
     for header_name, short_name, severity, remediation in SECURITY_HEADERS:
         if header_name.lower() not in headers_lower:
-            findings.append({
-                "finding_key": _finding_key(asset_key, "headers", f"Missing {short_name}"),
-                "category": "security_headers",
-                "title": f"Missing {short_name}",
-                "severity": severity,
-                "confidence": "high",
-                "evidence": f"Header {header_name} not present",
-                "remediation": remediation,
-                "source": "header_scan",
-            })
+            findings.append(
+                {
+                    "finding_key": _finding_key(asset_key, "headers", f"Missing {short_name}"),
+                    "category": "security_headers",
+                    "title": f"Missing {short_name}",
+                    "severity": severity,
+                    "confidence": "high",
+                    "evidence": f"Header {header_name} not present",
+                    "remediation": remediation,
+                    "source": "header_scan",
+                }
+            )
     return findings
 
 

@@ -1,5 +1,7 @@
 """Alert lifecycle: firing, acked, suppressed, resolved. Uses posture down_assets + alert_states table."""
-from datetime import datetime, timezone
+
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -14,7 +16,9 @@ router = APIRouter(prefix="/alerts", tags=["alerts"])
 
 def _get_alert_states(db: Session) -> dict:
     """Return dict asset_key -> { state, ack_reason, acked_by, acked_at, suppressed_until, assigned_to, resolved_at, updated_at }."""
-    q = text("SELECT asset_key, state, ack_reason, acked_by, acked_at, suppressed_until, assigned_to, resolved_at, updated_at FROM alert_states")
+    q = text(
+        "SELECT asset_key, state, ack_reason, acked_by, acked_at, suppressed_until, assigned_to, resolved_at, updated_at FROM alert_states"
+    )
     rows = db.execute(q).mappings().all()
     return {r["asset_key"]: dict(r) for r in rows}
 
@@ -28,7 +32,7 @@ def _upsert_alert_state(
     suppressed_until: datetime | None = None,
     assigned_to: str | None = None,
 ) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if state == "acked":
         q = text("""
             INSERT INTO alert_states (asset_key, state, ack_reason, acked_by, acked_at, updated_at)
@@ -37,7 +41,15 @@ def _upsert_alert_state(
               state = 'acked', ack_reason = :ack_reason, acked_by = :acked_by, acked_at = :now,
               suppressed_until = NULL, updated_at = :now
         """)
-        db.execute(q, {"asset_key": asset_key, "ack_reason": ack_reason or "", "acked_by": acked_by, "now": now})
+        db.execute(
+            q,
+            {
+                "asset_key": asset_key,
+                "ack_reason": ack_reason or "",
+                "acked_by": acked_by,
+                "now": now,
+            },
+        )
     elif state == "suppressed":
         q = text("""
             INSERT INTO alert_states (asset_key, state, suppressed_until, updated_at)
@@ -69,7 +81,7 @@ def list_alerts(db: Session = Depends(get_db), _user: str = Depends(require_auth
     """Return alerts grouped by state: firing, acked, suppressed, resolved."""
     down_assets = _get_down_assets()
     states_map = _get_alert_states(db)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     firing = []
     acked = []
@@ -90,7 +102,11 @@ def list_alerts(db: Session = Depends(get_db), _user: str = Depends(require_auth
         row = states_map.get(asset_key)
         sup_until = row.get("suppressed_until") if row else None
         if sup_until and (sup_until if hasattr(sup_until, "tzinfo") else sup_until) > now:
-            suppressed.append({"asset_key": asset_key, **_serialize(row)} if row else {"asset_key": asset_key, "state": "suppressed"})
+            suppressed.append(
+                {"asset_key": asset_key, **_serialize(row)}
+                if row
+                else {"asset_key": asset_key, "state": "suppressed"}
+            )
             continue
         if row and row.get("state") == "acked":
             acked.append({"asset_key": asset_key, **_serialize(row)})
@@ -130,28 +146,49 @@ class AssignBody(BaseModel):
 
 
 @router.post("/ack")
-def alert_ack(body: AckBody, db: Session = Depends(get_db), user: str = Depends(require_role(["admin", "analyst"]))):
+def alert_ack(
+    body: AckBody,
+    db: Session = Depends(get_db),
+    user: str = Depends(require_role(["admin", "analyst"])),
+):
     _upsert_alert_state(db, body.asset_key, "acked", ack_reason=body.reason, acked_by=user)
     return {"ok": True, "asset_key": body.asset_key, "state": "acked"}
 
 
 @router.post("/suppress")
-def alert_suppress(body: SuppressBody, db: Session = Depends(get_db), _user: str = Depends(require_role(["admin", "analyst"]))):
+def alert_suppress(
+    body: SuppressBody,
+    db: Session = Depends(get_db),
+    _user: str = Depends(require_role(["admin", "analyst"])),
+):
     try:
         until = datetime.fromisoformat(body.until_iso.replace("Z", "+00:00"))
     except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail="Invalid until_iso; use ISO datetime")
     _upsert_alert_state(db, body.asset_key, "suppressed", suppressed_until=until)
-    return {"ok": True, "asset_key": body.asset_key, "state": "suppressed", "suppressed_until": body.until_iso}
+    return {
+        "ok": True,
+        "asset_key": body.asset_key,
+        "state": "suppressed",
+        "suppressed_until": body.until_iso,
+    }
 
 
 @router.post("/resolve")
-def alert_resolve(body: ResolveBody, db: Session = Depends(get_db), _user: str = Depends(require_role(["admin", "analyst"]))):
+def alert_resolve(
+    body: ResolveBody,
+    db: Session = Depends(get_db),
+    _user: str = Depends(require_role(["admin", "analyst"])),
+):
     _upsert_alert_state(db, body.asset_key, "resolved")
     return {"ok": True, "asset_key": body.asset_key, "state": "resolved"}
 
 
 @router.post("/assign")
-def alert_assign(body: AssignBody, db: Session = Depends(get_db), _user: str = Depends(require_role(["admin", "analyst"]))):
+def alert_assign(
+    body: AssignBody,
+    db: Session = Depends(get_db),
+    _user: str = Depends(require_role(["admin", "analyst"])),
+):
     _upsert_alert_state(db, body.asset_key, "assigned", assigned_to=body.assigned_to)
     return {"ok": True, "asset_key": body.asset_key, "assigned_to": body.assigned_to}

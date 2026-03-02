@@ -1,10 +1,10 @@
 from .posture import (
-    AssetState,
     AssetDetailResponse,
+    AssetState,
+    AssetStatusLevel,
+    CriticalityLevel,
     DataCompleteness,
     PostureSummary,
-    CriticalityLevel,
-    AssetStatusLevel,
 )
 
 __all__ = [

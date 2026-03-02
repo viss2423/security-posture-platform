@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import re
+from datetime import UTC, datetime
 from typing import Any
 
 import yaml
@@ -252,7 +252,9 @@ def evaluate_rules(
 
             elif rtype == "require_header":
                 required_header = str(params.get("header") or "content-security-policy").strip()
-                missing = [f for f in open_findings if _finding_matches_missing_header(f, required_header)]
+                missing = [
+                    f for f in open_findings if _finding_matches_missing_header(f, required_header)
+                ]
                 if missing:
                     failed_evidence = {
                         "required_header": _header_token(required_header),
@@ -263,7 +265,9 @@ def evaluate_rules(
                 min_version_raw = str(params.get("min_version") or "1.2").strip()
                 minimum = _parse_tls_version(min_version_raw) or (1, 2)
                 tls_open = [
-                    f for f in open_findings if str(f.get("category") or "").strip().lower() == "tls"
+                    f
+                    for f in open_findings
+                    if str(f.get("category") or "").strip().lower() == "tls"
                 ]
                 for finding in tls_open:
                     text_blob = (
@@ -279,7 +283,9 @@ def evaluate_rules(
                             "finding": _simplify_finding(finding),
                         }
                         break
-                    if any(x in title for x in ("no https", "tls connection failed", "certificate")):
+                    if any(
+                        x in title for x in ("no https", "tls connection failed", "certificate")
+                    ):
                         failed_evidence = {
                             "required_min_version": f"{minimum[0]}.{minimum[1]}",
                             "actual_version": None,
