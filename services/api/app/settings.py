@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     STALE_THRESHOLD_SECONDS: int = 300  # > this = amber/stale
     EXPECTED_CHECK_INTERVAL_SECONDS: int = 60  # ingestion runs every Ns
     LATENCY_SLO_MS: int = 200  # latency above = SLO breach
+    POSTURE_CACHE_TTL_SECONDS: float = (
+        5.0  # reuse posture reads briefly to avoid duplicate OpenSearch work
+    )
 
     # Alerting: optional Slack webhook; when set, POST /posture/alert/send can notify
     SLACK_WEBHOOK_URL: str | None = None

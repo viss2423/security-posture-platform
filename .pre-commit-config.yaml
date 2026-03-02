@@ -40,3 +40,9 @@ repos:
         language: system
         files: ^services/frontend/.*\.(js|ts|tsx)$
         pass_filenames: true
+      - id: frontend-performance-budget
+        name: frontend performance budget
+        entry: node scripts/frontend-performance-check.cjs
+        language: system
+        files: ^services/frontend/.*\.(css|js|ts|tsx)$|^services/frontend/(next\.config\.js|package(-lock)?\.json)$
+        pass_filenames: false

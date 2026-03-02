@@ -1,0 +1,36 @@
+name: Frontend performance
+
+on:
+  pull_request:
+    paths:
+      - "services/frontend/**"
+      - "scripts/frontend-performance-check.cjs"
+      - ".github/workflows/frontend-performance.yml"
+      - "package.json"
+  push:
+    branches: [main, master]
+    paths:
+      - "services/frontend/**"
+      - "scripts/frontend-performance-check.cjs"
+      - ".github/workflows/frontend-performance.yml"
+      - "package.json"
+
+jobs:
+  budget:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: services/frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: services/frontend
+
+      - name: Enforce frontend performance budget
+        run: node scripts/frontend-performance-check.cjs

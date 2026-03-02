@@ -6,6 +6,8 @@ import io
 import json
 import uuid
 from datetime import UTC, datetime
+from threading import Lock
+from time import monotonic
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -32,6 +34,12 @@ router = APIRouter(prefix="/posture", tags=["posture"])
 STATUS_INDEX = "secplat-asset-status"
 EVENTS_INDEX = "secplat-events"
 OPENSEARCH_BASE = lambda idx: f"{settings.OPENSEARCH_URL.rstrip('/')}/{idx}"
+_POSTURE_CACHE_LOCK = Lock()
+_POSTURE_CACHE = {
+    "expires_at": 0.0,
+    "total": 0,
+    "items": [],
+}
 
 
 def _criticality_text(v) -> str | None:
@@ -148,6 +156,14 @@ def _recommendations(
 
 
 def _fetch_posture_list_raw():
+    ttl_seconds = max(float(getattr(settings, "POSTURE_CACHE_TTL_SECONDS", 0) or 0), 0.0)
+    now = monotonic()
+    if ttl_seconds > 0:
+        with _POSTURE_CACHE_LOCK:
+            if _POSTURE_CACHE["expires_at"] > now:
+                cached_items = [dict(item) for item in _POSTURE_CACHE["items"]]
+                return _POSTURE_CACHE["total"], cached_items
+
     body = {
         "size": 1000,
         "query": {"match_all": {}},
@@ -164,7 +180,19 @@ def _fetch_posture_list_raw():
     if isinstance(total, dict):
         total = total.get("value", 0)
     items = [h["_source"] for h in hits.get("hits", [])]
+    if ttl_seconds > 0:
+        with _POSTURE_CACHE_LOCK:
+            _POSTURE_CACHE["expires_at"] = monotonic() + ttl_seconds
+            _POSTURE_CACHE["total"] = total
+            _POSTURE_CACHE["items"] = [dict(item) for item in items]
     return total, items
+
+
+def _reset_posture_cache():
+    with _POSTURE_CACHE_LOCK:
+        _POSTURE_CACHE["expires_at"] = 0.0
+        _POSTURE_CACHE["total"] = 0
+        _POSTURE_CACHE["items"] = []
 
 
 def _raw_list_to_states(raw_items: list[dict]) -> list[AssetState]:

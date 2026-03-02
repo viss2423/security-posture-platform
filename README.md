@@ -441,6 +441,12 @@ docker compose restart grafana
 docker compose config > /dev/null && echo "compose ok"
 ```
 
+### Frontend performance workflow
+
+- Run `npm run perf:check` from the repo root before committing frontend changes. It builds the Next.js app and enforces basic bundle/build budgets.
+- `pre-commit` now runs the same performance budget automatically when `services/frontend/**` changes.
+- GitHub Actions also runs the `Frontend performance` workflow on frontend PRs and pushes to `main` / `master`.
+
 ---
 
 ## Security notes

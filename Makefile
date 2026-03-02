@@ -2,7 +2,7 @@
 # Usage: make secure-check | make secure-review
 # On Windows: use Git Bash or "make" from WSL.
 
-.PHONY: secure-check secure-review
+.PHONY: secure-check secure-review perf-check
 
 # Run scanners only (no AI). Use before push or when you want a fuller local check.
 secure-check:
@@ -21,3 +21,7 @@ secure-check:
 OLLAMA_MODEL ?= codellama
 secure-review:
 	@bash scripts/secure_review_ollama.sh "$(OLLAMA_MODEL)"
+
+# Run the frontend production build and enforce basic bundle/build budgets.
+perf-check:
+	@node scripts/frontend-performance-check.cjs
