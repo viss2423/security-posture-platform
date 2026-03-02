@@ -1,0 +1,12 @@
+apiVersion: 1
+
+providers:
+  - name: "secplat"
+    orgId: 1
+    folder: "SecPlat"
+    type: file
+    disableDeletion: true
+    editable: true
+    options:
+      path: /etc/grafana/dashboards
+

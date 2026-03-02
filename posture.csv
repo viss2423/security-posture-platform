@@ -1,0 +1,5 @@
+asset_id,status,last_seen,reason,criticality,name,owner,environment,posture_score
+juice-shop,green,2026-02-09 15:57:22+00:00,,medium,juice-shop,,dev,100
+example-com,green,2026-02-09 15:57:22+00:00,,medium,example-com,,dev,100
+verify-web,green,2026-02-09 15:57:22+00:00,,medium,verify-web,,dev,100
+secplat-api,green,2026-02-09 15:57:22+00:00,,medium,secplat-api,,dev,100

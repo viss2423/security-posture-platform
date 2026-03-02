@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: secplat-config
+  namespace: secplat
+  labels:
+    app.kubernetes.io/part-of: secplat
+data:
+  ENV: "prod"
+  LOG_LEVEL: "INFO"
+  API_URL: "http://secplat-api:8000"
+  FRONTEND_URL: "https://secplat.example.com"
+  OPENSEARCH_URL: "http://opensearch.secplat.svc.cluster.local:9200"
+  REDIS_URL: "redis://redis.secplat.svc.cluster.local:6379/0"
+  REQUIRE_DOMAIN_VERIFICATION: "true"
+  BLOCK_PRIVATE_IPS: "true"
+  MAX_SCAN_DURATION_SECONDS: "900"
+  MAX_REQUESTS_PER_SECOND: "2"
+  STALE_THRESHOLD_SECONDS: "300"
+  EXPECTED_CHECK_INTERVAL_SECONDS: "60"
+  LATENCY_SLO_MS: "200"
+  DERIVER_INTERVAL_SECONDS: "60"
+  ENABLE_SCHEDULED_SNAPSHOTS: "false"
+  SCHEDULED_SNAPSHOT_INTERVAL_HOURS: "24"
+  AI_ENABLED: "false"
+  AI_PROVIDER: "ollama"
+  AI_TIMEOUT_SECONDS: "60"
+  AI_TEMPERATURE: "0.2"
+  OLLAMA_BASE_URL: "http://ollama.secplat.svc.cluster.local:11434"
+  OLLAMA_MODEL: "llama3.1:8b"
+  OPENAI_BASE_URL: "https://api.openai.com/v1"
+  OPENAI_MODEL: "gpt-4.1-mini"
+  INGESTION_OS_URL: "http://opensearch.secplat.svc.cluster.local:9200"
+  INGESTION_VERIFY_WEB_URL: "http://verify-web.secplat.svc.cluster.local/.well-known/secplat-verification.txt"
+  INGESTION_JUICE_URL: "http://juiceshop.secplat.svc.cluster.local:3000"
+  INGESTION_EXAMPLE_COM_URL: "https://example.com"

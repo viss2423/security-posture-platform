@@ -1,0 +1,22 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres-ingress-from-secplat-api
+  namespace: secplat
+  labels:
+    app.kubernetes.io/part-of: secplat
+spec:
+  # Applies only if Postgres is deployed in-cluster with this label.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              secplat-role: api
+      ports:
+        - protocol: TCP
+          port: 5432

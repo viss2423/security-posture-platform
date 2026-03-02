@@ -1,0 +1,296 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: secplat-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: secplat-redis
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  opensearch:
+    image: opensearchproject/opensearch:2.14.0
+    container_name: secplat-opensearch
+    restart: "no"
+    environment:
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - OPENSEARCH_JAVA_OPTS=-Xms${OPENSEARCH_HEAP} -Xmx${OPENSEARCH_HEAP}
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_INITIAL_ADMIN_PASSWORD}
+      - plugins.security.disabled=true
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+    ports:
+      - "127.0.0.1:${OPENSEARCH_PORT}:9200"
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+      - ./infra/opensearch/opensearch.yml:/usr/share/opensearch/config/opensearch.yml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9200 >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: secplat-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT}:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ./infra/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./infra/grafana/dashboards:/etc/grafana/dashboards:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  juiceshop:
+    image: bkimminich/juice-shop:latest
+    container_name: secplat-juiceshop
+    ports:
+      - "127.0.0.1:${JUICESHOP_PORT:-3002}:3000"
+
+  api:
+    build:
+      context: ./services/api
+    container_name: secplat-api
+    environment:
+      ENV: ${ENV}
+      API_SECRET_KEY: ${API_SECRET_KEY}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      SCANNER_SERVICE_USERNAME: ${SCANNER_SERVICE_USERNAME:-scanner-service}
+      SCANNER_SERVICE_PASSWORD: ${SCANNER_SERVICE_PASSWORD:-scanner-local-strong}
+      INGESTION_SERVICE_USERNAME: ${INGESTION_SERVICE_USERNAME:-ingestion-service}
+      INGESTION_SERVICE_PASSWORD: ${INGESTION_SERVICE_PASSWORD:-ingestion-local-strong}
+      CORRELATOR_SERVICE_USERNAME: ${CORRELATOR_SERVICE_USERNAME:-correlator-service}
+      CORRELATOR_SERVICE_PASSWORD: ${CORRELATOR_SERVICE_PASSWORD:-correlator-local-strong}
+      POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      OPENSEARCH_URL: http://opensearch:9200
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      MAX_SCAN_DURATION_SECONDS: ${MAX_SCAN_DURATION_SECONDS}
+      MAX_REQUESTS_PER_SECOND: ${MAX_REQUESTS_PER_SECOND}
+      BLOCK_PRIVATE_IPS: ${BLOCK_PRIVATE_IPS}
+      REQUIRE_DOMAIN_VERIFICATION: ${REQUIRE_DOMAIN_VERIFICATION}
+      STALE_THRESHOLD_SECONDS: ${STALE_THRESHOLD_SECONDS:-300}
+      EXPECTED_CHECK_INTERVAL_SECONDS: ${EXPECTED_CHECK_INTERVAL_SECONDS:-60}
+      LATENCY_SLO_MS: ${LATENCY_SLO_MS:-200}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET:-}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_WHATSAPP_FROM: ${TWILIO_WHATSAPP_FROM:-}
+      WHATSAPP_ALERT_TO: ${WHATSAPP_ALERT_TO:-}
+      JIRA_BASE_URL: ${JIRA_BASE_URL:-}
+      JIRA_EMAIL: ${JIRA_EMAIL:-}
+      JIRA_API_TOKEN: ${JIRA_API_TOKEN:-}
+      JIRA_PROJECT_KEY: ${JIRA_PROJECT_KEY:-}
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      AI_ENABLED: ${AI_ENABLED:-false}
+      AI_PROVIDER: ${AI_PROVIDER:-ollama}
+      AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-60}
+      AI_TEMPERATURE: ${AI_TEMPERATURE:-0.2}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4.1-mini}
+      RISK_MODEL_ENABLED: ${RISK_MODEL_ENABLED:-false}
+      RISK_MODEL_ARTIFACT_PATH: ${RISK_MODEL_ARTIFACT_PATH:-/app/models/finding-risk-model.joblib}
+    volumes:
+      - ./services/api/models:/app/models
+      - ./services/api/exports:/app/exports
+    ports:
+      - "127.0.0.1:${API_PORT}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  verify-web:
+    image: nginx:alpine
+    container_name: secplat-verify-web
+    ports:
+      - "127.0.0.1:8081:80"
+    volumes:
+      - ./infra/verify-web:/usr/share/nginx/html:ro
+
+  web:
+    image: nginx:alpine
+    container_name: secplat-web
+    ports:
+      - "127.0.0.1:${WEB_PORT:-8082}:80"
+    volumes:
+      - ./infra/web:/usr/share/nginx/html:ro
+      - ./infra/web/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - api
+
+  frontend:
+    build:
+      context: ./services/frontend
+      dockerfile: Dockerfile
+      args:
+        API_URL: http://api:8000
+        NEXT_PUBLIC_GRAFANA_URL: ${NEXT_PUBLIC_GRAFANA_URL:-http://localhost:3001}
+    container_name: secplat-frontend
+    environment:
+      API_URL: http://api:8000
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      - api
+
+  ingestion:
+    build:
+      context: .
+      dockerfile: services/ingestion/Dockerfile
+    container_name: secplat-ingestion
+    environment:
+      API_URL: http://api:8000
+      API_AUTH_USERNAME: ${INGESTION_SERVICE_USERNAME:-ingestion-service}
+      API_AUTH_PASSWORD: ${INGESTION_SERVICE_PASSWORD:-ingestion-local-strong}
+      OPENSEARCH_URL: http://opensearch:9200
+      OS_URL: http://opensearch:9200
+      VERIFY_WEB_URL: http://verify-web/.well-known/secplat-verification.txt
+      JUICE_URL: http://juiceshop:3000
+      EXAMPLE_COM_URL: ${EXAMPLE_COM_URL:-https://example.com}
+      INGESTION_INTERVAL: "60"
+    depends_on:
+      api:
+        condition: service_started
+      opensearch:
+        condition: service_healthy
+    restart: unless-stopped
+
+  scanner:
+    build:
+      context: ./services/scanner
+      dockerfile: Dockerfile
+    container_name: secplat-scanner
+    environment:
+      API_URL: http://api:8000
+      SCANNER_API_USERNAME: ${SCANNER_SERVICE_USERNAME:-scanner-service}
+      SCANNER_API_PASSWORD: ${SCANNER_SERVICE_PASSWORD:-scanner-local-strong}
+      # internal_only = only lab (verify-web, juice-shop, api); internal_and_verified = + verified external_web assets
+      SCANNER_SCOPE: ${SCANNER_SCOPE:-internal_only}
+      VERIFY_WEB_URL: http://verify-web
+      JUICE_URL: http://juiceshop:3000
+      # Optional: override with "url|asset_key,url|asset_key"
+      # INTERNAL_TARGETS: "http://verify-web|verify-web,http://juiceshop:3000|juice-shop,http://api:8000|secplat-api"
+      SCAN_INTERVAL_SECONDS: ${SCAN_INTERVAL_SECONDS:-21600}
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+  worker-web:
+    build:
+      context: ./services/worker-web
+      dockerfile: Dockerfile
+    container_name: secplat-worker-web
+    environment:
+      POSTGRES_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      MAX_SCAN_DURATION_SECONDS: ${MAX_SCAN_DURATION_SECONDS:-900}
+      REQUIRE_DOMAIN_VERIFICATION: ${REQUIRE_DOMAIN_VERIFICATION:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Phase 2.1: Deriver writes secplat-asset-status from secplat-events (replaces build_asset_status.sh in ingestion when used)
+  deriver:
+    build:
+      context: ./services/deriver
+      dockerfile: Dockerfile
+    container_name: secplat-deriver
+    environment:
+      OPENSEARCH_URL: http://opensearch:9200
+      STALE_THRESHOLD_SECONDS: ${STALE_THRESHOLD_SECONDS:-300}
+      DERIVER_INTERVAL_SECONDS: ${DERIVER_INTERVAL_SECONDS:-60}
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles:
+      - roadmap
+
+  notifier:
+    build:
+      context: ./services/notifier
+      dockerfile: Dockerfile
+    container_name: secplat-notifier
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_WHATSAPP_FROM: ${TWILIO_WHATSAPP_FROM:-}
+      WHATSAPP_ALERT_TO: ${WHATSAPP_ALERT_TO:-}
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles:
+      - roadmap
+
+  # Phase 3.1: Correlator consumes secplat.events.correlation, creates incidents via API
+  correlator:
+    build:
+      context: ./services/correlator
+      dockerfile: Dockerfile
+    container_name: secplat-correlator
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      API_URL: http://api:8000
+      CORRELATOR_USER: ${CORRELATOR_SERVICE_USERNAME:-correlator-service}
+      CORRELATOR_PASSWORD: ${CORRELATOR_SERVICE_PASSWORD:-correlator-local-strong}
+    depends_on:
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
+    restart: unless-stopped
+    profiles:
+      - roadmap
+
+volumes:
+  postgres-data:
+  opensearch-data:
+  grafana-data:

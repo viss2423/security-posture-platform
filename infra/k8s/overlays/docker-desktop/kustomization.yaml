@@ -1,0 +1,46 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../namespace.yaml
+  - ../../serviceaccount.yaml
+  - ../../configmap.yaml
+  - ../../service-api.yaml
+  - ../../deployment-api.yaml
+  - ../../deployment-deriver.yaml
+  - ../../deployment-worker-web.yaml
+  - ../../deployment-notifier.yaml
+  - ../../deployment-correlator.yaml
+  - ../../hpa-worker-web.yaml
+  - ../../cronjob-ingestion.yaml
+  - ../../cronjob-snapshot.yaml
+  - ../../networkpolicy-api-egress.yaml
+  - ../../networkpolicy-worker-egress.yaml
+  - ../../networkpolicy-deriver-egress.yaml
+  - ../../networkpolicy-notifier-egress.yaml
+  - ../../networkpolicy-correlator-egress.yaml
+  - ../../networkpolicy-ingestion-egress.yaml
+  - ../../networkpolicy-postgres-ingress-from-api.yaml
+
+# Use locally built images from the Docker Desktop daemon.
+images:
+  - name: ghcr.io/your-org/secplat-api
+    newName: security-posture-platform-api
+    newTag: latest
+  - name: ghcr.io/your-org/secplat-worker-web
+    newName: security-posture-platform-worker-web
+    newTag: latest
+  - name: ghcr.io/your-org/secplat-deriver
+    newName: security-posture-platform-deriver
+    newTag: latest
+  - name: ghcr.io/your-org/secplat-notifier
+    newName: security-posture-platform-notifier
+    newTag: latest
+  - name: ghcr.io/your-org/secplat-correlator
+    newName: security-posture-platform-correlator
+    newTag: latest
+  - name: ghcr.io/your-org/secplat-ingestion
+    newName: security-posture-platform-ingestion
+    newTag: latest
+
+patches:
+  - path: patch-configmap.yaml

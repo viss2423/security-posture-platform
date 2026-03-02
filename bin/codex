@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Lightweight wrapper to run the repository Codex helper from POSIX shells (WSL/macOS/Linux)
+# Usage: codex --prompt "Write a function..." [--env-file .env.local]
+
+set -euo pipefail
+
+# Prefer repo venv if present
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+VENV_PY="$REPO_ROOT/.venv/bin/python"
+PYTHON="$(command -v python3 || command -v python)"
+
+if [ -x "$VENV_PY" ]; then
+  PYTHON="$VENV_PY"
+fi
+
+SCRIPT="$REPO_ROOT/scripts/codex_client.py"
+if [ ! -f "$SCRIPT" ]; then
+  echo "codex helper not found at $SCRIPT" >&2
+  exit 2
+fi
+
+# If no OPENAI_API_KEY set, warn (we won't accept keys here)
+if [ -z "${OPENAI_API_KEY-}" ]; then
+  if [ -f "$REPO_ROOT/.env.local" ]; then
+    # load .env.local if present (simple parse)
+    # don't export secrets to global environment automatically; user consents by using this wrapper
+    set -a
+    # shellcheck disable=SC1090
+    . "$REPO_ROOT/.env.local"
+    set +a
+  else
+    echo "Warning: OPENAI_API_KEY not set in environment or .env.local. Set it before running." >&2
+  fi
+fi
+
+exec "$PYTHON" "$SCRIPT" "$@"

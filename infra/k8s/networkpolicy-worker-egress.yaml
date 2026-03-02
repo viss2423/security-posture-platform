@@ -1,0 +1,35 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: secplat-worker-egress
+  namespace: secplat
+  labels:
+    app.kubernetes.io/part-of: secplat
+spec:
+  podSelector:
+    matchLabels:
+      secplat-role: worker
+  policyTypes:
+    - Egress
+  egress:
+    # Worker reads from Redis and scans external/internal web targets only.
+    # Postgres, OpenSearch, and arbitrary control-plane ports are blocked by omission.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: secplat-api
+  namespace: secplat
+  labels:
+    app.kubernetes.io/name: secplat-api
+    app.kubernetes.io/part-of: secplat
+spec:
+  selector:
+    app.kubernetes.io/name: secplat-api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000

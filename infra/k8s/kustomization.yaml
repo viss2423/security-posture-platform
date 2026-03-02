@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: secplat
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - configmap.yaml
+  - service-api.yaml
+  - deployment-api.yaml
+  - deployment-deriver.yaml
+  - deployment-worker-web.yaml
+  - deployment-notifier.yaml
+  - deployment-correlator.yaml
+  - hpa-worker-web.yaml
+  - cronjob-ingestion.yaml
+  - cronjob-snapshot.yaml
+  - networkpolicy-api-egress.yaml
+  - networkpolicy-worker-egress.yaml
+  - networkpolicy-deriver-egress.yaml
+  - networkpolicy-notifier-egress.yaml
+  - networkpolicy-correlator-egress.yaml
+  - networkpolicy-ingestion-egress.yaml
+  - networkpolicy-postgres-ingress-from-api.yaml

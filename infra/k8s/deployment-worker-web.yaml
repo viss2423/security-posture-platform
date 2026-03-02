@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: secplat-worker-web
+  namespace: secplat
+  labels:
+    app.kubernetes.io/name: secplat-worker-web
+    app.kubernetes.io/part-of: secplat
+    secplat-role: worker
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: secplat-worker-web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: secplat-worker-web
+        app.kubernetes.io/part-of: secplat
+        secplat-role: worker
+    spec:
+      serviceAccountName: secplat-workload
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker-web
+          image: ghcr.io/your-org/secplat-worker-web:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: secplat-config
+            - secretRef:
+                name: secplat-secrets
+          env:
+            - name: POSTGRES_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: secplat-secrets
+                  key: WORKER_POSTGRES_DSN
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+          resources:
+            requests:
+              cpu: 150m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

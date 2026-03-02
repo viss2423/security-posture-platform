@@ -1,0 +1,86 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: secplat-report-snapshot
+  namespace: secplat
+  labels:
+    app.kubernetes.io/name: secplat-report-snapshot
+    app.kubernetes.io/part-of: secplat
+spec:
+  schedule: "0 */6 * * *"
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      ttlSecondsAfterFinished: 600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: secplat-report-snapshot
+            app.kubernetes.io/part-of: secplat
+        spec:
+          serviceAccountName: secplat-workload
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: snapshot
+              image: ghcr.io/your-org/secplat-api:latest
+              imagePullPolicy: IfNotPresent
+              command: ["python", "-c"]
+              args:
+                - |
+                  import os, sys, httpx
+                  base = os.environ["API_URL"].rstrip("/")
+                  user = os.environ["ADMIN_USERNAME"]
+                  pwd = os.environ["ADMIN_PASSWORD"]
+                  period = os.environ.get("SNAPSHOT_PERIOD", "24h")
+                  r = httpx.post(f"{base}/auth/login", data={"username": user, "password": pwd}, timeout=15.0)
+                  r.raise_for_status()
+                  token = r.json().get("access_token")
+                  if not token:
+                    raise RuntimeError("access_token missing from /auth/login response")
+                  s = httpx.post(
+                    f"{base}/posture/reports/snapshot",
+                    params={"period": period},
+                    headers={"Authorization": f"Bearer {token}"},
+                    timeout=20.0,
+                  )
+                  s.raise_for_status()
+                  print(s.text)
+              envFrom:
+                - configMapRef:
+                    name: secplat-config
+                - secretRef:
+                    name: secplat-secrets
+              env:
+                - name: SNAPSHOT_PERIOD
+                  value: "24h"
+                - name: PYTHONDONTWRITEBYTECODE
+                  value: "1"
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 250m
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}

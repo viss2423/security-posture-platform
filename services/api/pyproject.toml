@@ -1,0 +1,27 @@
+[project]
+name = "secplat-api"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi==0.115.0",
+  "uvicorn[standard]==0.30.6",
+  "pydantic==2.8.2",
+  "pydantic-settings==2.4.0",
+  "sqlalchemy==2.0.32",
+  "psycopg[binary]==3.2.1",
+  "httpx==0.27.0",
+  "python-jose[cryptography]==3.3.0",
+  "bcrypt>=4.0.0",
+  "passlib[bcrypt]==1.7.4",
+  "python-multipart==0.0.9",
+  "reportlab>=4.0.0",
+  "pyyaml>=6.0",
+  "redis>=5.0.0",
+  "joblib>=1.4.2",
+  "scikit-learn>=1.5.1",
+  "pytest>=7.0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
