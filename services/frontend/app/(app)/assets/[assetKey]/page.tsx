@@ -33,10 +33,6 @@ const ALL_TABS: { id: TabId; label: string; mutateOnly?: boolean }[] = [
   { id: 'config', label: 'Config', mutateOnly: true },
 ];
 
-function isFallbackProvider(provider: string | null | undefined): boolean {
-  return (provider || '').toLowerCase().includes('fallback');
-}
-
 export default function AssetDetailPage() {
   const params = useParams();
   const assetKey = params.assetKey as string;
@@ -122,13 +118,7 @@ export default function AssetDetailPage() {
     try {
       const out = await generateAssetAIDiagnosis(assetKey, force);
       setAiDiagnosis(out);
-      setDiagnosisMessage(
-        isFallbackProvider(out.provider)
-          ? 'Diagnosis generated with fallback guidance because the AI provider was temporarily slow or unavailable.'
-          : out.cached
-            ? 'Showing cached AI diagnosis.'
-            : 'AI diagnosis generated.'
-      );
+      setDiagnosisMessage(out.cached ? 'Showing cached AI diagnosis.' : 'AI diagnosis generated.');
     } catch (e) {
       setDiagnosisMessage(e instanceof Error ? e.message : 'AI diagnosis generation failed');
     } finally {
@@ -137,7 +127,7 @@ export default function AssetDetailPage() {
   };
 
   return (
-    <main className="mx-auto max-w-4xl px-4 py-10 sm:px-6 lg:px-8">
+    <main className="page-shell">
       <nav className="mb-6 flex items-center gap-2 text-sm" aria-label="Breadcrumb">
         <Link href="/assets" className="font-medium text-[var(--muted)] transition hover:text-[var(--text)]">
           Assets
@@ -156,24 +146,24 @@ export default function AssetDetailPage() {
       )}
       {asset && detail && (
         <>
-          <p className="mb-4 text-sm text-[var(--muted)] animate-in">
+          <p className="mb-6 max-w-3xl text-sm text-[var(--text-muted)] animate-in">
             Last updated {lastUpdatedAgo(asset.last_seen)}
-            {detail.expected_interval_sec != null && <> · Expected interval: every {detail.expected_interval_sec}s</>}
+            {detail.expected_interval_sec != null && <> | Expected interval every {detail.expected_interval_sec}s</>}
             {detail.data_completeness?.label_24h != null && (
-              <> · Data completeness (24h): {detail.data_completeness.label_24h}{detail.data_completeness.pct_24h != null ? ` (${detail.data_completeness.pct_24h}%)` : ''}</>
+              <> | Data completeness (24h): {detail.data_completeness.label_24h}{detail.data_completeness.pct_24h != null ? ` (${detail.data_completeness.pct_24h}%)` : ''}</>
             )}
           </p>
 
-          <div className="mb-6 flex gap-1 border-b border-[var(--border)]">
+          <div className="mb-6 flex flex-wrap gap-2">
             {ALL_TABS.filter((t) => !t.mutateOnly || canMutate).map(({ id, label }) => (
               <button
                 key={id}
                 type="button"
                 onClick={() => setActiveTab(id)}
-                className={`rounded-t-lg px-4 py-2.5 text-sm font-medium transition ${
+                className={`rounded-full px-4 py-2 text-sm font-medium transition ${
                   activeTab === id
-                    ? 'bg-[var(--surface-elevated)] text-[var(--text)] border border-[var(--border)] border-b-0 -mb-px'
-                    : 'text-[var(--muted)] hover:bg-[var(--border)]/30'
+                    ? 'bg-[var(--green)] text-white shadow-lg shadow-[var(--green-glow)]'
+                    : 'border border-[var(--border)] bg-[var(--surface-elevated)] text-[var(--muted)] hover:bg-[var(--surface)]'
                 }`}
               >
                 {label}
@@ -182,51 +172,72 @@ export default function AssetDetailPage() {
           </div>
 
           {activeTab === 'summary' && (
-            <div className="space-y-6 animate-in">
-              <div className="card">
-                <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-3 text-sm">
-                  <dt className="text-[var(--muted)]">Status</dt>
-                  <dd><span className={`badge ${(asset.status || 'unknown').toLowerCase()}`}>{asset.status || 'unknown'}</span></dd>
-                  <dt className="text-[var(--muted)]">Reason</dt>
-                  <dd>{detail.reason_display ?? asset.reason ?? '–'}</dd>
-                  <dt className="text-[var(--muted)]">Score</dt>
-                  <dd>{asset.posture_score ?? '–'}</dd>
-                  <dt className="text-[var(--muted)]">Criticality</dt>
-                  <dd className="capitalize">{asset.criticality ?? '–'}</dd>
-                  <dt className="text-[var(--muted)]">Last seen</dt>
-                  <dd>{asset.last_seen ? formatDateTime(asset.last_seen) : '–'}</dd>
-                  <dt className="text-[var(--muted)]">Staleness (s)</dt>
-                  <dd>{asset.staleness_seconds ?? '–'}</dd>
-                  <dt className="text-[var(--muted)]">Environment</dt>
-                  <dd>{asset.environment ?? '–'}</dd>
-                  <dt className="text-[var(--muted)]">Owner</dt>
-                  <dd>{asset.owner?.trim() || 'Unassigned'}</dd>
-                  <dt className="text-[var(--muted)]">Latency SLO</dt>
-                  <dd>{detail.latency_slo_ok ? <span className="text-[var(--green)]">Pass &lt; {detail.latency_slo_ms}ms</span> : <span className="text-[var(--red)]">Over &gt; {detail.latency_slo_ms}ms</span>}</dd>
-                  <dt className="text-[var(--muted)]">Error rate (24h)</dt>
-                  <dd>{detail.error_rate_24h ?? 0}%</dd>
-                </dl>
-                {canMutate && (
-                  <div className="mt-4">
-                    <button type="button" onClick={openEdit} className="btn-secondary text-sm">
-                      Edit metadata (owner, criticality, name)
-                    </button>
+            <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px] animate-in">
+              <div className="space-y-6">
+                <section className="section-panel">
+                  <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex flex-wrap gap-2">
+                      <span className={`badge ${(asset.status || 'unknown').toLowerCase()}`}>{asset.status || 'unknown'}</span>
+                      {asset.criticality && <span className="stat-chip capitalize">{asset.criticality}</span>}
+                      {asset.environment && <span className="stat-chip">{asset.environment}</span>}
+                      {asset.posture_score != null && <span className="stat-chip">Posture {asset.posture_score}</span>}
+                    </div>
+                    {canMutate && (
+                      <button type="button" onClick={openEdit} className="btn-secondary text-sm">
+                        Edit metadata
+                      </button>
+                    )}
                   </div>
+                  <div className="meta-grid">
+                    <div className="kv-item">
+                      <span className="kv-label">Reason</span>
+                      <div className="kv-value">{detail.reason_display ?? asset.reason ?? '-'}</div>
+                    </div>
+                    <div className="kv-item">
+                      <span className="kv-label">Last seen</span>
+                      <div className="kv-value">{asset.last_seen ? formatDateTime(asset.last_seen) : '-'}</div>
+                    </div>
+                    <div className="kv-item">
+                      <span className="kv-label">Staleness</span>
+                      <div className="kv-value">{asset.staleness_seconds ?? '-'}s</div>
+                    </div>
+                    <div className="kv-item">
+                      <span className="kv-label">Owner</span>
+                      <div className="kv-value">{asset.owner?.trim() || 'Unassigned'}</div>
+                    </div>
+                    <div className="kv-item">
+                      <span className="kv-label">Latency SLO</span>
+                      <div className="kv-value">
+                        {detail.latency_slo_ok ? `Passing < ${detail.latency_slo_ms}ms` : `Over ${detail.latency_slo_ms}ms`}
+                      </div>
+                    </div>
+                    <div className="kv-item">
+                      <span className="kv-label">24h error rate</span>
+                      <div className="kv-value">{detail.error_rate_24h ?? 0}%</div>
+                    </div>
+                  </div>
+                </section>
+
+                {detail.recommendations.length > 0 && (
+                  <section className="section-panel">
+                    <h2 className="section-title">Recommended actions</h2>
+                    <ul className="space-y-3">
+                      {detail.recommendations.map((recommendation, index) => (
+                        <li key={index} className="rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)]/60 px-4 py-3 text-sm text-[var(--text)]">
+                          {recommendation}
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
                 )}
               </div>
-              {detail.recommendations.length > 0 && (
-                <div>
-                  <h2 className="section-title">Recommended actions</h2>
-                  <ul className="card list-inside list-disc space-y-1">
-                    {detail.recommendations.map((r, i) => (
-                      <li key={i}>{r}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              <div>
+
+              <aside className="section-panel">
                 <h2 className="section-title">AI diagnosis</h2>
-                <div className="card">
+                <p className="mb-4 text-sm text-[var(--text-muted)]">
+                  Summarized operational diagnosis using current posture, recent events, and linked risk signals.
+                </p>
+                <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)]/60 p-4">
                   {loadingDiagnosis ? (
                     <p className="text-sm text-[var(--muted)]">Loading diagnosis...</p>
                   ) : aiDiagnosis?.diagnosis_text ? (
@@ -238,11 +249,6 @@ export default function AssetDetailPage() {
                         Generated {formatDateTime(aiDiagnosis.generated_at)} via {aiDiagnosis.provider}/
                         {aiDiagnosis.model}
                       </p>
-                      {isFallbackProvider(aiDiagnosis.provider) && (
-                        <p className="mt-2 text-xs text-[var(--amber)]">
-                          Showing fallback diagnosis. Use Force regenerate to retry with full model output.
-                        </p>
-                      )}
                     </>
                   ) : (
                     <p className="text-sm text-[var(--muted)]">
@@ -283,11 +289,11 @@ export default function AssetDetailPage() {
                         >
                           Force regenerate
                         </button>
-                      )}
+                        )}
                     </div>
                   )}
                 </div>
-              </div>
+              </aside>
             </div>
           )}
 
@@ -295,9 +301,9 @@ export default function AssetDetailPage() {
             <div className="animate-in">
               <h2 className="section-title">Timeline (last 24h)</h2>
               {detail.timeline.length === 0 ? (
-                <div className="card py-12 text-center text-sm text-[var(--muted)]">No events in the last 24h.</div>
+                <div className="section-panel py-12 text-center text-sm text-[var(--muted)]">No events in the last 24h.</div>
               ) : (
-                <div className="card overflow-hidden p-0">
+                <div className="section-panel overflow-hidden p-0">
                   <div className="overflow-x-auto">
                     <table className="w-full border-collapse text-sm">
                       <thead>
@@ -338,17 +344,22 @@ export default function AssetDetailPage() {
             <div className="animate-in">
               <h2 className="section-title">Last check (evidence)</h2>
               {!detail.evidence ? (
-                <div className="card py-12 text-center text-sm text-[var(--muted)]">No evidence yet.</div>
+                <div className="section-panel py-12 text-center text-sm text-[var(--muted)]">No evidence yet.</div>
               ) : (
-                <>
+                <section className="section-panel">
                   <div className="mb-2 flex flex-wrap gap-2">
                     <button type="button" onClick={copyEvidence} className="btn-secondary text-sm">Copy JSON</button>
                     {openSearchUrl && (
                       <a href={openSearchUrl} target="_blank" rel="noopener noreferrer" className="btn-secondary text-sm">View in OpenSearch</a>
                     )}
                   </div>
-                  <pre className="overflow-auto rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)] p-4 text-xs text-[var(--text-muted)]">{JSON.stringify(detail.evidence, null, 2)}</pre>
-                </>
+                  <details className="disclosure" open>
+                    <summary>Raw evidence JSON</summary>
+                    <div className="disclosure-body">
+                      <pre className="overflow-auto rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)] p-4 text-xs text-[var(--text-muted)]">{JSON.stringify(detail.evidence, null, 2)}</pre>
+                    </div>
+                  </details>
+                </section>
               )}
             </div>
           )}
@@ -356,7 +367,7 @@ export default function AssetDetailPage() {
           {canMutate && activeTab === 'config' && (
             <div className="animate-in">
               <h2 className="section-title">Config</h2>
-              <div className="card">
+              <div className="section-panel">
                 {saveError && <p className="mb-3 text-sm text-[var(--red)]">{saveError}</p>}
                 <div className="flex max-w-sm flex-col gap-4">
                   <div>
@@ -376,7 +387,7 @@ export default function AssetDetailPage() {
                     <input type="text" value={editName} onChange={(e) => setEditName(e.target.value)} placeholder="Display name" className="input" />
                   </div>
                   <div className="flex gap-2">
-                    <button type="button" onClick={saveEdit} disabled={saving} className="btn-primary">{saving ? 'Saving…' : 'Save'}</button>
+                    <button type="button" onClick={saveEdit} disabled={saving} className="btn-primary">{saving ? 'Saving...' : 'Save'}</button>
                     <button type="button" onClick={() => { setSaveError(null); }} disabled={saving} className="btn-secondary">Cancel</button>
                   </div>
                 </div>

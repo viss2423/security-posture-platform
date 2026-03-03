@@ -271,10 +271,34 @@ export default function FindingsPage() {
   };
 
   const sources = Array.from(new Set(findings.map((f) => f.source).filter((s): s is string => !!s)));
+  const visibleRiskCounts = findings.reduce(
+    (acc, finding) => {
+      const key = (finding.risk_level || 'unscored') as 'critical' | 'high' | 'medium' | 'low' | 'unscored';
+      acc[key] += 1;
+      return acc;
+    },
+    { critical: 0, high: 0, medium: 0, low: 0, unscored: 0 }
+  );
+  const activeFilters = [
+    statusFilter ? `status: ${statusFilter.replace('_', ' ')}` : null,
+    sourceFilter ? `source: ${sourceFilter}` : null,
+    riskLevelFilter ? `risk: ${riskLevelFilter}` : null,
+  ].filter(Boolean) as string[];
 
   return (
-    <main className="mx-auto max-w-6xl px-4 py-10 sm:px-6 lg:px-8">
-      <h1 className="page-title mb-8">Findings</h1>
+    <main className="page-shell">
+      <section className="mb-5 flex flex-wrap items-center justify-between gap-3">
+        <div className="text-sm text-[var(--muted)]">
+          Highest-risk issues are listed first. Open a finding only when you need deeper workflow
+          controls or AI context.
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <span className="stat-chip-strong">{findings.length} visible</span>
+          <span className="stat-chip">Critical {visibleRiskCounts.critical}</span>
+          <span className="stat-chip">High {visibleRiskCounts.high}</span>
+          <span className="stat-chip">Pending {visibleRiskCounts.unscored}</span>
+        </div>
+      </section>
 
       {error && (
         <div className="mb-6 alert-error animate-in" role="alert">
@@ -290,10 +314,10 @@ export default function FindingsPage() {
       )}
 
       {modelStatus && (
-        <section className="card mb-6 animate-in">
-          <div className="flex flex-wrap items-start justify-between gap-4">
+        <details className="section-panel mb-6 animate-in disclosure">
+          <summary className="flex cursor-pointer list-none flex-wrap items-start justify-between gap-4">
             <div>
-              <h2 className="section-title mb-2">ML risk model</h2>
+              <p className="section-title mb-2">ML risk model</p>
               <div className="flex flex-wrap gap-2">
                 <span
                   className={`inline-block rounded px-2 py-0.5 text-xs font-semibold uppercase ${
@@ -323,136 +347,171 @@ export default function FindingsPage() {
                   {modelStatus.readiness.status === 'ready' ? 'Data ready' : 'Data limited'}
                 </span>
               </div>
-              <p className="mt-3 text-xs text-[var(--muted)]">
-                Signature: {modelStatus.scoring_signature}
-              </p>
             </div>
-            {canMutate && (
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={handleBootstrapLabels}
-                  disabled={modelBusy !== null}
-                  className="btn-secondary text-sm"
-                >
-                  {modelBusy === 'bootstrap' ? 'Bootstrapping...' : 'Bootstrap labels'}
-                </button>
-                {isAdmin && (
-                  <button
-                    type="button"
-                    onClick={handleTrainModel}
-                    disabled={modelBusy !== null}
-                    className="btn-primary text-sm"
-                  >
-                    {modelBusy === 'train' ? 'Training...' : 'Train baseline'}
-                  </button>
-                )}
-                <Link href="/ml-risk" className="btn-secondary text-sm">
-                  Open ML lab
-                </Link>
-              </div>
-            )}
-          </div>
-
-          <div className="mt-4 grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
-            <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-elevated)] p-3">
-              <p className="text-[11px] uppercase text-[var(--muted)]">Labels</p>
-              <p className="mt-1 text-lg font-semibold">{modelStatus.readiness.summary.total_labels}</p>
-            </div>
-            <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-elevated)] p-3">
-              <p className="text-[11px] uppercase text-[var(--muted)]">Positive</p>
-              <p className="mt-1 text-lg font-semibold">{modelStatus.readiness.summary.positive_labels}</p>
-            </div>
-            <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-elevated)] p-3">
-              <p className="text-[11px] uppercase text-[var(--muted)]">Negative</p>
-              <p className="mt-1 text-lg font-semibold">{modelStatus.readiness.summary.negative_labels}</p>
-            </div>
-            <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-elevated)] p-3">
-              <p className="text-[11px] uppercase text-[var(--muted)]">Linked incidents</p>
-              <p className="mt-1 text-lg font-semibold">{modelStatus.readiness.summary.incident_linked_findings}</p>
-            </div>
-            <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-elevated)] p-3">
-              <p className="text-[11px] uppercase text-[var(--muted)]">Algorithm</p>
-              <p className="mt-1 text-sm font-semibold">{modelStatus.model_metadata?.algorithm || '-'}</p>
-            </div>
-            <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-elevated)] p-3">
-              <p className="text-[11px] uppercase text-[var(--muted)]">Test AUC</p>
-              <p className="mt-1 text-sm font-semibold">
+            <div className="flex flex-wrap gap-2 text-xs text-[var(--muted)]">
+              <span className="stat-chip">Labels {modelStatus.readiness.summary.total_labels}</span>
+              <span className="stat-chip">
+                Test AUC{' '}
                 {modelStatus.model_metadata?.test_auc != null
                   ? Number(modelStatus.model_metadata.test_auc).toFixed(3)
                   : '-'}
+              </span>
+            </div>
+          </summary>
+          <div className="disclosure-body mt-4 space-y-4">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <p className="text-xs text-[var(--muted)]">
+                Signature: {modelStatus.scoring_signature}
+                {modelStatus.model_metadata?.trained_at &&
+                  ` | trained ${formatDateTime(modelStatus.model_metadata.trained_at)}`}
               </p>
+              {canMutate && (
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={handleBootstrapLabels}
+                    disabled={modelBusy !== null}
+                    className="btn-secondary text-sm"
+                  >
+                    {modelBusy === 'bootstrap' ? 'Bootstrapping...' : 'Bootstrap labels'}
+                  </button>
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      onClick={handleTrainModel}
+                      disabled={modelBusy !== null}
+                      className="btn-primary text-sm"
+                    >
+                      {modelBusy === 'train' ? 'Training...' : 'Train baseline'}
+                    </button>
+                  )}
+                  <Link href="/ml-risk" className="btn-secondary text-sm">
+                    Open ML lab
+                  </Link>
+                </div>
+              )}
+            </div>
+            <div className="meta-grid">
+              <div className="kv-item">
+                <p className="kv-label">Labels</p>
+                <p className="kv-value">{modelStatus.readiness.summary.total_labels}</p>
+              </div>
+              <div className="kv-item">
+                <p className="kv-label">Positive</p>
+                <p className="kv-value">{modelStatus.readiness.summary.positive_labels}</p>
+              </div>
+              <div className="kv-item">
+                <p className="kv-label">Negative</p>
+                <p className="kv-value">{modelStatus.readiness.summary.negative_labels}</p>
+              </div>
+              <div className="kv-item">
+                <p className="kv-label">Linked incidents</p>
+                <p className="kv-value">{modelStatus.readiness.summary.incident_linked_findings}</p>
+              </div>
+              <div className="kv-item">
+                <p className="kv-label">Algorithm</p>
+                <p className="kv-value">{modelStatus.model_metadata?.algorithm || '-'}</p>
+              </div>
+              <div className="kv-item">
+                <p className="kv-label">Test AUC</p>
+                <p className="kv-value">
+                  {modelStatus.model_metadata?.test_auc != null
+                    ? Number(modelStatus.model_metadata.test_auc).toFixed(3)
+                    : '-'}
+                </p>
+              </div>
             </div>
           </div>
-          {modelStatus.model_metadata?.trained_at && (
-            <p className="mt-3 text-xs text-[var(--muted)]">
-              Trained {formatDateTime(modelStatus.model_metadata.trained_at)} on{' '}
-              {modelStatus.model_metadata.dataset_size ?? '-'} rows.
-            </p>
-          )}
-        </section>
+        </details>
       )}
 
-      <div className="mb-6 flex flex-wrap items-center gap-4">
-        <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
-          Status
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm"
-          >
-            <option value="">All</option>
-            {STATUS_OPTIONS.map((s) => (
-              <option key={s} value={s}>
-                {s === 'accepted_risk' ? 'Accepted risk' : s.replace('_', ' ')}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
-          Source
-          <select
-            value={sourceFilter}
-            onChange={(e) => setSourceFilter(e.target.value)}
-            className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm"
-          >
-            <option value="">All</option>
-            <option value="tls_scan">TLS scan</option>
-            <option value="header_scan">Header scan</option>
-            {sources
-              .filter((s) => s !== 'tls_scan' && s !== 'header_scan')
-              .map((s) => (
+      <section className="section-panel-tight mb-6 animate-in">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="section-title mb-2">Filter queue</p>
+            <p className="text-xs text-[var(--muted)]">Use queue-level filters only for the issues you are actively reviewing.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {activeFilters.length === 0 ? (
+              <span className="stat-chip">No filters</span>
+            ) : (
+              activeFilters.map((filter) => (
+                <span key={filter} className="stat-chip">
+                  {filter}
+                </span>
+              ))
+            )}
+          </div>
+        </div>
+        <div className="mt-4 grid gap-4 lg:grid-cols-[13rem_13rem_1fr]">
+          <label className="text-sm text-[var(--muted)]">
+            <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em]">
+              Status
+            </span>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="input py-2.5"
+            >
+              <option value="">All</option>
+              {STATUS_OPTIONS.map((s) => (
                 <option key={s} value={s}>
-                  {s}
+                  {s === 'accepted_risk' ? 'Accepted risk' : s.replace('_', ' ')}
                 </option>
               ))}
-          </select>
-        </label>
-      </div>
-
-      <div className="mb-6 flex flex-wrap gap-2">
-        {RISK_FILTER_OPTIONS.map((option) => {
-          const selected = riskLevelFilter === option.value;
-          const riskStyle =
-            option.value && option.value !== 'unscored'
-              ? riskBadgeClass(option.value)
-              : 'bg-[var(--surface)] text-[var(--muted)]';
-          return (
-            <button
-              key={option.value || 'all'}
-              type="button"
-              onClick={() => setRiskLevelFilter(option.value)}
-              className={`rounded-full border px-3 py-1.5 text-xs font-semibold uppercase transition ${
-                selected
-                  ? `border-transparent ${riskStyle} shadow-sm`
-                  : 'border-[var(--border)] bg-[var(--surface)] text-[var(--muted)] hover:bg-[var(--surface-elevated)]'
-              }`}
+            </select>
+          </label>
+          <label className="text-sm text-[var(--muted)]">
+            <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em]">
+              Source
+            </span>
+            <select
+              value={sourceFilter}
+              onChange={(e) => setSourceFilter(e.target.value)}
+              className="input py-2.5"
             >
-              {option.label}
-            </button>
-          );
-        })}
-      </div>
+              <option value="">All</option>
+              <option value="tls_scan">TLS scan</option>
+              <option value="header_scan">Header scan</option>
+              {sources
+                .filter((s) => s !== 'tls_scan' && s !== 'header_scan')
+                .map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <div>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
+              Risk level
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {RISK_FILTER_OPTIONS.map((option) => {
+                const selected = riskLevelFilter === option.value;
+                const riskStyle =
+                  option.value && option.value !== 'unscored'
+                    ? riskBadgeClass(option.value)
+                    : 'bg-[var(--surface)] text-[var(--muted)]';
+                return (
+                  <button
+                    key={option.value || 'all'}
+                    type="button"
+                    onClick={() => setRiskLevelFilter(option.value)}
+                    className={`rounded-full border px-3 py-1.5 text-xs font-semibold uppercase transition ${
+                      selected
+                        ? `border-transparent ${riskStyle} shadow-sm`
+                        : 'border-[var(--border)] bg-[var(--surface)] text-[var(--muted)] hover:bg-[var(--surface-elevated)]'
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </section>
 
       {loading ? (
         <p className="text-sm text-[var(--muted)]">Loading...</p>
@@ -462,198 +521,245 @@ export default function FindingsPage() {
           description="Run the scanner to generate TLS and security header findings, or wait for the scheduled scan."
         />
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-[var(--border)] bg-[var(--surface)]">
-          <table className="w-full text-left text-sm">
-            <thead className="border-b border-[var(--border)] text-xs uppercase text-[var(--muted)]">
-              <tr>
-                <th className="px-4 py-3">Severity</th>
-                <th className="px-4 py-3">Risk</th>
-                <th className="px-4 py-3">Title</th>
-                <th className="px-4 py-3">Asset</th>
-                <th className="px-4 py-3">Category</th>
-                <th className="px-4 py-3">Status</th>
-                {canMutate && <th className="px-4 py-3">Actions</th>}
-                <th className="px-4 py-3">First seen</th>
-                <th className="px-4 py-3">Last seen</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[var(--border)]">
-              {findings.map((f) => (
-                <tr key={f.finding_id} className="hover:bg-[var(--surface-elevated)]">
-                  <td className="px-4 py-3">
-                    <span
-                      className={`inline-block rounded px-2 py-0.5 text-xs font-semibold ${SEVERITY_COLORS[f.severity] ?? 'bg-gray-600 text-white'}`}
-                    >
-                      {f.severity}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    {f.risk_score != null ? (
-                      <div className="space-y-1">
-                        <div className="flex flex-wrap items-center gap-1">
-                          <span className={`inline-block rounded px-2 py-0.5 text-xs font-semibold uppercase ${riskBadgeClass(f.risk_level)}`}>
-                            {f.risk_level || 'risk'} {Math.round(Number(f.risk_score))}
-                          </span>
-                          <span className="inline-block rounded bg-[var(--surface-elevated)] px-2 py-0.5 text-[11px] font-medium uppercase text-[var(--muted)]">
-                            {scoreSource(f)}
-                          </span>
-                        </div>
-                        {riskDrivers(f).length > 0 && (
-                          <p className="max-w-[12rem] text-[11px] text-[var(--muted)]">
-                            {riskDrivers(f).map(formatRiskDriverLabel).join(' / ')}
-                          </p>
-                        )}
-                      </div>
-                    ) : (
-                      <span className="text-xs text-[var(--muted)]">Pending</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 font-medium text-[var(--text)]">
-                    {f.title}
-                    {f.risk_label && (
-                      <p className="mt-1 text-[11px]">
-                        <span className={`inline-block rounded px-2 py-0.5 font-semibold uppercase ${riskLabelBadgeClass(f.risk_label)}`}>
-                          {formatRiskLabel(f.risk_label)}
+        <div className="space-y-4">
+          {findings.map((f) => {
+            const drivers = riskDrivers(f);
+            const ai = aiByFindingId[f.finding_id];
+            return (
+              <article key={f.finding_id} className="section-panel-tight animate-in">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <div className="mb-3 flex flex-wrap items-center gap-2">
+                      <span
+                        className={`inline-block rounded px-2 py-0.5 text-xs font-semibold ${SEVERITY_COLORS[f.severity] ?? 'bg-gray-600 text-white'}`}
+                      >
+                        {f.severity}
+                      </span>
+                      {f.risk_score != null ? (
+                        <span className={`inline-block rounded px-2 py-0.5 text-xs font-semibold uppercase ${riskBadgeClass(f.risk_level)}`}>
+                          {f.risk_level || 'risk'} {Math.round(Number(f.risk_score))}
                         </span>
-                        <span className="ml-2 text-[var(--muted)]">
-                          {f.risk_label_source || 'label'}
-                          {f.risk_label_created_at && ` / ${formatDateTime(f.risk_label_created_at)}`}
+                      ) : (
+                        <span className="stat-chip">Risk pending</span>
+                      )}
+                      <span className={`inline-block rounded px-2 py-0.5 text-xs font-medium capitalize ${statusBadgeClass(f.status)}`}>
+                        {f.status.replace('_', ' ')}
+                      </span>
+                    </div>
+                    <h2 className="text-lg font-semibold text-[var(--text)]">{f.title}</h2>
+                    <p className="mt-2 text-sm text-[var(--muted)]">
+                      {f.asset_key ? (
+                        <Link href={`/assets/${encodeURIComponent(f.asset_key)}`} className="font-medium text-[var(--green)] hover:underline">
+                          {f.asset_name || f.asset_key}
+                        </Link>
+                      ) : (
+                        'Unlinked asset'
+                      )}
+                      {f.source ? ` | ${f.source}` : ''}
+                      {f.category ? ` | ${f.category}` : ''}
+                      {f.first_seen ? ` | first seen ${formatDateTime(f.first_seen)}` : ''}
+                      {f.last_seen ? ` | last seen ${formatDateTime(f.last_seen)}` : ''}
+                    </p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <span className="stat-chip">{scoreSource(f)}</span>
+                      {drivers.map((driver) => (
+                        <span key={driver} className="stat-chip">
+                          {formatRiskDriverLabel(driver)}
                         </span>
+                      ))}
+                    </div>
+                  </div>
+                  {f.risk_label && (
+                    <div className="text-right text-xs text-[var(--muted)]">
+                      <span className={`inline-block rounded px-2 py-0.5 font-semibold uppercase ${riskLabelBadgeClass(f.risk_label)}`}>
+                        {formatRiskLabel(f.risk_label)}
+                      </span>
+                      <p className="mt-1">
+                        {f.risk_label_source || 'label'}
+                        {f.risk_label_created_at && ` | ${formatDateTime(f.risk_label_created_at)}`}
                       </p>
-                    )}
+                    </div>
+                  )}
+                </div>
+
+                <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
+                  <div className="space-y-3">
                     {f.evidence && (
-                      <p className="mt-1 text-xs text-[var(--muted)] line-clamp-1">{f.evidence}</p>
+                      <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)] px-4 py-3">
+                        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
+                          Evidence
+                        </p>
+                        <p className="mt-2 line-clamp-3 text-sm text-[var(--text)]">{f.evidence}</p>
+                      </div>
                     )}
                     {f.risk_score != null && (
-                      <p className="mt-1 text-xs text-[var(--muted)]">
+                      <p className="text-xs text-[var(--muted)]">
                         {scoreSource(f) === 'ml'
-                          ? 'Score is coming from the trained ML model with heuristic fallback retained for explainability.'
-                          : 'Context score uses severity, criticality, environment, exposure, confidence, and workflow state.'}
-                      </p>
-                    )}
-                    {aiByFindingId[f.finding_id]?.explanation_text && (
-                      <>
-                        <p className="mt-2 whitespace-pre-wrap rounded-md border border-[var(--border)] bg-[var(--surface-elevated)] p-2 text-xs text-[var(--text)]">
-                          {aiByFindingId[f.finding_id].explanation_text}
-                        </p>
-                        <p className="mt-1 text-[11px] text-[var(--muted)]">
-                          AI generated {formatDateTime(aiByFindingId[f.finding_id].generated_at)} via{' '}
-                          {aiByFindingId[f.finding_id].provider}/{aiByFindingId[f.finding_id].model}
-                        </p>
-                        {isFallbackProvider(aiByFindingId[f.finding_id].provider) && (
-                          <p className="mt-1 text-[11px] text-[var(--amber)]">
-                            Showing fallback guidance because the AI provider was temporarily slow or unavailable. Retry for a full model response.
-                          </p>
-                        )}
-                      </>
-                    )}
-                    {aiErrorByFindingId[f.finding_id] && (
-                      <p className="mt-2 text-xs text-[var(--red)]">
-                        AI explain failed: {friendlyApiMessage(aiErrorByFindingId[f.finding_id])}
+                          ? 'Score is coming from the trained ML model.'
+                          : 'Score is coming from the contextual heuristic scorer.'}
                       </p>
                     )}
                     {f.status === 'accepted_risk' && (f.accepted_risk_reason || f.accepted_risk_by || f.accepted_risk_expires_at) && (
-                      <p className="mt-1 text-xs text-[var(--muted)]">
+                      <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)] px-4 py-3 text-sm text-[var(--muted)]">
                         Accepted{f.accepted_risk_by && ` by ${f.accepted_risk_by}`}
                         {f.accepted_risk_expires_at && ` until ${formatDateTime(f.accepted_risk_expires_at)}`}
-                        {f.accepted_risk_reason && `: ${f.accepted_risk_reason}`}
-                      </p>
+                        {f.accepted_risk_reason && ` | ${f.accepted_risk_reason}`}
+                      </div>
                     )}
-                  </td>
-                  <td className="px-4 py-3">
-                    {f.asset_key ? (
-                      <Link href={`/assets/${encodeURIComponent(f.asset_key)}`} className="text-[var(--green)] hover:underline">
-                        {f.asset_name || f.asset_key}
-                      </Link>
-                    ) : (
-                      <span className="text-[var(--muted)]">-</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-[var(--muted)]">{f.category || '-'}</td>
-                  <td className="px-4 py-3">
-                    <span className={`inline-block rounded px-2 py-0.5 text-xs font-medium capitalize ${statusBadgeClass(f.status)}`}>
-                      {f.status.replace('_', ' ')}
-                    </span>
-                  </td>
-                  {canMutate && (
-                    <td className="px-4 py-3">
-                      <div className="flex flex-wrap gap-1">
-                        <select
-                          value={f.status}
-                          onChange={(e) => handleStatusChange(f.finding_id, e.target.value as FindingStatus)}
-                          disabled={updatingId === f.finding_id}
-                          className="rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1 text-xs"
-                        >
-                          {STATUS_OPTIONS.map((s) => (
-                            <option key={s} value={s}>
-                              {s.replace('_', ' ')}
-                            </option>
-                          ))}
-                        </select>
-                        {f.status !== 'accepted_risk' && (
+                  </div>
+                  <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)] p-4">
+                    <p className="section-title mb-3">Context</p>
+                    <dl className="space-y-3">
+                      <div>
+                        <dt className="kv-label">Asset</dt>
+                        <dd className="text-sm text-[var(--text)] break-words">{f.asset_name || f.asset_key || '-'}</dd>
+                      </div>
+                      <div>
+                        <dt className="kv-label">Category</dt>
+                        <dd className="text-sm text-[var(--text)]">{f.category || '-'}</dd>
+                      </div>
+                      <div>
+                        <dt className="kv-label">First seen</dt>
+                        <dd className="text-sm text-[var(--text)]">{f.first_seen ? formatDateTime(f.first_seen) : '-'}</dd>
+                      </div>
+                      <div>
+                        <dt className="kv-label">Last seen</dt>
+                        <dd className="text-sm text-[var(--text)]">{f.last_seen ? formatDateTime(f.last_seen) : '-'}</dd>
+                      </div>
+                    </dl>
+                  </div>
+                </div>
+
+                <details className="disclosure mt-4">
+                  <summary className="cursor-pointer list-none text-sm font-medium text-[var(--text)]">
+                    Investigation and actions
+                  </summary>
+                  <div className="disclosure-body mt-4 grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
+                    <div className="space-y-4">
+                      {canMutate ? (
+                        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)] p-4">
+                          <p className="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
+                            Workflow
+                          </p>
+                          <div className="grid gap-2 sm:grid-cols-2">
+                            <select
+                              value={f.status}
+                              onChange={(e) => handleStatusChange(f.finding_id, e.target.value as FindingStatus)}
+                              disabled={updatingId === f.finding_id}
+                              className="input py-2.5 text-sm"
+                            >
+                              {STATUS_OPTIONS.map((s) => (
+                                <option key={s} value={s}>
+                                  {s.replace('_', ' ')}
+                                </option>
+                              ))}
+                            </select>
+                            {f.status !== 'accepted_risk' && (
+                              <button
+                                type="button"
+                                onClick={() => openAcceptRisk(f.finding_id)}
+                                disabled={updatingId === f.finding_id}
+                                className="btn-secondary text-sm"
+                              >
+                                Accept risk
+                              </button>
+                            )}
+                          </div>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleLabelFinding(f.finding_id, 'incident_worthy')}
+                              disabled={
+                                labelingKey === `${f.finding_id}:incident_worthy` ||
+                                (f.risk_label === 'incident_worthy' && f.risk_label_source === 'analyst')
+                              }
+                              className="btn-secondary text-xs"
+                            >
+                              {labelingKey === `${f.finding_id}:incident_worthy`
+                                ? 'Saving...'
+                                : 'Label incident-worthy'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleLabelFinding(f.finding_id, 'benign')}
+                              disabled={
+                                labelingKey === `${f.finding_id}:benign` ||
+                                (f.risk_label === 'benign' && f.risk_label_source === 'analyst')
+                              }
+                              className="btn-secondary text-xs"
+                            >
+                              {labelingKey === `${f.finding_id}:benign`
+                                ? 'Saving...'
+                                : 'Label benign'}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)] px-4 py-3 text-sm text-[var(--muted)]">
+                          Read-only mode. Workflow changes and analyst labels require write access.
+                        </div>
+                      )}
+                    </div>
+                    <div className="space-y-4">
+                      <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)] p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
+                              AI explanation
+                            </p>
+                            {ai?.generated_at && (
+                              <p className="mt-1 text-xs text-[var(--muted)]">
+                                {formatDateTime(ai.generated_at)} via {ai.provider}/{ai.model}
+                              </p>
+                            )}
+                          </div>
                           <button
                             type="button"
-                            onClick={() => openAcceptRisk(f.finding_id)}
-                            disabled={updatingId === f.finding_id}
-                            className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-xs text-[var(--muted)] hover:bg-[var(--border)]"
+                            onClick={() => handleExplainRisk(f.finding_id, Boolean(aiByFindingId[f.finding_id]))}
+                            disabled={explainingId === f.finding_id}
+                            className="btn-secondary text-sm"
                           >
-                            Accept risk
+                            {explainingId === f.finding_id
+                              ? 'Explaining...'
+                              : aiByFindingId[f.finding_id]
+                                ? 'Refresh AI'
+                                : 'Explain risk'}
                           </button>
+                        </div>
+                        {ai?.explanation_text ? (
+                          <div className="mt-3 space-y-2">
+                            <p className="whitespace-pre-wrap text-sm text-[var(--text)]">
+                              {ai.explanation_text}
+                            </p>
+                            {isFallbackProvider(ai.provider) && (
+                              <p className="text-xs text-[var(--amber)]">
+                                Showing fallback guidance because the AI provider was temporarily slow or unavailable.
+                              </p>
+                            )}
+                          </div>
+                        ) : aiErrorByFindingId[f.finding_id] ? (
+                          <p className="mt-3 text-sm text-[var(--red)]">
+                            AI explain failed: {friendlyApiMessage(aiErrorByFindingId[f.finding_id])}
+                          </p>
+                        ) : (
+                          <p className="mt-3 text-sm text-[var(--muted)]">
+                            Generate an explanation when you need exploit context or remediation framing.
+                          </p>
                         )}
-                        <button
-                          type="button"
-                          onClick={() => handleExplainRisk(f.finding_id, Boolean(aiByFindingId[f.finding_id]))}
-                          disabled={explainingId === f.finding_id}
-                          className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-xs text-[var(--muted)] hover:bg-[var(--border)]"
-                        >
-                          {explainingId === f.finding_id
-                            ? 'Explaining...'
-                            : aiByFindingId[f.finding_id]
-                              ? 'Refresh AI'
-                              : 'Explain risk'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleLabelFinding(f.finding_id, 'incident_worthy')}
-                          disabled={
-                            labelingKey === `${f.finding_id}:incident_worthy` ||
-                            (f.risk_label === 'incident_worthy' && f.risk_label_source === 'analyst')
-                          }
-                          className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-xs text-[var(--muted)] hover:bg-[var(--border)]"
-                        >
-                          {labelingKey === `${f.finding_id}:incident_worthy`
-                            ? 'Saving...'
-                            : 'Label incident-worthy'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleLabelFinding(f.finding_id, 'benign')}
-                          disabled={
-                            labelingKey === `${f.finding_id}:benign` ||
-                            (f.risk_label === 'benign' && f.risk_label_source === 'analyst')
-                          }
-                          className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-xs text-[var(--muted)] hover:bg-[var(--border)]"
-                        >
-                          {labelingKey === `${f.finding_id}:benign`
-                            ? 'Saving...'
-                            : 'Label benign'}
-                        </button>
                       </div>
-                    </td>
-                  )}
-                  <td className="px-4 py-3 text-[var(--muted)]">{f.first_seen ? formatDateTime(f.first_seen) : '-'}</td>
-                  <td className="px-4 py-3 text-[var(--muted)]">{f.last_seen ? formatDateTime(f.last_seen) : '-'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                    </div>
+                  </div>
+                </details>
+              </article>
+            );
+          })}
         </div>
       )}
 
       {findings.length > 0 && (
         <p className="mt-4 text-xs text-[var(--muted)]">
           Showing {findings.length} finding{findings.length === 1 ? '' : 's'}
-          {canMutate && '. Change status or accept risk with expiry; re-review when risk acceptance expires.'}
+          {canMutate && '. Open a finding to change workflow state, add analyst labels, or request AI help.'}
         </p>
       )}
 

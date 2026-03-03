@@ -127,15 +127,12 @@ export default function AssetsPage() {
   const gridCols = '120px 100px 90px 100px 120px 90px 70px 1fr';
 
   return (
-    <main className="mx-auto max-w-6xl px-4 pt-6 pb-10 sm:px-6 lg:px-8 overflow-visible">
-      <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="page-title mb-0">Assets</h1>
-          {data && data.items.length > 0 && (
-            <p className="mt-1 text-sm text-[var(--muted)]">
-              {data.items.length} asset{data.items.length !== 1 ? 's' : ''}
-            </p>
-          )}
+    <main className="page-shell overflow-visible">
+      <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="text-sm text-[var(--muted)]">
+          {data && data.items.length > 0
+            ? `${data.items.length} assets in the current workspace view.`
+            : 'Asset inventory, posture status, and ownership in one list.'}
         </div>
         {data && data.items.length > 0 && (
           <div className="w-full sm:w-72">

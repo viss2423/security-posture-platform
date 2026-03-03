@@ -223,9 +223,12 @@ export default function PolicyPage() {
   const totalViolations = (evaluateResult?.violations || []).length;
 
   return (
-    <main className="mx-auto max-w-6xl px-4 py-10 sm:px-6 lg:px-8">
-      <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
-        <h1 className="page-title">Policy</h1>
+    <main className="page-shell">
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+        <p className="max-w-2xl text-sm text-[var(--text-muted)]">
+          Manage policy bundles, run evaluations, and review AI summaries without staring at raw
+          evidence first.
+        </p>
         {canMutate && (
           <button type="button" onClick={() => setShowCreate(true)} className="btn-primary">
             New bundle
@@ -241,7 +244,7 @@ export default function PolicyPage() {
       )}
 
       {showCreate && (
-        <div className="card-glass mb-8 p-6 animate-in">
+        <div className="section-panel mb-8 animate-in">
           <h2 className="mb-4 text-lg font-semibold text-[var(--text)]">New policy bundle</h2>
           <div className="space-y-4">
             <div>
@@ -313,7 +316,7 @@ export default function PolicyPage() {
           {bundles.map((b) => (
             <div
               key={b.id}
-              className="card-glass cursor-pointer p-4 transition-all hover:ring-2 hover:ring-[var(--green)]/30"
+              className="section-panel-tight cursor-pointer transition-all hover:ring-2 hover:ring-[var(--green)]/20"
               onClick={() => openDetail(b.id)}
             >
               <div className="flex items-start justify-between gap-2">
@@ -342,212 +345,272 @@ export default function PolicyPage() {
       )}
 
       {detail && (
-        <div className="card-glass mt-10 p-6 animate-in">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <h2 className="text-xl font-semibold text-[var(--text)]">{detail.name}</h2>
-              <span
-                className={`mt-1 inline-block rounded px-2 py-0.5 text-xs font-medium ${
-                  detail.status === 'approved'
-                    ? 'bg-[var(--green)]/20 text-[var(--green)]'
-                    : 'bg-[var(--amber)]/20 text-[var(--amber)]'
-                }`}
-              >
-                {detail.status}
-              </span>
-            </div>
-            <div className="flex gap-2">
-              <button type="button" onClick={handleEvaluate} className="btn-primary">
-                Evaluate
-              </button>
-              {canMutate && detail.status === 'draft' && (
-                <button type="button" onClick={handleUpdate} className="btn-secondary">
-                  Save edits
-                </button>
-              )}
-              {isAdmin && detail.status === 'draft' && (
-                <button type="button" onClick={handleApprove} className="btn-primary">
-                  Approve
-                </button>
-              )}
-              {isAdmin && (
-                <button type="button" onClick={handleDelete} className="btn-secondary text-[var(--red)]">
-                  Delete
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => {
-                  setDetail(null);
-                  setEvaluateResult(null);
-                  setEvaluationHistory([]);
-                  setAiSummary(null);
-                  setAiSummaryMessage(null);
-                }}
-                className="btn-secondary"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-
-          {detail.description && <p className="mb-4 text-sm text-[var(--muted)]">{detail.description}</p>}
-
-          <div>
-            <label className="mb-1 block text-sm font-medium text-[var(--muted)]">Definition (YAML)</label>
-            {canMutate && detail.status === 'draft' ? (
-              <textarea
-                value={editDef}
-                onChange={(e) => setEditDef(e.target.value)}
-                rows={16}
-                className="input w-full font-mono text-sm"
-                spellCheck={false}
-              />
-            ) : (
-              <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg border border-[var(--border)] bg-[var(--bg)] p-4 font-mono text-sm text-[var(--text)]">
-                {detail.definition}
-              </pre>
-            )}
-          </div>
-
-          <div className="mt-8 border-t border-[var(--border)] pt-6">
-            <h3 className="mb-2 text-lg font-semibold text-[var(--text)]">Recent evaluations</h3>
-            {evaluationHistory.length === 0 ? (
-              <p className="text-sm text-[var(--muted)]">No persisted evaluations yet.</p>
-            ) : (
-              <div className="space-y-2">
-                {evaluationHistory.map((item) => (
-                  <div
-                    key={item.id}
-                    className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--border)] px-3 py-2 text-sm"
-                  >
-                    <div className="text-[var(--muted)]">
-                      #{item.id} - {fmtDate(item.evaluated_at)} - score {item.score ?? '-'}% -{' '}
-                      {item.violations_count} violations
-                    </div>
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      onClick={() => handleLoadEvaluation(item.id)}
+        <div className="mt-10 grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="space-y-6">
+            <section className="section-panel animate-in">
+              <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-xl font-semibold text-[var(--text)]">{detail.name}</h2>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <span
+                      className={`rounded-full px-3 py-1 text-xs font-medium uppercase ${
+                        detail.status === 'approved'
+                          ? 'bg-[var(--green)]/20 text-[var(--green)]'
+                          : 'bg-[var(--amber)]/20 text-[var(--amber)]'
+                      }`}
                     >
-                      Load
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {evaluateResult && (
-            <div className="mt-8 border-t border-[var(--border)] pt-6">
-              <h3 className="mb-2 text-lg font-semibold text-[var(--text)]">Evaluation result</h3>
-              <p className="mb-2 text-2xl font-bold text-[var(--green)]">Score: {evaluateResult.score}%</p>
-              <p className="mb-4 text-sm text-[var(--muted)]">
-                Evaluation #{evaluateResult.evaluation_id ?? '-'} - evaluated {fmtDate(evaluateResult.evaluated_at)} -
-                approved by {evaluateResult.bundle_approved_by || 'n/a'} - {totalViolations} violations
-              </p>
-
-              <div className="mb-6 rounded-lg border border-[var(--border)] bg-[var(--surface-elevated)] p-4">
-                <h4 className="mb-2 text-base font-semibold text-[var(--text)]">AI summary</h4>
-                {aiSummaryLoading ? (
-                  <p className="text-sm text-[var(--muted)]">Loading summary...</p>
-                ) : aiSummary?.summary_text ? (
-                  <>
-                    <p className="whitespace-pre-wrap text-sm leading-6 text-[var(--text)]">
-                      {aiSummary.summary_text}
-                    </p>
-                    <p className="mt-3 text-xs text-[var(--muted)]">
-                      Generated {fmtDate(aiSummary.generated_at)} via {aiSummary.provider}/{aiSummary.model}
-                    </p>
-                  </>
-                ) : (
-                  <p className="text-sm text-[var(--muted)]">
-                    No AI summary generated yet for this evaluation.
-                  </p>
-                )}
-                {aiSummaryMessage && (
-                  <p
-                    className={`mt-3 text-xs ${
-                      aiSummaryMessage.toLowerCase().includes('failed')
-                        ? 'text-[var(--red)]'
-                        : 'text-[var(--muted)]'
-                    }`}
-                  >
-                    {friendlyApiMessage(aiSummaryMessage)}
-                  </p>
-                )}
-                {canMutate && evaluateResult.evaluation_id != null && (
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => handleGenerateAISummary(false)}
-                      disabled={aiSummaryGenerating}
-                      className="btn-primary"
-                    >
-                      {aiSummaryGenerating ? 'Generating...' : aiSummary ? 'Refresh summary' : 'Generate summary'}
-                    </button>
-                    {aiSummary && (
-                      <button
-                        type="button"
-                        onClick={() => handleGenerateAISummary(true)}
-                        disabled={aiSummaryGenerating}
-                        className="btn-secondary"
-                      >
-                        Force regenerate
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-[var(--border)]">
-                      <th className="py-2 text-left font-medium text-[var(--muted)]">Rule</th>
-                      <th className="py-2 text-left font-medium text-[var(--muted)]">Type</th>
-                      <th className="py-2 text-right font-medium text-[var(--muted)]">Passed</th>
-                      <th className="py-2 text-right font-medium text-[var(--muted)]">Failed</th>
-                      <th className="py-2 text-right font-medium text-[var(--muted)]">Pass %</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {evaluateResult.rules.map((r) => (
-                      <tr key={r.id} className="border-b border-[var(--border)]/50">
-                        <td className="py-2 text-[var(--text)]">{r.name}</td>
-                        <td className="py-2 text-[var(--muted)]">{r.type}</td>
-                        <td className="py-2 text-right text-[var(--green)]">{r.passed}</td>
-                        <td className="py-2 text-right text-[var(--red)]">{r.failed}</td>
-                        <td className="py-2 text-right font-medium">{r.pass_pct}%</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              {totalViolations > 0 && (
-                <div className="mt-6">
-                  <h4 className="mb-2 text-base font-semibold text-[var(--text)]">Violations</h4>
-                  <div className="space-y-3">
-                    {(evaluateResult.violations || []).map((v, idx) => (
-                      <div key={`${v.rule_id}-${v.asset_key}-${idx}`} className="rounded-lg border border-[var(--border)] p-3">
-                        <div className="text-sm text-[var(--text)]">
-                          <span className="font-semibold">{v.rule_name}</span> ({v.rule_type}) on{' '}
-                          <span className="font-mono">{v.asset_key}</span>
-                        </div>
-                        <div className="mt-1 text-xs text-[var(--muted)]">
-                          Timestamp: {fmtDate(v.timestamp)} | Approved by: {v.bundle_approved_by || 'n/a'}
-                        </div>
-                        <pre className="mt-2 overflow-x-auto whitespace-pre-wrap rounded bg-[var(--bg)] p-2 text-xs text-[var(--muted)]">
-                          {JSON.stringify(v.evidence, null, 2)}
-                        </pre>
-                      </div>
-                    ))}
+                      {detail.status}
+                    </span>
+                    {detail.approved_by && <span className="stat-chip">Approved by {detail.approved_by}</span>}
+                    <span className="stat-chip">Updated {fmtDate(detail.updated_at)}</span>
                   </div>
                 </div>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={handleEvaluate} className="btn-primary">
+                    Evaluate
+                  </button>
+                  {canMutate && detail.status === 'draft' && (
+                    <button type="button" onClick={handleUpdate} className="btn-secondary">
+                      Save edits
+                    </button>
+                  )}
+                  {isAdmin && detail.status === 'draft' && (
+                    <button type="button" onClick={handleApprove} className="btn-primary">
+                      Approve
+                    </button>
+                  )}
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      onClick={handleDelete}
+                      className="btn-secondary text-[var(--red)]"
+                    >
+                      Delete
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDetail(null);
+                      setEvaluateResult(null);
+                      setEvaluationHistory([]);
+                      setAiSummary(null);
+                      setAiSummaryMessage(null);
+                    }}
+                    className="btn-secondary"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+
+              {detail.description && (
+                <p className="mb-4 text-sm text-[var(--text-muted)]">{detail.description}</p>
+              )}
+
+              <details className="disclosure" open>
+                <summary>Bundle definition</summary>
+                <div className="disclosure-body">
+                  {canMutate && detail.status === 'draft' ? (
+                    <textarea
+                      value={editDef}
+                      onChange={(e) => setEditDef(e.target.value)}
+                      rows={16}
+                      className="input w-full font-mono text-sm"
+                      spellCheck={false}
+                    />
+                  ) : (
+                    <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg border border-[var(--border)] bg-[var(--bg)] p-4 font-mono text-sm text-[var(--text)]">
+                      {detail.definition}
+                    </pre>
+                  )}
+                </div>
+              </details>
+            </section>
+
+            {evaluateResult && (
+              <section className="section-panel animate-in">
+                <h3 className="mb-4 text-lg font-semibold text-[var(--text)]">Latest evaluation</h3>
+                <div className="meta-grid">
+                  <div className="kv-item">
+                    <span className="kv-label">Score</span>
+                    <div className="kv-value text-xl font-semibold text-[var(--green)]">
+                      {evaluateResult.score}%
+                    </div>
+                  </div>
+                  <div className="kv-item">
+                    <span className="kv-label">Evaluation ID</span>
+                    <div className="kv-value">#{evaluateResult.evaluation_id ?? '-'}</div>
+                  </div>
+                  <div className="kv-item">
+                    <span className="kv-label">Evaluated</span>
+                    <div className="kv-value">{fmtDate(evaluateResult.evaluated_at)}</div>
+                  </div>
+                  <div className="kv-item">
+                    <span className="kv-label">Violations</span>
+                    <div className="kv-value">{totalViolations}</div>
+                  </div>
+                </div>
+
+                <div className="mt-6 rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)]/70 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h4 className="text-base font-semibold text-[var(--text)]">AI summary</h4>
+                      <p className="mt-1 text-xs text-[var(--muted)]">
+                        Short remediation brief for the current evaluation snapshot.
+                      </p>
+                    </div>
+                    {canMutate && evaluateResult.evaluation_id != null && (
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleGenerateAISummary(false)}
+                          disabled={aiSummaryGenerating}
+                          className="btn-primary text-sm"
+                        >
+                          {aiSummaryGenerating
+                            ? 'Generating...'
+                            : aiSummary
+                              ? 'Refresh summary'
+                              : 'Generate summary'}
+                        </button>
+                        {aiSummary && (
+                          <button
+                            type="button"
+                            onClick={() => handleGenerateAISummary(true)}
+                            disabled={aiSummaryGenerating}
+                            className="btn-secondary text-sm"
+                          >
+                            Force regenerate
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <div className="mt-4">
+                    {aiSummaryLoading ? (
+                      <p className="text-sm text-[var(--muted)]">Loading summary...</p>
+                    ) : aiSummary?.summary_text ? (
+                      <>
+                        <p className="whitespace-pre-wrap text-sm leading-6 text-[var(--text)]">
+                          {aiSummary.summary_text}
+                        </p>
+                        <p className="mt-3 text-xs text-[var(--muted)]">
+                          Generated {fmtDate(aiSummary.generated_at)} via {aiSummary.provider}/{aiSummary.model}
+                        </p>
+                      </>
+                    ) : (
+                      <p className="text-sm text-[var(--muted)]">
+                        No AI summary generated yet for this evaluation.
+                      </p>
+                    )}
+                    {aiSummaryMessage && (
+                      <p
+                        className={`mt-3 text-xs ${
+                          aiSummaryMessage.toLowerCase().includes('failed')
+                            ? 'text-[var(--red)]'
+                            : 'text-[var(--muted)]'
+                        }`}
+                      >
+                        {friendlyApiMessage(aiSummaryMessage)}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-6 space-y-4">
+                  <details className="disclosure" open>
+                    <summary>Rule-by-rule results</summary>
+                    <div className="disclosure-body overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-[var(--border)] text-left text-xs uppercase tracking-[0.16em] text-[var(--muted)]">
+                            <th className="py-2">Rule</th>
+                            <th className="py-2">Type</th>
+                            <th className="py-2 text-right">Passed</th>
+                            <th className="py-2 text-right">Failed</th>
+                            <th className="py-2 text-right">Pass %</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {evaluateResult.rules.map((rule) => (
+                            <tr key={rule.id} className="border-b border-[var(--border)]/50">
+                              <td className="py-3 text-[var(--text)]">{rule.name}</td>
+                              <td className="py-3 text-[var(--muted)]">{rule.type}</td>
+                              <td className="py-3 text-right text-[var(--green)]">{rule.passed}</td>
+                              <td className="py-3 text-right text-[var(--red)]">{rule.failed}</td>
+                              <td className="py-3 text-right font-medium text-[var(--text)]">{rule.pass_pct}%</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </details>
+
+                  {totalViolations > 0 && (
+                    <details className="disclosure">
+                      <summary>Raw violations ({totalViolations})</summary>
+                      <div className="disclosure-body space-y-3">
+                        {(evaluateResult.violations || []).map((violation, idx) => (
+                          <div
+                            key={`${violation.rule_id}-${violation.asset_key}-${idx}`}
+                            className="rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)]/55 p-3"
+                          >
+                            <div className="text-sm text-[var(--text)]">
+                              <span className="font-semibold">{violation.rule_name}</span> ({violation.rule_type}) on{' '}
+                              <span className="font-mono">{violation.asset_key}</span>
+                            </div>
+                            <div className="mt-1 text-xs text-[var(--muted)]">
+                              {fmtDate(violation.timestamp)} | Approved by {violation.bundle_approved_by || 'n/a'}
+                            </div>
+                            <pre className="mt-2 overflow-x-auto whitespace-pre-wrap rounded bg-[var(--bg)] p-3 text-xs text-[var(--text-muted)]">
+                              {JSON.stringify(violation.evidence, null, 2)}
+                            </pre>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                </div>
+              </section>
+            )}
+          </div>
+
+          <aside className="section-panel animate-in">
+            <h3 className="text-lg font-semibold text-[var(--text)]">Evaluation history</h3>
+            <p className="mt-1 text-sm text-[var(--text-muted)]">
+              Load a previous run to compare AI summaries and evidence.
+            </p>
+            <div className="mt-4 space-y-3">
+              {evaluationHistory.length === 0 ? (
+                <p className="text-sm text-[var(--muted)]">No persisted evaluations yet.</p>
+              ) : (
+                evaluationHistory.map((item) => (
+                  <div
+                    key={item.id}
+                    className="rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)]/55 p-4"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-[var(--text)]">Evaluation #{item.id}</p>
+                        <p className="mt-1 text-xs text-[var(--muted)]">{fmtDate(item.evaluated_at)}</p>
+                        <p className="mt-2 text-xs text-[var(--text-muted)]">
+                          Score {item.score ?? '-'}% | {item.violations_count} violations
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn-secondary text-sm"
+                        onClick={() => handleLoadEvaluation(item.id)}
+                      >
+                        Load
+                      </button>
+                    </div>
+                  </div>
+                ))
               )}
             </div>
-          )}
+          </aside>
         </div>
       )}
     </main>

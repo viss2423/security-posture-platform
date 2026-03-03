@@ -15,8 +15,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       <AuthProvider>
         <FilterProvider>
           <ApiStatusBanner />
-          <div className="mx-auto min-h-screen w-full max-w-[1640px] px-3 py-3 sm:px-4 lg:px-6">
-            <div className="lg:flex lg:gap-4">
+          <div className="mx-auto min-h-screen w-full max-w-[1560px] px-3 py-3 sm:px-4 lg:px-5">
+            <div className="lg:flex lg:gap-5">
               <Nav />
               <div className="min-w-0 flex-1">
                 <AppTopBar />

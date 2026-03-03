@@ -3,30 +3,29 @@
 @tailwind utilities;
 
 :root {
-  --bg: #040911;
-  --bg-mesh: radial-gradient(ellipse 75% 45% at 50% -10%, rgba(56, 189, 120, 0.2), transparent),
-    radial-gradient(ellipse 45% 35% at 90% 30%, rgba(59, 130, 246, 0.2), transparent),
-    radial-gradient(ellipse 40% 28% at 12% 82%, rgba(45, 212, 191, 0.14), transparent),
-    radial-gradient(ellipse 30% 24% at 70% 78%, rgba(14, 165, 233, 0.12), transparent);
-  --surface: #0b1320;
-  --surface-80: rgba(11, 19, 32, 0.82);
-  --surface-elevated: #121e2f;
-  --surface-glass: rgba(11, 19, 32, 0.74);
+  --bg: #07111b;
+  --bg-mesh: radial-gradient(ellipse 55% 35% at 18% -8%, rgba(52, 211, 153, 0.08), transparent),
+    radial-gradient(ellipse 42% 28% at 100% 8%, rgba(59, 130, 246, 0.08), transparent),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.015), rgba(255, 255, 255, 0));
+  --surface: #0d1724;
+  --surface-80: rgba(13, 23, 36, 0.9);
+  --surface-elevated: #131f30;
+  --surface-glass: rgba(13, 23, 36, 0.92);
   --text: #e7edf8;
   --text-muted: #9fb0c9;
   --muted: #6f839f;
   --green: #34d399;
-  --green-glow: rgba(52, 211, 153, 0.38);
-  --green-ring: rgba(52, 211, 153, 0.3);
-  --green-bg-subtle: rgba(52, 211, 153, 0.14);
+  --green-glow: rgba(52, 211, 153, 0.18);
+  --green-ring: rgba(52, 211, 153, 0.22);
+  --green-bg-subtle: rgba(52, 211, 153, 0.1);
   --amber: #eab308;
   --red: #ef4444;
   --red-border: rgba(239, 68, 68, 0.3);
   --red-bg: rgba(239, 68, 68, 0.1);
   --red-border-subtle: rgba(239, 68, 68, 0.2);
-  --border: #26364d;
-  --surface-elevated-80: rgba(18, 30, 47, 0.8);
-  --surface-elevated-50: rgba(18, 30, 47, 0.5);
+  --border: #233245;
+  --surface-elevated-80: rgba(19, 31, 48, 0.86);
+  --surface-elevated-50: rgba(19, 31, 48, 0.56);
   --border-focus: #34d399;
   --cyan: #22d3ee;
   --indigo: #818cf8;
@@ -57,8 +56,8 @@ body::before {
   inset: 0;
   pointer-events: none;
   background:
-    linear-gradient(120deg, rgba(52, 211, 153, 0.05), transparent 35%),
-    linear-gradient(300deg, rgba(34, 211, 238, 0.05), transparent 30%);
+    linear-gradient(120deg, rgba(52, 211, 153, 0.025), transparent 35%),
+    linear-gradient(300deg, rgba(34, 211, 238, 0.025), transparent 30%);
   z-index: -2;
 }
 
@@ -67,10 +66,12 @@ body::after {
   position: fixed;
   inset: 0;
   pointer-events: none;
-  opacity: 0.08;
+  opacity: 0.03;
   background-image:
-    radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.35) 1px, transparent 0);
-  background-size: 24px 24px;
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-size: 36px 36px;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.4), transparent 78%);
   z-index: -1;
 }
 
@@ -156,29 +157,29 @@ h4 {
 @layer components {
   .card {
     background-color: var(--surface-80);
-    backdrop-filter: blur(12px);
-    @apply rounded-2xl border border-[var(--border)] p-5 shadow-xl shadow-black/20 transition-all duration-300;
+    backdrop-filter: blur(10px);
+    @apply rounded-2xl border border-[var(--border)] p-5 shadow-lg shadow-black/20 transition-all duration-200;
   }
   .card:hover {
-    border-color: rgba(34, 197, 94, 0.2);
-    box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.08), 0 25px 50px -12px rgba(0, 0, 0, 0.4);
+    border-color: rgba(52, 211, 153, 0.18);
+    box-shadow: 0 12px 28px -18px rgba(0, 0, 0, 0.65);
   }
   .card-glass {
     background: var(--surface-glass);
-    backdrop-filter: blur(16px);
-    @apply rounded-2xl border border-[var(--border)] p-5 shadow-xl shadow-black/20;
+    backdrop-filter: blur(14px);
+    @apply rounded-2xl border border-[var(--border)] p-5 shadow-lg shadow-black/20;
   }
   .btn-primary {
-    @apply relative rounded-xl px-5 py-3 font-semibold text-white transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-[var(--green)] focus:ring-offset-2 focus:ring-offset-[var(--bg)] disabled:opacity-50 disabled:cursor-not-allowed;
-    background: linear-gradient(135deg, var(--green) 0%, #16a34a 100%);
-    box-shadow: 0 4px 14px var(--green-glow);
+    @apply relative rounded-xl px-4 py-2.5 font-semibold text-white transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-[var(--green)] focus:ring-offset-2 focus:ring-offset-[var(--bg)] disabled:opacity-50 disabled:cursor-not-allowed;
+    background: linear-gradient(135deg, #1faa6d 0%, #18895b 100%);
+    box-shadow: 0 3px 10px var(--green-glow);
   }
   .btn-primary:hover:not(:disabled) {
     transform: translateY(-1px);
-    box-shadow: 0 6px 20px var(--green-glow);
+    box-shadow: 0 5px 16px var(--green-glow);
   }
   .btn-secondary {
-    @apply rounded-xl border border-[var(--border)] bg-[var(--surface)] px-5 py-3 font-medium text-[var(--text)] transition-all duration-200 hover:border-[var(--muted)] hover:bg-[var(--surface-elevated)] focus:outline-none focus:ring-2 focus:ring-[var(--border)] focus:ring-offset-2 focus:ring-offset-[var(--bg)] disabled:opacity-50;
+    @apply rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-2.5 font-medium text-[var(--text)] transition-all duration-200 hover:border-[var(--muted)] hover:bg-[var(--surface-elevated)] focus:outline-none focus:ring-2 focus:ring-[var(--border)] focus:ring-offset-2 focus:ring-offset-[var(--bg)] disabled:opacity-50;
   }
   .btn-secondary:hover:not(:disabled) {
     transform: translateY(-1px);
@@ -202,12 +203,12 @@ h4 {
     background-color: rgba(239, 68, 68, 0.15);
   }
   .page-title {
-    @apply text-3xl font-bold tracking-tight text-[var(--text)];
+    @apply text-[2rem] font-semibold tracking-tight text-[var(--text)];
     font-family: var(--font-display), var(--font-sans), sans-serif;
     letter-spacing: -0.02em;
   }
   .section-title {
-    @apply text-xs font-semibold uppercase tracking-widest text-[var(--muted)] mb-3;
+    @apply mb-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--muted)];
   }
   .metric-card {
     @apply card text-center overflow-hidden relative;
@@ -309,8 +310,57 @@ h4 {
     background-color: var(--green-bg-subtle);
   }
   .glass-panel {
-    background: linear-gradient(180deg, rgba(11, 19, 32, 0.88), rgba(11, 19, 32, 0.76));
-    @apply rounded-2xl border border-[var(--border)] shadow-xl shadow-black/30 backdrop-blur-xl;
+    background: linear-gradient(180deg, rgba(13, 23, 36, 0.92), rgba(13, 23, 36, 0.82));
+    @apply rounded-2xl border border-[var(--border)] shadow-lg shadow-black/25 backdrop-blur-xl;
+  }
+  .page-shell {
+    @apply mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8;
+  }
+  .section-panel {
+    background: linear-gradient(180deg, rgba(19, 31, 48, 0.94), rgba(13, 23, 36, 0.9));
+    @apply rounded-2xl border border-[var(--border)] p-6 shadow-lg shadow-black/20 backdrop-blur-xl;
+  }
+  .section-panel-tight {
+    background: linear-gradient(180deg, rgba(19, 31, 48, 0.88), rgba(13, 23, 36, 0.84));
+    @apply rounded-xl border border-[var(--border)] p-4 shadow-md shadow-black/15 backdrop-blur-xl;
+  }
+  .stat-chip {
+    @apply inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--surface-elevated)] px-3 py-1 text-xs text-[var(--text-muted)];
+  }
+  .stat-chip-strong {
+    @apply inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium;
+    border-color: rgba(52, 211, 153, 0.18);
+    background: rgba(52, 211, 153, 0.08);
+    color: var(--text);
+  }
+  .meta-grid {
+    @apply grid gap-3 sm:grid-cols-2 xl:grid-cols-4;
+  }
+  .kv-grid {
+    @apply grid gap-3 sm:grid-cols-2;
+  }
+  .kv-item {
+    background: rgba(19, 31, 48, 0.72);
+    @apply rounded-xl border border-[var(--border)] px-4 py-3;
+  }
+  .kv-label {
+    @apply mb-1 block text-[11px] uppercase tracking-[0.16em] text-[var(--muted)];
+  }
+  .kv-value {
+    @apply text-sm text-[var(--text)];
+  }
+  .disclosure {
+    background: rgba(19, 31, 48, 0.72);
+    @apply rounded-xl border border-[var(--border)];
+  }
+  .disclosure > summary {
+    @apply cursor-pointer list-none px-4 py-3 text-sm font-medium text-[var(--text)];
+  }
+  .disclosure > summary::-webkit-details-marker {
+    display: none;
+  }
+  .disclosure-body {
+    @apply border-t border-[var(--border)] px-4 py-4;
   }
 }
 

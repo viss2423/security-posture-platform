@@ -206,8 +206,11 @@ export default function OverviewPage() {
   };
 
   return (
-    <main className="mx-auto max-w-6xl px-4 py-10 sm:px-6 lg:px-8">
-      <h1 className="page-title mb-10">Posture Overview</h1>
+    <main className="page-shell">
+      <p className="mb-5 text-sm text-[var(--muted)]">
+        Track posture movement, highest-risk entities, and recent anomalies from a single operating
+        view.
+      </p>
       {error && (
         <div className="mb-6 alert-error animate-in" role="alert">
           {friendlyApiMessage(error)}

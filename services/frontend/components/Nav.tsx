@@ -55,15 +55,15 @@ function Brand({ compact = false }: { compact?: boolean }) {
   return (
     <Link
       href="/overview"
-      className="flex items-center gap-3 rounded-xl px-2 py-1 text-[var(--text)] transition hover:bg-[var(--surface-elevated)]"
+      className="flex items-center gap-3 rounded-2xl px-2 py-1.5 text-[var(--text)] transition hover:bg-white/[0.03]"
     >
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[var(--green)] via-emerald-300 to-cyan-300 text-sm font-black text-black shadow-[0_0_20px_rgba(52,211,153,0.55)]">
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-300 to-teal-300 text-sm font-black text-slate-950 shadow-[0_10px_30px_rgba(52,211,153,0.18)]">
         SP
       </span>
       {!compact && (
         <span className="flex flex-col">
-          <span className="[font-family:var(--font-display)] text-sm font-bold uppercase tracking-[0.08em] text-[var(--text)]">SecPlat</span>
-          <span className="text-xs text-[var(--muted)]">Enterprise security operations</span>
+          <span className="[font-family:var(--font-display)] text-sm font-semibold uppercase tracking-[0.08em] text-[var(--text)]">SecPlat</span>
+          <span className="text-xs tracking-[0.06em] text-[var(--muted)]">Security operations</span>
         </span>
       )}
     </Link>
@@ -74,35 +74,35 @@ function PulseCard({ summary }: { summary: PostureSummary | null }) {
   const score = summary?.posture_score_avg != null ? Math.round(Number(summary.posture_score_avg)) : null;
 
   return (
-    <div className="rounded-2xl border border-[var(--border)] bg-gradient-to-br from-[var(--surface-elevated)] to-[var(--surface)] p-3.5 shadow-lg shadow-black/25">
-      <div className="mb-3 flex items-center justify-between">
-        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--text-muted)]">Operational pulse</p>
-        <span className="rounded-full bg-[var(--green)]/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--green)]">
+    <div className="rounded-2xl border border-[var(--border)] bg-white/[0.025] p-3.5">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">Operational pulse</p>
+          <div className="mt-2 flex items-end gap-3">
+            <p className="[font-family:var(--font-display)] text-4xl font-semibold leading-none text-[var(--text)]">{score ?? '--'}</p>
+            <div className="pb-1 text-xs text-[var(--muted)]">Posture score</div>
+          </div>
+        </div>
+        <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-300">
           Live
         </span>
       </div>
-      <div className="mb-3 flex items-end justify-between">
-        <div>
-          <p className="text-[11px] uppercase tracking-[0.1em] text-[var(--muted)]">Posture score</p>
-          <p className="[font-family:var(--font-display)] text-3xl font-bold text-[var(--text)]">{score ?? '--'}</p>
-        </div>
-        <div className="h-10 w-28 overflow-hidden rounded-full border border-[var(--border)] bg-[var(--surface)] p-1">
-          <div
-            className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-cyan-300 transition-all"
-            style={{ width: `${Math.max(8, Math.min(100, score ?? 8))}%` }}
-          />
-        </div>
+      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-[var(--surface)]">
+        <div
+          className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-teal-300 transition-all"
+          style={{ width: `${Math.max(6, Math.min(100, score ?? 6))}%` }}
+        />
       </div>
-      <div className="grid grid-cols-3 gap-2 text-xs">
-        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-2">
+      <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)]/92 p-2.5">
           <p className="text-[var(--muted)]">Green</p>
           <p className="mt-1 font-semibold text-emerald-300">{summary?.green ?? '--'}</p>
         </div>
-        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-2">
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)]/92 p-2.5">
           <p className="text-[var(--muted)]">Amber</p>
           <p className="mt-1 font-semibold text-amber-300">{summary?.amber ?? '--'}</p>
         </div>
-        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-2">
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)]/92 p-2.5">
           <p className="text-[var(--muted)]">Red</p>
           <p className="mt-1 font-semibold text-rose-300">{summary?.red ?? '--'}</p>
         </div>
@@ -126,17 +126,17 @@ function SidebarPanel({
   role?: string;
   summary: PostureSummary | null;
   onSignOut: () => void;
-  onNavigate?: () => void;
+    onNavigate?: () => void;
 }) {
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-[var(--border)] p-4">
+      <div className="border-b border-[var(--border)]/80 p-4">
         <Brand />
       </div>
-      <div className="space-y-4 border-b border-[var(--border)] px-3 py-4">
+      <div className="space-y-4 border-b border-[var(--border)]/80 px-3 py-4">
         <PulseCard summary={summary} />
       </div>
-      <div className="flex-1 space-y-6 overflow-y-auto px-3 py-4">
+      <div className="flex-1 space-y-5 overflow-y-auto px-3 py-4">
         {groups.map((group, idx) => (
           <motion.section
             key={group.title}
@@ -144,7 +144,7 @@ function SidebarPanel({
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.25, delay: idx * 0.04 }}
           >
-            <h2 className="px-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">{group.title}</h2>
+            <h2 className="px-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">{group.title}</h2>
             <div className="mt-2 space-y-1">
               {group.items.map((item) => {
                 const Icon = ICONS[item.icon];
@@ -155,10 +155,10 @@ function SidebarPanel({
                     href={item.href}
                     onClick={onNavigate}
                     className={cn(
-                      'group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition',
+                      'group flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition',
                       active
-                        ? 'bg-[var(--green)]/16 text-[var(--text)] ring-1 ring-[var(--green)]/30 shadow-[0_0_0_1px_rgba(52,211,153,0.08)]'
-                        : 'text-[var(--text-muted)] hover:bg-[var(--surface-elevated)] hover:text-[var(--text)]'
+                        ? 'bg-emerald-400/[0.08] text-[var(--text)] ring-1 ring-emerald-400/18'
+                        : 'text-[var(--text-muted)] hover:bg-white/[0.035] hover:text-[var(--text)]'
                     )}
                   >
                     <Icon
@@ -180,15 +180,15 @@ function SidebarPanel({
           </motion.section>
         ))}
       </div>
-      <div className="border-t border-[var(--border)] p-4">
-        <div className="mb-3 rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)]/70 px-3 py-2.5">
+      <div className="border-t border-[var(--border)]/80 p-4">
+        <div className="mb-3 rounded-2xl border border-[var(--border)] bg-white/[0.03] px-3 py-3">
           <p className="truncate text-sm font-medium text-[var(--text)]">{username || 'Signed in'}</p>
-          <p className="text-xs uppercase tracking-[0.12em] text-[var(--muted)]">{role || 'viewer'}</p>
+          <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-[var(--muted)]">{role || 'viewer'}</p>
         </div>
         <button
           type="button"
           onClick={onSignOut}
-          className="flex w-full items-center justify-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 text-sm font-medium text-[var(--text-muted)] transition hover:border-[var(--green)]/40 hover:text-[var(--text)]"
+          className="flex w-full items-center justify-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 text-sm font-medium text-[var(--text-muted)] transition hover:border-[var(--green)]/25 hover:bg-white/[0.025] hover:text-[var(--text)]"
         >
           <LogOut size={15} />
           Sign out
@@ -276,8 +276,8 @@ export default function Nav() {
         </div>
       </div>
 
-      <aside className="hidden lg:block lg:w-[19rem] lg:shrink-0">
-        <div className="sticky top-4 h-[calc(100vh-2rem)] overflow-hidden rounded-3xl border border-[var(--border)] bg-[var(--surface)]/92 shadow-2xl shadow-black/30 backdrop-blur-xl">
+      <aside className="hidden lg:block lg:w-[17.5rem] lg:shrink-0">
+        <div className="sticky top-4 h-[calc(100vh-2rem)] overflow-hidden rounded-[1.75rem] border border-[var(--border)] bg-[var(--surface)]/94 shadow-xl shadow-black/25 backdrop-blur-xl">
           <SidebarPanel
             pathname={pathname}
             groups={visibleGroups}

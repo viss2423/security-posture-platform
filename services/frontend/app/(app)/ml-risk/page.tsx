@@ -296,15 +296,12 @@ export default function MlRiskPage() {
   };
 
   return (
-    <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
-      <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="page-title mb-2">ML Risk Lab</h1>
-          <p className="max-w-3xl text-sm text-[var(--muted)]">
-            Train, calibrate, tune, and evaluate the live finding-risk classifier from the product
-            surface instead of treating model quality as an external notebook exercise.
-          </p>
-        </div>
+    <main className="page-shell max-w-7xl">
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+        <p className="max-w-3xl text-sm text-[var(--muted)]">
+          Train, calibrate, and audit the live risk classifier without leaving the product
+          workspace.
+        </p>
         <div className="flex flex-wrap gap-2">
           <Link href="/findings" className="btn-secondary text-sm">
             Back to findings
@@ -362,7 +359,7 @@ export default function MlRiskPage() {
       ) : (
         <>
           {status && (
-            <section className="card mb-8 animate-in">
+            <section className="section-panel mb-8 animate-in">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
                   <h2 className="section-title mb-2">Live model status</h2>
@@ -455,7 +452,7 @@ export default function MlRiskPage() {
               </section>
 
               <section className="mb-8 grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-                <div className="card">
+                <div className="section-panel-tight">
                   <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <h2 className="section-title">Threshold tuning</h2>
@@ -517,111 +514,124 @@ export default function MlRiskPage() {
                       )}
                     </div>
                   </div>
-                  <div className="max-h-[28rem] space-y-2 overflow-auto pr-1">
-                    {evaluation.threshold_sweep.map((item) => {
-                      const isActive = Math.abs(item.threshold - evaluation.threshold) < 0.0001;
-                      const isRecommended =
-                        evaluation.recommended_threshold != null &&
-                        Math.abs(item.threshold - evaluation.recommended_threshold) < 0.0001;
-                      return (
-                        <div
-                          key={item.threshold}
-                          className={`rounded-xl border p-3 ${
-                            isActive
-                              ? 'border-[var(--green)]/60 bg-[var(--green)]/10'
-                              : 'border-[var(--border)]'
-                          }`}
-                        >
-                          <div className="flex flex-wrap items-center justify-between gap-3">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="text-sm font-semibold text-[var(--text)]">
-                                {formatThreshold(item.threshold)}
-                              </span>
-                              {isActive && (
-                                <span className="rounded bg-[var(--green)] px-2 py-0.5 text-[10px] font-semibold uppercase text-white">
-                                  active
+                  <details className="disclosure mt-4">
+                    <summary className="cursor-pointer list-none text-sm font-medium text-[var(--text)]">
+                      Threshold sweep details
+                    </summary>
+                    <div className="disclosure-body mt-4 max-h-[28rem] space-y-2 overflow-auto pr-1">
+                      {evaluation.threshold_sweep.map((item) => {
+                        const isActive = Math.abs(item.threshold - evaluation.threshold) < 0.0001;
+                        const isRecommended =
+                          evaluation.recommended_threshold != null &&
+                          Math.abs(item.threshold - evaluation.recommended_threshold) < 0.0001;
+                        return (
+                          <div
+                            key={item.threshold}
+                            className={`rounded-xl border p-3 ${
+                              isActive
+                                ? 'border-[var(--green)]/60 bg-[var(--green)]/10'
+                                : 'border-[var(--border)]'
+                            }`}
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-sm font-semibold text-[var(--text)]">
+                                  {formatThreshold(item.threshold)}
                                 </span>
-                              )}
-                              {isRecommended && (
-                                <span className="rounded bg-[var(--amber)] px-2 py-0.5 text-[10px] font-semibold uppercase text-black">
-                                  recommended
-                                </span>
-                              )}
-                            </div>
-                            <div className="flex flex-wrap gap-4 text-xs text-[var(--muted)]">
-                              <span>precision {formatPct(item.precision)}</span>
-                              <span>recall {formatPct(item.recall)}</span>
-                              <span>f1 {formatPct(item.f1)}</span>
-                              <span>predicted + {item.positive_predictions}</span>
+                                {isActive && (
+                                  <span className="rounded bg-[var(--green)] px-2 py-0.5 text-[10px] font-semibold uppercase text-white">
+                                    active
+                                  </span>
+                                )}
+                                {isRecommended && (
+                                  <span className="rounded bg-[var(--amber)] px-2 py-0.5 text-[10px] font-semibold uppercase text-black">
+                                    recommended
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex flex-wrap gap-4 text-xs text-[var(--muted)]">
+                                <span>precision {formatPct(item.precision)}</span>
+                                <span>recall {formatPct(item.recall)}</span>
+                                <span>f1 {formatPct(item.f1)}</span>
+                                <span>predicted + {item.positive_predictions}</span>
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      );
-                    })}
-                  </div>
+                        );
+                      })}
+                    </div>
+                  </details>
                 </div>
 
-                <div className="card">
-                  <h2 className="section-title mb-4">Calibration quality</h2>
-                  <div className="mb-4 grid gap-3 sm:grid-cols-2">
-                    <MetricCard
-                      label="Method"
-                      value={evaluation.calibration.method || 'none'}
-                      subtext="Probability calibration"
-                    />
-                    <MetricCard
-                      label="Brier score"
-                      value={formatPct(evaluation.calibration.brier_score)}
-                      subtext="Lower is better"
-                    />
-                  </div>
-                  <div className="space-y-3">
-                    {evaluation.calibration.bins.map((bin) => (
-                      <div key={bin.bucket} className="rounded-xl border border-[var(--border)] p-3">
-                        <div className="mb-2 flex items-center justify-between text-xs text-[var(--muted)]">
-                          <span>{bin.bucket}</span>
-                          <span>{bin.count} rows</span>
-                        </div>
-                        <div className="space-y-2">
-                          <div>
-                            <div className="mb-1 flex items-center justify-between text-[11px] text-[var(--muted)]">
-                              <span>Predicted</span>
-                              <span>{formatPct(bin.average_predicted_probability)}</span>
+                <details className="section-panel-tight disclosure">
+                  <summary className="cursor-pointer list-none">
+                    <h2 className="section-title mb-0">Calibration quality</h2>
+                  </summary>
+                  <div className="disclosure-body mt-4">
+                    <div className="mb-4 grid gap-3 sm:grid-cols-2">
+                      <MetricCard
+                        label="Method"
+                        value={evaluation.calibration.method || 'none'}
+                        subtext="Probability calibration"
+                      />
+                      <MetricCard
+                        label="Brier score"
+                        value={formatPct(evaluation.calibration.brier_score)}
+                        subtext="Lower is better"
+                      />
+                    </div>
+                    <div className="space-y-3">
+                      {evaluation.calibration.bins.map((bin) => (
+                        <div key={bin.bucket} className="rounded-xl border border-[var(--border)] p-3">
+                          <div className="mb-2 flex items-center justify-between text-xs text-[var(--muted)]">
+                            <span>{bin.bucket}</span>
+                            <span>{bin.count} rows</span>
+                          </div>
+                          <div className="space-y-2">
+                            <div>
+                              <div className="mb-1 flex items-center justify-between text-[11px] text-[var(--muted)]">
+                                <span>Predicted</span>
+                                <span>{formatPct(bin.average_predicted_probability)}</span>
+                              </div>
+                              <div className="h-2 rounded-full bg-[var(--surface)]">
+                                <div
+                                  className="h-2 rounded-full bg-[var(--green)]"
+                                  style={{
+                                    width: `${Math.max(
+                                      2,
+                                      (bin.average_predicted_probability ?? 0) * 100
+                                    )}%`,
+                                  }}
+                                />
+                              </div>
                             </div>
-                            <div className="h-2 rounded-full bg-[var(--surface)]">
-                              <div
-                                className="h-2 rounded-full bg-[var(--green)]"
-                                style={{
-                                  width: `${Math.max(
-                                    2,
-                                    (bin.average_predicted_probability ?? 0) * 100
-                                  )}%`,
-                                }}
-                              />
+                            <div>
+                              <div className="mb-1 flex items-center justify-between text-[11px] text-[var(--muted)]">
+                                <span>Observed</span>
+                                <span>{formatPct(bin.observed_positive_rate)}</span>
+                              </div>
+                              <div className="h-2 rounded-full bg-[var(--surface)]">
+                                <div
+                                  className="h-2 rounded-full bg-blue-500"
+                                  style={{
+                                    width: `${Math.max(2, (bin.observed_positive_rate ?? 0) * 100)}%`,
+                                  }}
+                                />
+                              </div>
                             </div>
                           </div>
-                          <div>
-                            <div className="mb-1 flex items-center justify-between text-[11px] text-[var(--muted)]">
-                              <span>Observed</span>
-                              <span>{formatPct(bin.observed_positive_rate)}</span>
-                            </div>
-                            <div className="h-2 rounded-full bg-[var(--surface)]">
-                              <div
-                                className="h-2 rounded-full bg-blue-500"
-                                style={{
-                                  width: `${Math.max(2, (bin.observed_positive_rate ?? 0) * 100)}%`,
-                                }}
-                              />
-                            </div>
-                          </div>
                         </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
-                </div>
+                </details>
               </section>
-              <section className="mb-8 grid gap-6 xl:grid-cols-[1.1fr_1fr_1fr]">
-                <div className="card">
+              <details className="section-panel mb-8 disclosure">
+                <summary className="cursor-pointer list-none">
+                  <h2 className="section-title mb-0">Performance breakdown</h2>
+                </summary>
+                <div className="disclosure-body mt-4 grid gap-6 xl:grid-cols-[1.1fr_1fr_1fr]">
+                  <div className="section-panel-tight">
                   <h2 className="section-title mb-4">Confusion matrix</h2>
                   <div className="grid grid-cols-2 gap-3">
                     <div className="rounded-xl border border-[var(--border)] bg-[var(--green)]/10 p-4">
@@ -649,9 +659,9 @@ export default function MlRiskPage() {
                       </p>
                     </div>
                   </div>
-                </div>
+                  </div>
 
-                <div className="card">
+                  <div className="section-panel-tight">
                   <h2 className="section-title mb-4">Label sources</h2>
                   <ul className="space-y-2">
                     {Object.entries(evaluation.labeled_evaluation.label_source_counts).map(
@@ -686,9 +696,9 @@ export default function MlRiskPage() {
                       </li>
                     ))}
                   </ul>
-                </div>
+                  </div>
 
-                <div className="card">
+                  <div className="section-panel-tight">
                   <h2 className="section-title mb-4">Score distribution</h2>
                   <div className="space-y-3">
                     {Object.entries(evaluation.current_population.prediction_buckets).map(
@@ -708,11 +718,16 @@ export default function MlRiskPage() {
                   <p className="mt-3 text-xs text-[var(--muted)]">
                     Avg current probability: {formatPct(evaluation.current_population.average_probability)}
                   </p>
+                  </div>
                 </div>
-              </section>
+              </details>
 
-              <section className="mb-8 grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
-                <div className="card">
+              <details className="section-panel mb-8 disclosure">
+                <summary className="cursor-pointer list-none">
+                  <h2 className="section-title mb-0">Drift and population shifts</h2>
+                </summary>
+                <div className="disclosure-body mt-4 grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
+                  <div className="section-panel-tight">
                   <h2 className="section-title mb-4">Drift signals</h2>
                   <div className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)] p-4">
                     <p className="text-[11px] uppercase tracking-[0.12em] text-[var(--muted)]">
@@ -743,9 +758,9 @@ export default function MlRiskPage() {
                       </li>
                     ))}
                   </ul>
-                </div>
+                  </div>
 
-                <div className="card">
+                  <div className="section-panel-tight">
                   <h2 className="section-title mb-4">Largest population shifts</h2>
                   <div className="space-y-3">
                     {Object.entries(evaluation.drift.feature_shifts).map(([feature, payload]) => (
@@ -767,18 +782,26 @@ export default function MlRiskPage() {
                       </div>
                     ))}
                   </div>
+                  </div>
                 </div>
-              </section>
+              </details>
 
-              <section className="card mb-8 animate-in">
+              <details className="section-panel mb-8 animate-in disclosure">
+                <summary className="cursor-pointer list-none">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h2 className="section-title mb-0">Evaluation history</h2>
+                    </div>
+                    <span className="text-xs text-[var(--muted)]">{snapshots.length} saved snapshots</span>
+                  </div>
+                </summary>
+                <div className="disclosure-body mt-4">
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <h2 className="section-title">Evaluation history</h2>
                     <p className="mt-1 text-sm text-[var(--muted)]">
                       Stored snapshots let you compare each retrain and export exact evaluation payloads.
                     </p>
                   </div>
-                  <span className="text-xs text-[var(--muted)]">{snapshots.length} saved snapshots</span>
                 </div>
                 <div className="mb-6 grid gap-4 md:grid-cols-3">
                   <div className="rounded-xl border border-[var(--border)] p-4">
@@ -837,8 +860,9 @@ export default function MlRiskPage() {
                     ))
                   )}
                 </div>
-              </section>
-              <section className="card animate-in">
+                </div>
+              </details>
+              <section className="section-panel animate-in">
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <h2 className="section-title">Analyst review queue</h2>
