@@ -1,48 +1,68 @@
 'use client';
 
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { getMe, getToken, type Me } from '@/lib/api';
+import { getMe, type Me } from '@/lib/api';
+
+type AuthUser = Me & {
+  canMutate: boolean;
+  isAdmin: boolean;
+};
 
 type AuthState = {
-  user: Me | null;
+  user: AuthUser | null;
   loading: boolean;
   canMutate: boolean;
   isAdmin: boolean;
-  refresh: () => void;
+  refresh: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthState>({
   user: null,
-  loading: true,
+  loading: false,
   canMutate: false,
   isAdmin: false,
-  refresh: () => {},
+  refresh: async () => {},
 });
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<Me | null>(null);
-  const [loading, setLoading] = useState(true);
+function withCapabilities(user: Me | null): AuthUser | null {
+  if (!user) return null;
+  const role = user.role?.toLowerCase() ?? '';
+  return {
+    ...user,
+    canMutate: role === 'admin' || role === 'analyst',
+    isAdmin: role === 'admin',
+  };
+}
 
-  const fetchUser = useCallback(() => {
-    if (!getToken()) {
-      setUser(null);
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    getMe()
-      .then((me) => setUser(me))
-      .catch(() => setUser(null))
-      .finally(() => setLoading(false));
-  }, []);
+export function AuthProvider({
+  children,
+  initialUser = null,
+}: {
+  children: React.ReactNode;
+  initialUser?: AuthUser | null;
+}) {
+  const [user, setUser] = useState<AuthUser | null>(initialUser);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    fetchUser();
-  }, [fetchUser]);
+    setUser(initialUser);
+    setLoading(false);
+  }, [initialUser]);
 
-  const role = user?.role?.toLowerCase() ?? '';
-  const canMutate = role === 'admin' || role === 'analyst';
-  const isAdmin = role === 'admin';
+  const fetchUser = useCallback(async () => {
+    setLoading(true);
+    try {
+      const me = await getMe();
+      setUser(withCapabilities(me));
+    } catch {
+      setUser(null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const canMutate = user?.canMutate ?? false;
+  const isAdmin = user?.isAdmin ?? false;
 
   return (
     <AuthContext.Provider value={{ user, loading, canMutate, isAdmin, refresh: fetchUser }}>

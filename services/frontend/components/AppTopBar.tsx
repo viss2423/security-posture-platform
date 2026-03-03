@@ -1,12 +1,24 @@
 'use client';
 
-import { motion } from 'framer-motion';
 import { ArrowRight, BriefcaseBusiness } from 'lucide-react';
+import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import CommandPalette from '@/components/CommandPalette';
 import { useAuth } from '@/contexts/AuthContext';
 import { getActiveNavItem } from '@/lib/navigation';
+
+const LazyCommandPalette = dynamic(() => import('@/components/CommandPalette'), {
+  ssr: false,
+  loading: () => (
+    <button
+      type="button"
+      disabled
+      className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-muted)] opacity-70"
+    >
+      Search
+    </button>
+  ),
+});
 
 function humanizeSegment(segment: string): string {
   return segment
@@ -27,12 +39,7 @@ export default function AppTopBar() {
   });
 
   return (
-    <motion.header
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.28, ease: 'easeOut' }}
-      className="mb-4"
-    >
+    <header className="mb-4">
       <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)]/92 px-4 py-4 shadow-lg shadow-black/15 backdrop-blur-xl sm:px-5 sm:py-4.5">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
@@ -55,7 +62,7 @@ export default function AppTopBar() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <CommandPalette isAdmin={isAdmin} />
+            <LazyCommandPalette isAdmin={isAdmin} />
             <Link
               href="/incidents"
               className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-muted)] transition hover:border-[var(--green)]/25 hover:bg-white/[0.03] hover:text-[var(--text)]"
@@ -70,6 +77,6 @@ export default function AppTopBar() {
           </div>
         </div>
       </div>
-    </motion.header>
+    </header>
   );
 }

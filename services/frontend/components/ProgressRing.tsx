@@ -1,5 +1,3 @@
-'use client';
-
 const SIZE = 72;
 const STROKE = 6;
 const R = (SIZE - STROKE) / 2;

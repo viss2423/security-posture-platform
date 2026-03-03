@@ -40,6 +40,10 @@ _POSTURE_CACHE = {
     "total": 0,
     "items": [],
 }
+_POSTURE_ITEMS_CACHE = {
+    "expires_at": 0.0,
+    "items": [],
+}
 
 
 def _criticality_text(v) -> str | None:
@@ -193,6 +197,8 @@ def _reset_posture_cache():
         _POSTURE_CACHE["expires_at"] = 0.0
         _POSTURE_CACHE["total"] = 0
         _POSTURE_CACHE["items"] = []
+        _POSTURE_ITEMS_CACHE["expires_at"] = 0.0
+        _POSTURE_ITEMS_CACHE["items"] = []
 
 
 def _raw_list_to_states(raw_items: list[dict]) -> list[AssetState]:
@@ -225,6 +231,39 @@ def _merge_posture_with_db(state_dict: dict, meta: dict | None) -> dict:
     return out
 
 
+def _safe_float(value) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_merged_posture_items(db: Session) -> list[dict]:
+    ttl_seconds = max(float(getattr(settings, "POSTURE_CACHE_TTL_SECONDS", 0) or 0), 0.0)
+    now = monotonic()
+    if ttl_seconds > 0:
+        with _POSTURE_CACHE_LOCK:
+            if _POSTURE_ITEMS_CACHE["expires_at"] > now:
+                return [dict(item) for item in _POSTURE_ITEMS_CACHE["items"]]
+
+    _, raw_items = _fetch_posture_list_raw()
+    states = _raw_list_to_states(raw_items)
+    meta = _get_asset_metadata_batch(db, [state.asset_id for state in states])
+    items = [_merge_posture_with_db(state.model_dump(mode="json"), meta) for state in states]
+
+    if ttl_seconds > 0:
+        with _POSTURE_CACHE_LOCK:
+            expires_at = _POSTURE_CACHE["expires_at"]
+            _POSTURE_ITEMS_CACHE["expires_at"] = (
+                expires_at if expires_at > now else now + ttl_seconds
+            )
+            _POSTURE_ITEMS_CACHE["items"] = [dict(item) for item in items]
+
+    return items
+
+
 def _parse_multi_param(val: str | None) -> list[str] | None:
     """Parse optional query param: None = no filter, else comma-separated list (e.g. 'dev,prod' -> ['dev','prod'])."""
     if val is None or (isinstance(val, str) and not val.strip()):
@@ -246,12 +285,35 @@ def _apply_filters(
     if criticality:
         out = [d for d in out if (d.get("criticality") or "").strip().lower() in criticality]
     if owner:
-        out = [
-            d for d in out if (d.get("owner") or "").strip().lower() in [o.lower() for o in owner]
-        ]
+        owner_values = {o.lower() for o in owner}
+        out = [d for d in out if (d.get("owner") or "").strip().lower() in owner_values]
     if status:
         out = [d for d in out if (d.get("status") or "").strip().lower() in status]
     return out
+
+
+def _summarize_posture_items(items: list[dict]) -> dict:
+    by_state: dict[str, int] = {"green": 0, "amber": 0, "red": 0}
+    scores: list[float] = []
+    down_assets: list[str] = []
+    for item in items:
+        state = (item.get("status") or "amber").lower()
+        if state in by_state:
+            by_state[state] += 1
+        score = _safe_float(item.get("posture_score"))
+        if score is not None:
+            scores.append(score)
+        if state == "red":
+            down_assets.append(item.get("asset_id") or item.get("asset_key") or "")
+
+    posture_score_avg = round(sum(scores) / len(scores), 1) if scores else None
+    return {
+        "total_assets": len(items),
+        "by_state": by_state,
+        "posture_score_avg": posture_score_avg,
+        "down_assets": down_assets,
+        "alerts_firing": len(down_assets),
+    }
 
 
 def _get_filtered_posture_list(
@@ -262,10 +324,7 @@ def _get_filtered_posture_list(
     status: str | None = None,
 ) -> list[dict]:
     """Fetch posture list from OpenSearch, merge with Postgres metadata, apply filters. Returns list of merged dicts."""
-    _, raw_items = _fetch_posture_list_raw()
-    states = _raw_list_to_states(raw_items)
-    meta = _get_asset_metadata_batch(db, [s.asset_id for s in states])
-    items = [_merge_posture_with_db(s.model_dump(mode="json"), meta) for s in states]
+    items = _build_merged_posture_items(db)
     env_list = _parse_multi_param(environment)
     crit_list = _parse_multi_param(criticality)
     owner_list = _parse_multi_param(owner)
@@ -389,24 +448,12 @@ def posture_overview(
     items = _get_filtered_posture_list(
         db, environment=environment, criticality=criticality, owner=owner, status=status
     )
-    total_assets = len(items)
-    by_state: dict[str, int] = {"green": 0, "amber": 0, "red": 0}
-    scores: list[float] = []
-    down_assets: list[str] = []
-    for d in items:
-        st = (d.get("status") or "amber").lower()
-        if st in by_state:
-            by_state[st] += 1
-        sc = d.get("posture_score")
-        if sc is not None:
-            try:
-                scores.append(float(sc))
-            except (TypeError, ValueError):
-                pass
-        if st == "red":
-            down_assets.append(d.get("asset_id") or d.get("asset_key") or "")
-    posture_score_avg = round(sum(scores) / len(scores), 1) if scores else None
-    alerts_firing = len(down_assets)
+    summary = _summarize_posture_items(items)
+    total_assets = summary["total_assets"]
+    by_state = summary["by_state"]
+    posture_score_avg = summary["posture_score_avg"]
+    down_assets = summary["down_assets"]
+    alerts_firing = summary["alerts_firing"]
 
     # Trend vs yesterday: compare to snapshot closest to now()-24h
     score_trend_vs_yesterday: str | None = None  # "up" | "down" | "same" | null
@@ -434,7 +481,7 @@ def posture_overview(
     # Top drivers: worst 5 by score, by reason counts, recently updated (last_seen desc)
     worst_assets = sorted(
         [d for d in items if d.get("posture_score") is not None],
-        key=lambda x: (float(x.get("posture_score") or 0)),
+        key=lambda x: (_safe_float(x.get("posture_score")) or 0.0),
     )[:5]
     worst_assets = [
         {
@@ -1145,28 +1192,13 @@ def posture_summary(
     items = _get_filtered_posture_list(
         db, environment=environment, criticality=criticality, owner=owner, status=status
     )
-    by_state: dict[str, int] = {"green": 0, "amber": 0, "red": 0}
-    scores: list[float] = []
-    down_assets: list[str] = []
-    for d in items:
-        st = (d.get("status") or "amber").lower()
-        if st in by_state:
-            by_state[st] += 1
-        sc = d.get("posture_score")
-        if sc is not None:
-            try:
-                scores.append(float(sc))
-            except (TypeError, ValueError):
-                pass
-        if st == "red":
-            down_assets.append(d.get("asset_id") or d.get("asset_key") or "")
-    avg = round(sum(scores) / len(scores), 1) if scores else None
+    summary = _summarize_posture_items(items)
     return PostureSummary(
-        green=by_state.get("green", 0),
-        amber=by_state.get("amber", 0),
-        red=by_state.get("red", 0),
-        posture_score_avg=avg,
-        down_assets=down_assets,
+        green=summary["by_state"].get("green", 0),
+        amber=summary["by_state"].get("amber", 0),
+        red=summary["by_state"].get("red", 0),
+        posture_score_avg=summary["posture_score_avg"],
+        down_assets=summary["down_assets"],
     )
 
 

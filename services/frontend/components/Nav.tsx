@@ -1,7 +1,5 @@
 'use client';
 
-import * as Dialog from '@radix-ui/react-dialog';
-import { motion } from 'framer-motion';
 import {
   Activity,
   Archive,
@@ -24,8 +22,8 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useEffect, useMemo, useState } from 'react';
-import { getPostureSummary, logout, type PostureSummary } from '@/lib/api';
+import { useMemo, useState } from 'react';
+import { logout, type PostureSummary } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import {
   getVisibleNavGroups,
@@ -125,8 +123,8 @@ function SidebarPanel({
   username?: string;
   role?: string;
   summary: PostureSummary | null;
-  onSignOut: () => void;
-    onNavigate?: () => void;
+  onSignOut: () => void | Promise<void>;
+  onNavigate?: () => void;
 }) {
   return (
     <div className="flex h-full flex-col">
@@ -137,13 +135,8 @@ function SidebarPanel({
         <PulseCard summary={summary} />
       </div>
       <div className="flex-1 space-y-5 overflow-y-auto px-3 py-4">
-        {groups.map((group, idx) => (
-          <motion.section
-            key={group.title}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.25, delay: idx * 0.04 }}
-          >
+        {groups.map((group) => (
+          <section key={group.title}>
             <h2 className="px-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">{group.title}</h2>
             <div className="mt-2 space-y-1">
               {group.items.map((item) => {
@@ -177,7 +170,7 @@ function SidebarPanel({
                 );
               })}
             </div>
-          </motion.section>
+          </section>
         ))}
       </div>
       <div className="border-t border-[var(--border)]/80 p-4">
@@ -198,37 +191,19 @@ function SidebarPanel({
   );
 }
 
-export default function Nav() {
+export default function Nav({ initialSummary }: { initialSummary: PostureSummary | null }) {
   const pathname = usePathname();
   const { isAdmin, user } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [summary, setSummary] = useState<PostureSummary | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    const load = () => {
-      getPostureSummary()
-        .then((resp) => {
-          if (alive) setSummary(resp);
-        })
-        .catch(() => {
-          if (alive) setSummary(null);
-        });
-    };
-
-    load();
-    const timer = window.setInterval(load, 60000);
-    return () => {
-      alive = false;
-      window.clearInterval(timer);
-    };
-  }, []);
 
   const visibleGroups = useMemo(() => getVisibleNavGroups(isAdmin), [isAdmin]);
 
-  const handleSignOut = () => {
-    logout();
-    window.location.href = '/login';
+  const handleSignOut = async () => {
+    try {
+      await logout();
+    } finally {
+      window.location.href = '/login';
+    }
   };
 
   return (
@@ -237,44 +212,47 @@ export default function Nav() {
         <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)]/92 shadow-xl shadow-black/25 backdrop-blur-xl">
           <div className="flex items-center justify-between px-3 py-2.5">
             <Brand compact />
-            <Dialog.Root open={mobileOpen} onOpenChange={setMobileOpen}>
-              <Dialog.Trigger asChild>
-                <button
-                  type="button"
-                  aria-label="Open menu"
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)] text-[var(--text)] transition hover:border-[var(--green)]/50"
-                >
-                  <Menu size={18} />
-                </button>
-              </Dialog.Trigger>
-              <Dialog.Portal>
-                <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
-                <Dialog.Content className="fixed inset-y-0 left-0 z-[60] w-[min(88vw,22rem)] border-r border-[var(--border)] bg-[var(--surface)] shadow-2xl shadow-black/60 focus:outline-none">
-                  <Dialog.Title className="sr-only">Main navigation</Dialog.Title>
-                  <Dialog.Description className="sr-only">Enterprise navigation and workspace controls.</Dialog.Description>
-                  <button
-                    type="button"
-                    aria-label="Close menu"
-                    onClick={() => setMobileOpen(false)}
-                    className="absolute right-3 top-3 inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface-elevated)] text-[var(--text)]"
-                  >
-                    <X size={16} />
-                  </button>
-                  <SidebarPanel
-                    pathname={pathname}
-                    groups={visibleGroups}
-                    username={user?.username}
-                    role={user?.role}
-                    summary={summary}
-                    onSignOut={handleSignOut}
-                    onNavigate={() => setMobileOpen(false)}
-                  />
-                </Dialog.Content>
-              </Dialog.Portal>
-            </Dialog.Root>
+            <button
+              type="button"
+              aria-label="Open menu"
+              onClick={() => setMobileOpen(true)}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)] text-[var(--text)] transition hover:border-[var(--green)]/50"
+            >
+              <Menu size={18} />
+            </button>
           </div>
         </div>
       </div>
+
+      {mobileOpen && (
+        <>
+          <button
+            type="button"
+            aria-label="Close menu"
+            onClick={() => setMobileOpen(false)}
+            className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm"
+          />
+          <div className="fixed inset-y-0 left-0 z-[60] w-[min(88vw,22rem)] border-r border-[var(--border)] bg-[var(--surface)] shadow-2xl shadow-black/60 focus:outline-none lg:hidden">
+            <button
+              type="button"
+              aria-label="Close menu"
+              onClick={() => setMobileOpen(false)}
+              className="absolute right-3 top-3 inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface-elevated)] text-[var(--text)]"
+            >
+              <X size={16} />
+            </button>
+            <SidebarPanel
+              pathname={pathname}
+              groups={visibleGroups}
+              username={user?.username}
+              role={user?.role}
+              summary={initialSummary}
+              onSignOut={handleSignOut}
+              onNavigate={() => setMobileOpen(false)}
+            />
+          </div>
+        </>
+      )}
 
       <aside className="hidden lg:block lg:w-[17.5rem] lg:shrink-0">
         <div className="sticky top-4 h-[calc(100vh-2rem)] overflow-hidden rounded-[1.75rem] border border-[var(--border)] bg-[var(--surface)]/94 shadow-xl shadow-black/25 backdrop-blur-xl">
@@ -283,7 +261,7 @@ export default function Nav() {
             groups={visibleGroups}
             username={user?.username}
             role={user?.role}
-            summary={summary}
+            summary={initialSummary}
             onSignOut={handleSignOut}
           />
         </div>

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { SESSION_COOKIE_NAME } from '@/lib/session';
 
 // When running frontend on host (npm run dev), "api" may not resolve; use localhost.
 const API_URL = process.env.API_URL || 'http://127.0.0.1:8000';
@@ -10,15 +11,24 @@ async function resolvePath(context: RouteContext): Promise<string> {
   return params.path.join('/');
 }
 
+function buildForwardHeaders(request: NextRequest): Record<string, string> {
+  const headers: Record<string, string> = {};
+  const authHeader = request.headers.get('authorization');
+  const cookieToken = request.cookies.get(SESSION_COOKIE_NAME)?.value;
+  const token = authHeader || (cookieToken ? `Bearer ${cookieToken}` : null);
+  if (token) headers.Authorization = token;
+  const contentType = request.headers.get('content-type');
+  if (contentType) headers['Content-Type'] = contentType;
+  return headers;
+}
+
 export async function GET(request: NextRequest, context: RouteContext) {
   const path = await resolvePath(context);
   const url = new URL(request.url);
   const targetUrl = `${API_URL}/${path}${url.search}`;
 
-  const headers: Record<string, string> = {};
-  const authHeader = request.headers.get('authorization');
-  if (authHeader) headers['Authorization'] = authHeader;
-  headers['Content-Type'] = 'application/json';
+  const headers = buildForwardHeaders(request);
+  headers['Content-Type'] = headers['Content-Type'] || 'application/json';
 
   try {
     let res = await fetch(targetUrl, { headers, cache: 'no-store', redirect: 'manual' });
@@ -59,11 +69,8 @@ export async function POST(request: NextRequest, context: RouteContext) {
   const url = new URL(request.url);
   const targetUrl = `${API_URL}/${path}${url.search}`;
 
-  const headers: Record<string, string> = {};
-  const authHeader = request.headers.get('authorization');
-  if (authHeader) headers['Authorization'] = authHeader;
-  const contentType = request.headers.get('content-type');
-  headers['Content-Type'] = contentType || 'application/json';
+  const headers = buildForwardHeaders(request);
+  headers['Content-Type'] = headers['Content-Type'] || 'application/json';
 
   try {
     const body = await request.text();
@@ -84,10 +91,8 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
   const url = new URL(request.url);
   const targetUrl = `${API_URL}/${path}${url.search}`;
 
-  const headers: Record<string, string> = {};
-  const authHeader = request.headers.get('authorization');
-  if (authHeader) headers['Authorization'] = authHeader;
-  headers['Content-Type'] = 'application/json';
+  const headers = buildForwardHeaders(request);
+  headers['Content-Type'] = headers['Content-Type'] || 'application/json';
 
   try {
     const body = await request.text();
@@ -108,9 +113,7 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
   const url = new URL(request.url);
   const targetUrl = `${API_URL}/${path}${url.search}`;
 
-  const headers: Record<string, string> = {};
-  const authHeader = request.headers.get('authorization');
-  if (authHeader) headers['Authorization'] = authHeader;
+  const headers = buildForwardHeaders(request);
 
   try {
     const res = await fetch(targetUrl, { method: 'DELETE', headers, cache: 'no-store' });

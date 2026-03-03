@@ -1,5 +1,3 @@
-'use client';
-
 type EmptyStateProps = {
   icon?: React.ReactNode;
   title: string;

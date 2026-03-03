@@ -1,46 +1,75 @@
 const API = '/api';
 
-export function getToken(): string | null {
-  if (typeof window === 'undefined') return null;
-  return localStorage.getItem('secplat_token');
+function redirectToLogin() {
+  if (typeof window !== 'undefined') {
+    window.location.replace('/login');
+  }
+}
+
+function parseApiErrorMessage(status: number, text: string, fallback: string): string {
+  const message = text || fallback;
+  if (status === 502) {
+    try {
+      const data = JSON.parse(text);
+      if (typeof data?.error?.message === 'string') return data.error.message;
+      if (typeof data?.error === 'string') return data.error;
+    } catch {
+      return 'API unreachable';
+    }
+    return message;
+  }
+
+  try {
+    const data = JSON.parse(text);
+    if (typeof data?.error?.message === 'string') return data.error.message;
+    if (typeof data?.detail === 'string') return data.detail;
+    if (typeof data?.error === 'string') return data.error;
+  } catch {
+    return message;
+  }
+
+  return message;
+}
+
+async function downloadFromApi(url: string, filename: string): Promise<void> {
+  const res = await fetch(url, { cache: 'no-store' });
+  if (res.status === 401) {
+    redirectToLogin();
+    throw new Error('Unauthorized');
+  }
+  if (!res.ok) {
+    throw new Error((await res.text()) || 'Download failed');
+  }
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = objectUrl;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(objectUrl);
 }
 
 export async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
-  const token = getToken();
+  const headers = new Headers(options?.headers);
+  if (!headers.has('Accept')) {
+    headers.set('Accept', 'application/json');
+  }
+  if (options?.body && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+
   const res = await fetch(API + path, {
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token && { Authorization: `Bearer ${token}` }),
-      ...options?.headers,
-    },
+    headers,
+    cache: options?.cache ?? 'no-store',
   });
   if (res.status === 401) {
-    localStorage.removeItem('secplat_token');
-    if (typeof window !== 'undefined') window.location.href = '/login';
+    redirectToLogin();
     throw new Error('Unauthorized');
   }
   if (!res.ok) {
     const text = await res.text();
-    let msg = text || res.statusText;
-    if (res.status === 502) {
-      try {
-        const j = JSON.parse(text);
-        if (j?.error?.message) msg = j.error.message;
-        else if (j?.error) msg = j.error;
-      } catch {
-        msg = 'API unreachable';
-      }
-    } else {
-      try {
-        const j = JSON.parse(text);
-        if (j?.error?.message) msg = j.error.message;
-        else if (j?.detail) msg = j.detail;
-      } catch {
-        /* use text as-is */
-      }
-    }
-    throw new Error(msg);
+    throw new Error(parseApiErrorMessage(res.status, text, res.statusText || 'Request failed'));
   }
   return res.json();
 }
@@ -54,10 +83,11 @@ export async function getAuthConfig(): Promise<AuthConfig> {
 }
 
 export async function login(username: string, password: string): Promise<{ access_token: string }> {
-  const res = await fetch(API + '/auth/login', {
+  const res = await fetch(API + '/auth/session', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ username, password }),
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+    cache: 'no-store',
   });
   const text = await res.text();
   if (!res.ok) {
@@ -70,16 +100,14 @@ export async function login(username: string, password: string): Promise<{ acces
     }
     throw new Error(msg);
   }
-  return JSON.parse(text);
+  return { access_token: 'session' };
 }
 
-export function setToken(token: string) {
-  localStorage.setItem('secplat_token', token);
-}
-
-export function logout() {
-  localStorage.removeItem('secplat_token');
-  localStorage.removeItem('secplat_role');
+export async function logout(): Promise<void> {
+  await fetch(API + '/auth/session', {
+    method: 'DELETE',
+    cache: 'no-store',
+  });
 }
 
 export type Me = { username: string; role: string };
@@ -245,25 +273,11 @@ export async function saveReportSnapshot(period: string = '24h'): Promise<Report
 
 /** Download executive summary as PDF. Optional snapshotId to export that snapshot. */
 export async function downloadExecutivePdf(snapshotId?: number): Promise<void> {
-  const token = getToken();
-  const url = snapshotId != null
+  const url =
+    snapshotId != null
     ? `${API}/posture/reports/executive.pdf?snapshot_id=${snapshotId}`
     : `${API}/posture/reports/executive.pdf`;
-  const res = await fetch(url, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  });
-  if (res.status === 401) {
-    localStorage.removeItem('secplat_token');
-    if (typeof window !== 'undefined') window.location.href = '/login';
-    throw new Error('Unauthorized');
-  }
-  if (!res.ok) throw new Error(await res.text() || 'Download failed');
-  const blob = await res.blob();
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'secplat-executive.pdf';
-  a.click();
-  URL.revokeObjectURL(a.href);
+  await downloadFromApi(url, 'secplat-executive.pdf');
 }
 
 export type MaintenanceWindow = {
@@ -699,25 +713,9 @@ export async function updateAssetByKey(
   });
 }
 
-/** Download posture as CSV (uses token from localStorage). */
+/** Download posture as CSV using the current cookie-backed session. */
 export async function downloadPostureCsv(): Promise<void> {
-  const token = getToken();
-  const res = await fetch(API + '/posture?format=csv', {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  });
-  if (res.status === 401) {
-    localStorage.removeItem('secplat_token');
-    if (typeof window !== 'undefined') window.location.href = '/login';
-    throw new Error('Unauthorized');
-  }
-  if (!res.ok) throw new Error(await res.text() || 'Download failed');
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'secplat-posture.csv';
-  a.click();
-  URL.revokeObjectURL(url);
+  await downloadFromApi(API + '/posture?format=csv', 'secplat-posture.csv');
 }
 
 // Findings (Phase A.2: lifecycle + risk acceptance)

@@ -3,28 +3,41 @@
 import { useEffect, useState } from 'react';
 
 const HEALTH_URL = '/api/health';
-const POLL_MS = 15000;
 
 export default function ApiStatusBanner() {
   const [down, setDown] = useState(false);
 
   useEffect(() => {
     let mounted = true;
-    function check() {
-      fetch(HEALTH_URL, { cache: 'no-store' })
-        .then((res) => {
-          if (!mounted) return;
+    async function check() {
+      if (!mounted) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        return;
+      }
+      try {
+        const res = await fetch(HEALTH_URL, { cache: 'no-store' });
+        if (mounted) {
           setDown(!res.ok);
-        })
-        .catch(() => {
-          if (mounted) setDown(true);
-        });
+        }
+      } catch {
+        if (mounted) {
+          setDown(true);
+        }
+      }
     }
-    check();
-    const t = setInterval(check, POLL_MS);
+
+    const handleVisibility = () => {
+      void check();
+    };
+
+    void check();
+    window.addEventListener('focus', handleVisibility);
+    document.addEventListener('visibilitychange', handleVisibility);
+
     return () => {
       mounted = false;
-      clearInterval(t);
+      window.removeEventListener('focus', handleVisibility);
+      document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, []);
 
