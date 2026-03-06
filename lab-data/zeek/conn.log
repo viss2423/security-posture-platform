@@ -1,0 +1,4 @@
+{"ts":"2026-03-05T09:00:08Z","event_type":"conn","uid":"CvxYQK1","id.orig_h":"172.20.0.15","id.orig_p":50231,"id.resp_h":"203.0.113.44","id.resp_p":443,"proto":"tcp","service":"ssl"}
+{"ts":"2026-03-05T09:00:12Z","event_type":"dns","uid":"CvxYQK2","id.orig_h":"172.20.0.15","id.orig_p":52311,"id.resp_h":"8.8.8.8","id.resp_p":53,"proto":"udp","query":"bad.example"}
+{"ts":"2026-03-05T09:01:40Z","event_type":"dns","uid":"CvxYQK3","id.orig_h":"172.20.0.17","id.orig_p":52312,"id.resp_h":"8.8.4.4","id.resp_p":53,"proto":"udp","query":"suspicious-update.example"}
+{"ts":"2026-03-05T09:02:10Z","event_type":"ssl","uid":"CvxYQK4","id.orig_h":"172.20.0.16","id.orig_p":50001,"id.resp_h":"198.51.100.82","id.resp_p":443,"proto":"tcp","service":"ssl","note":"Self-signed certificate"}

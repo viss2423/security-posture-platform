@@ -1105,7 +1105,76 @@ def _alert_guidance_context(
 
 
 def _alert_context_signature(context: dict) -> str:
-    canonical = json.dumps(context, sort_keys=True, separators=(",", ":"))
+    source = dict(context or {})
+    alert = dict(source.get("alert") or {})
+    asset = dict(source.get("asset") or {})
+    maintenance = dict(source.get("maintenance") or {})
+    suppression = dict(source.get("suppression") or {})
+    finding_summary = dict(source.get("finding_summary") or {})
+    timeline_signals = dict(source.get("timeline_signals") or {})
+    decision_signals = dict(source.get("decision_signals") or {})
+
+    # Keep only decision-driving fields; ignore volatile values such as runtime
+    # staleness counters and mutable scoring internals.
+    normalized = {
+        "alert": {
+            "asset_key": alert.get("asset_key"),
+            "current_state": alert.get("current_state"),
+            "assigned_to": alert.get("assigned_to"),
+            "suppressed_until": alert.get("suppressed_until"),
+            "resolved_at": alert.get("resolved_at"),
+        },
+        "asset": {
+            "asset_key": asset.get("asset_key"),
+            "posture_status": asset.get("posture_status"),
+            "posture_score": asset.get("posture_score"),
+            "criticality": asset.get("criticality"),
+            "environment": asset.get("environment"),
+        },
+        "maintenance": {
+            "active": maintenance.get("active"),
+            "ends_at": maintenance.get("ends_at"),
+            "reason": maintenance.get("reason"),
+        },
+        "suppression": {
+            "active": suppression.get("active"),
+            "ends_at": suppression.get("ends_at"),
+            "reason": suppression.get("reason"),
+        },
+        "finding_summary": {
+            "active_finding_count": finding_summary.get("active_finding_count"),
+        },
+        "top_findings": [
+            {
+                "finding_key": item.get("finding_key"),
+                "status": item.get("status"),
+                "severity": item.get("severity"),
+            }
+            for item in (source.get("top_findings") or [])
+        ],
+        "recent_events": [
+            {
+                "status": item.get("status"),
+                "code": item.get("code"),
+            }
+            for item in (source.get("recent_events") or [])
+        ],
+        "timeline_signals": {
+            "event_count": timeline_signals.get("event_count"),
+            "unhealthy_events": timeline_signals.get("unhealthy_events"),
+            "non_200_events": timeline_signals.get("non_200_events"),
+            "timeout_events": timeline_signals.get("timeout_events"),
+            "consecutive_unhealthy_events": timeline_signals.get("consecutive_unhealthy_events"),
+            "flap_events": timeline_signals.get("flap_events"),
+        },
+        "decision_signals": {
+            "currently_down": decision_signals.get("currently_down"),
+            "production": decision_signals.get("production"),
+            "high_criticality": decision_signals.get("high_criticality"),
+            "assigned": decision_signals.get("assigned"),
+        },
+    }
+    canonical = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 

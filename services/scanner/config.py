@@ -56,3 +56,47 @@ INTERNAL_TARGETS = _internal_targets()  # list of (url, asset_key)
 # Timeouts and safety
 REQUEST_TIMEOUT = float(os.environ.get("SCANNER_REQUEST_TIMEOUT", "15.0"))
 MAX_TARGETS = int(os.environ.get("SCANNER_MAX_TARGETS", "50"))  # cap for verified external
+
+# Optional dependency scanning (disabled by default to avoid unexpected outbound dependency lookups).
+DEPENDENCY_SCAN_ENABLED = os.environ.get("DEPENDENCY_SCAN_ENABLED", "false").lower() == "true"
+DEPENDENCY_SCAN_PATH = os.environ.get("DEPENDENCY_SCAN_PATH", "/workspace").strip() or "/workspace"
+DEPENDENCY_SCAN_ASSET_KEY = (
+    os.environ.get("DEPENDENCY_SCAN_ASSET_KEY", "secplat-repo").strip() or "secplat-repo"
+)
+DEPENDENCY_SCAN_ASSET_NAME = (
+    os.environ.get("DEPENDENCY_SCAN_ASSET_NAME", "SecPlat repository").strip()
+    or "SecPlat repository"
+)
+DEPENDENCY_SCAN_ENVIRONMENT = os.environ.get("DEPENDENCY_SCAN_ENVIRONMENT", "dev").strip() or "dev"
+DEPENDENCY_SCAN_CRITICALITY = (
+    os.environ.get("DEPENDENCY_SCAN_CRITICALITY", "medium").strip() or "medium"
+)
+OSV_SCANNER_BIN = os.environ.get("OSV_SCANNER_BIN", "/usr/local/bin/osv-scanner").strip() or (
+    "/usr/local/bin/osv-scanner"
+)
+OSV_SCANNER_TIMEOUT_SECONDS = int(os.environ.get("OSV_SCANNER_TIMEOUT_SECONDS", "600"))
+
+# Optional Trivy filesystem scanning for vulnerabilities and misconfigurations in the repo workspace.
+TRIVY_SCAN_ENABLED = os.environ.get("TRIVY_SCAN_ENABLED", "false").lower() == "true"
+TRIVY_SCAN_PATH = (
+    os.environ.get("TRIVY_SCAN_PATH", DEPENDENCY_SCAN_PATH).strip() or DEPENDENCY_SCAN_PATH
+)
+TRIVY_SCAN_ASSET_KEY = (
+    os.environ.get("TRIVY_SCAN_ASSET_KEY", DEPENDENCY_SCAN_ASSET_KEY).strip()
+    or DEPENDENCY_SCAN_ASSET_KEY
+)
+TRIVY_SCAN_ASSET_NAME = (
+    os.environ.get("TRIVY_SCAN_ASSET_NAME", DEPENDENCY_SCAN_ASSET_NAME).strip()
+    or DEPENDENCY_SCAN_ASSET_NAME
+)
+TRIVY_SCAN_ENVIRONMENT = (
+    os.environ.get("TRIVY_SCAN_ENVIRONMENT", DEPENDENCY_SCAN_ENVIRONMENT).strip()
+    or DEPENDENCY_SCAN_ENVIRONMENT
+)
+TRIVY_SCAN_CRITICALITY = (
+    os.environ.get("TRIVY_SCAN_CRITICALITY", DEPENDENCY_SCAN_CRITICALITY).strip()
+    or DEPENDENCY_SCAN_CRITICALITY
+)
+TRIVY_SCANNERS = os.environ.get("TRIVY_SCANNERS", "vuln,misconfig").strip() or "vuln,misconfig"
+TRIVY_BIN = os.environ.get("TRIVY_BIN", "/usr/local/bin/trivy").strip() or "/usr/local/bin/trivy"
+TRIVY_TIMEOUT_SECONDS = int(os.environ.get("TRIVY_TIMEOUT_SECONDS", "1200"))

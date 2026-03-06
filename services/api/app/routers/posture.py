@@ -86,6 +86,69 @@ def _get_asset_metadata_batch(db: Session, asset_keys: list[str]) -> dict[str, d
     return out
 
 
+def _repository_asset_state(db: Session, asset_key: str) -> AssetState | None:
+    asset = (
+        db.execute(
+            text(
+                """
+                SELECT asset_key, name, owner, environment, criticality, asset_type, created_at, updated_at
+                FROM assets
+                WHERE asset_key = :asset_key AND asset_type = 'repository'
+                """
+            ),
+            {"asset_key": asset_key},
+        )
+        .mappings()
+        .first()
+    )
+    if not asset:
+        return None
+    summary = (
+        db.execute(
+            text(
+                """
+                SELECT
+                  SUM(CASE WHEN COALESCE(f.status, 'open') <> 'remediated' THEN 1 ELSE 0 END) AS active_findings,
+                  SUM(CASE
+                        WHEN COALESCE(f.status, 'open') <> 'remediated'
+                         AND COALESCE(f.severity, 'medium') IN ('critical', 'high')
+                        THEN 1 ELSE 0
+                      END) AS high_findings,
+                  MAX(COALESCE(f.last_seen, f.time)) AS last_seen
+                FROM findings f
+                JOIN assets a ON a.asset_id = f.asset_id
+                WHERE a.asset_key = :asset_key
+                """
+            ),
+            {"asset_key": asset_key},
+        )
+        .mappings()
+        .first()
+    ) or {}
+    active_findings = int(summary.get("active_findings") or 0)
+    high_findings = int(summary.get("high_findings") or 0)
+    if high_findings > 0:
+        status = "red"
+    elif active_findings > 0:
+        status = "amber"
+    else:
+        status = "green"
+    reason = "repository_findings" if active_findings > 0 else "inventory_only"
+    last_seen = summary.get("last_seen") or asset.get("updated_at") or asset.get("created_at")
+    return AssetState(
+        asset_id=asset_key,
+        status=status,
+        last_seen=last_seen,
+        reason=reason,
+        criticality=_criticality_text(asset.get("criticality")) or "medium",
+        name=asset.get("name"),
+        owner=asset.get("owner"),
+        environment=asset.get("environment"),
+        posture_score=None,
+        staleness_seconds=None,
+    )
+
+
 def _opensearch_get(path: str, index: str = STATUS_INDEX):
     url = f"{OPENSEARCH_BASE(index)}{path}"
     with httpx.Client(timeout=10.0) as client:
@@ -252,6 +315,29 @@ def _build_merged_posture_items(db: Session) -> list[dict]:
     states = _raw_list_to_states(raw_items)
     meta = _get_asset_metadata_batch(db, [state.asset_id for state in states])
     items = [_merge_posture_with_db(state.model_dump(mode="json"), meta) for state in states]
+    if hasattr(db, "execute"):
+        existing_keys = {item.get("asset_id") for item in items if item.get("asset_id")}
+        repository_rows = (
+            db.execute(
+                text(
+                    """
+                    SELECT asset_key
+                    FROM assets
+                    WHERE asset_type = 'repository'
+                    ORDER BY asset_key ASC
+                    """
+                )
+            )
+            .mappings()
+            .all()
+        )
+        for row in repository_rows:
+            asset_key = str(row.get("asset_key") or "").strip()
+            if not asset_key or asset_key in existing_keys:
+                continue
+            state = _repository_asset_state(db, asset_key)
+            if state:
+                items.append(state.model_dump(mode="json"))
 
     if ttl_seconds > 0:
         with _POSTURE_CACHE_LOCK:
@@ -1279,13 +1365,111 @@ def get_posture_detail(
         data = _opensearch_get(f"/_doc/{asset_key}")
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 404:
-            raise HTTPException(status_code=404, detail="Asset not found in posture index")
+            repository_state = _repository_asset_state(db, asset_key)
+            if not repository_state:
+                raise HTTPException(status_code=404, detail="Asset not found in posture index")
+            latest_finding = (
+                db.execute(
+                    text(
+                        """
+                        SELECT title, remediation, scanner_metadata_json, COALESCE(last_seen, time) AS last_seen
+                        FROM findings f
+                        JOIN assets a ON a.asset_id = f.asset_id
+                        WHERE a.asset_key = :asset_key
+                        ORDER BY COALESCE(last_seen, time) DESC, finding_id DESC
+                        LIMIT 1
+                        """
+                    ),
+                    {"asset_key": asset_key},
+                )
+                .mappings()
+                .first()
+            )
+            active_findings = (
+                db.execute(
+                    text(
+                        """
+                        SELECT COUNT(*) AS count
+                        FROM findings f
+                        JOIN assets a ON a.asset_id = f.asset_id
+                        WHERE a.asset_key = :asset_key
+                          AND COALESCE(f.status, 'open') <> 'remediated'
+                        """
+                    ),
+                    {"asset_key": asset_key},
+                )
+                .mappings()
+                .first()
+            )
+            active_count = int((active_findings or {}).get("count") or 0)
+            recommendations = (
+                [
+                    "Review repository scan findings and update vulnerable packages or misconfigurations."
+                ]
+                if active_count > 0
+                else ["No active repository findings. Run a repository scan to refresh coverage."]
+            )
+            if latest_finding and latest_finding.get("remediation"):
+                recommendations.append(str(latest_finding.get("remediation")))
+            return AssetDetailResponse(
+                state=repository_state,
+                timeline=[],
+                evidence={
+                    "summary": "Repository asset detail is based on scanner findings rather than posture telemetry.",
+                    "latest_finding_title": latest_finding.get("title") if latest_finding else None,
+                    "latest_finding_seen_at": latest_finding.get("last_seen").isoformat()
+                    if latest_finding and hasattr(latest_finding.get("last_seen"), "isoformat")
+                    else None,
+                    "latest_finding_metadata": latest_finding.get("scanner_metadata_json")
+                    if latest_finding
+                    else None,
+                },
+                recommendations=recommendations,
+                expected_interval_sec=21600,
+                data_completeness=DataCompleteness(
+                    checks=active_count,
+                    expected=0,
+                    label_24h="scan-based",
+                    label_1h="scan-based",
+                    pct_24h=None,
+                    pct_1h=None,
+                ),
+                latency_slo_ms=0,
+                latency_slo_ok=True,
+                error_rate_24h=0.0,
+                reason_display="repository_scan",
+            )
         raise HTTPException(status_code=502, detail=f"OpenSearch error: {e.response.text}")
     except httpx.RequestError as e:
         raise HTTPException(status_code=503, detail=f"OpenSearch unreachable: {e!s}")
 
     if not data.get("found"):
-        raise HTTPException(status_code=404, detail="Asset not found in posture index")
+        repository_state = _repository_asset_state(db, asset_key)
+        if not repository_state:
+            raise HTTPException(status_code=404, detail="Asset not found in posture index")
+        return AssetDetailResponse(
+            state=repository_state,
+            timeline=[],
+            evidence={
+                "summary": "Repository asset detail is based on scanner findings rather than posture telemetry."
+            },
+            recommendations=[
+                "Run repository scans from Jobs to refresh dependency and misconfiguration coverage."
+            ],
+            expected_interval_sec=21600,
+            data_completeness=DataCompleteness(
+                checks=0,
+                expected=0,
+                label_24h="scan-based",
+                label_1h="scan-based",
+                pct_24h=None,
+                pct_1h=None,
+            ),
+            latency_slo_ms=0,
+            latency_slo_ok=True,
+            error_rate_24h=0.0,
+            reason_display="repository_scan",
+        )
     raw = data.get("_source", {})
     raw["asset_key"] = raw.get("asset_key") or asset_key
     state = raw_to_asset_state(raw)
@@ -1362,12 +1546,18 @@ def get_posture(asset_key: str, db: Session = Depends(get_db), _user: str = Depe
         data = _opensearch_get(f"/_doc/{asset_key}")
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 404:
+            repository_state = _repository_asset_state(db, asset_key)
+            if repository_state:
+                return repository_state
             raise HTTPException(status_code=404, detail="Asset not found in posture index")
         raise HTTPException(status_code=502, detail=f"OpenSearch error: {e.response.text}")
     except httpx.RequestError as e:
         raise HTTPException(status_code=503, detail=f"OpenSearch unreachable: {e!s}")
 
     if not data.get("found"):
+        repository_state = _repository_asset_state(db, asset_key)
+        if repository_state:
+            return repository_state
         raise HTTPException(status_code=404, detail="Asset not found in posture index")
     raw = data.get("_source", {})
     raw["asset_key"] = raw.get("asset_key") or asset_key

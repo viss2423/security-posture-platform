@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.alerts_v2 import reopen_expired_suppressed_alerts, transition_security_alert
 from app.db import get_db
 from app.routers.auth import require_auth, require_role
 from app.routers.posture import _fetch_posture_list_raw
@@ -434,9 +435,51 @@ def _upsert_alert_state(
     db.commit()
 
 
+def _list_security_event_alerts(db: Session, *, now: datetime) -> list[dict]:
+    reopen_expired_suppressed_alerts(db)
+    rows = (
+        db.execute(
+            text(
+                """
+                SELECT *
+                FROM security_alerts
+                ORDER BY last_seen_at DESC
+                LIMIT 500
+                """
+            )
+        )
+        .mappings()
+        .all()
+    )
+    out: list[dict] = []
+    for row in rows:
+        item = dict(row)
+        for key in (
+            "first_seen_at",
+            "last_seen_at",
+            "acknowledged_at",
+            "suppressed_until",
+            "resolved_at",
+            "created_at",
+            "updated_at",
+        ):
+            value = item.get(key)
+            if hasattr(value, "isoformat"):
+                item[key] = value.isoformat()
+        item["state"] = item.get("status") or "firing"
+        item.setdefault("asset_key", f"event:{item.get('alert_id')}")
+        item["asset_key"] = item["asset_key"] or f"event:{item.get('alert_id')}"
+        item.setdefault("asset_name", item.get("title"))
+        out.append(item)
+    return out
+
+
 @router.get("")
 def list_alerts(db: Session = Depends(get_db), _user: str = Depends(require_auth)):
-    """Return alerts grouped by state: firing, acked, suppressed, resolved."""
+    """Return alerts grouped by state: firing, acked, suppressed, resolved.
+
+    Includes both legacy asset-level alert_states and alerts_v2 event alerts.
+    """
     states_map = _get_alert_states(db)
     now = datetime.now(UTC)
     _total, raw_items = _fetch_posture_list_raw()
@@ -523,25 +566,40 @@ def list_alerts(db: Session = Depends(get_db), _user: str = Depends(require_auth
             item.setdefault("state", row.get("state") or "resolved")
             resolved.append(item)
 
+    for event_alert in _list_security_event_alerts(db, now=now):
+        state = str(event_alert.get("state") or "firing")
+        if state == "acked":
+            acked.append(event_alert)
+        elif state == "suppressed":
+            suppressed.append(event_alert)
+        elif state == "resolved":
+            resolved.append(event_alert)
+        else:
+            firing.append(event_alert)
+
     return {"firing": firing, "acked": acked, "suppressed": suppressed, "resolved": resolved}
 
 
 class AckBody(BaseModel):
-    asset_key: str
+    asset_key: str | None = None
+    alert_id: int | None = None
     reason: str | None = None
 
 
 class SuppressBody(BaseModel):
-    asset_key: str
+    asset_key: str | None = None
+    alert_id: int | None = None
     until_iso: str  # ISO datetime
 
 
 class ResolveBody(BaseModel):
-    asset_key: str
+    asset_key: str | None = None
+    alert_id: int | None = None
 
 
 class AssignBody(BaseModel):
-    asset_key: str
+    asset_key: str | None = None
+    alert_id: int | None = None
     assigned_to: str | None = None
 
 
@@ -551,6 +609,20 @@ def alert_ack(
     db: Session = Depends(get_db),
     user: str = Depends(require_role(["admin", "analyst"])),
 ):
+    if body.alert_id is not None:
+        row = transition_security_alert(
+            db,
+            alert_id=int(body.alert_id),
+            action="ack",
+            user_name=user,
+            reason=body.reason,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Alert not found")
+        db.commit()
+        return {"ok": True, "alert_id": int(body.alert_id), "state": "acked", "item": row}
+    if not body.asset_key:
+        raise HTTPException(status_code=400, detail="asset_key or alert_id is required")
     _upsert_alert_state(db, body.asset_key, "acked", ack_reason=body.reason, acked_by=user)
     return {"ok": True, "asset_key": body.asset_key, "state": "acked"}
 
@@ -565,6 +637,26 @@ def alert_suppress(
         until = datetime.fromisoformat(body.until_iso.replace("Z", "+00:00"))
     except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail="Invalid until_iso; use ISO datetime")
+    if body.alert_id is not None:
+        row = transition_security_alert(
+            db,
+            alert_id=int(body.alert_id),
+            action="suppress",
+            reason=None,
+            until=until,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Alert not found")
+        db.commit()
+        return {
+            "ok": True,
+            "alert_id": int(body.alert_id),
+            "state": "suppressed",
+            "suppressed_until": body.until_iso,
+            "item": row,
+        }
+    if not body.asset_key:
+        raise HTTPException(status_code=400, detail="asset_key or alert_id is required")
     _upsert_alert_state(db, body.asset_key, "suppressed", suppressed_until=until)
     return {
         "ok": True,
@@ -580,6 +672,19 @@ def alert_resolve(
     db: Session = Depends(get_db),
     _user: str = Depends(require_role(["admin", "analyst"])),
 ):
+    if body.alert_id is not None:
+        row = transition_security_alert(
+            db,
+            alert_id=int(body.alert_id),
+            action="resolve",
+            user_name=_user,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Alert not found")
+        db.commit()
+        return {"ok": True, "alert_id": int(body.alert_id), "state": "resolved", "item": row}
+    if not body.asset_key:
+        raise HTTPException(status_code=400, detail="asset_key or alert_id is required")
     _upsert_alert_state(db, body.asset_key, "resolved")
     return {"ok": True, "asset_key": body.asset_key, "state": "resolved"}
 
@@ -590,5 +695,23 @@ def alert_assign(
     db: Session = Depends(get_db),
     _user: str = Depends(require_role(["admin", "analyst"])),
 ):
+    if body.alert_id is not None:
+        row = transition_security_alert(
+            db,
+            alert_id=int(body.alert_id),
+            action="assign",
+            assigned_to=body.assigned_to,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Alert not found")
+        db.commit()
+        return {
+            "ok": True,
+            "alert_id": int(body.alert_id),
+            "assigned_to": body.assigned_to,
+            "item": row,
+        }
+    if not body.asset_key:
+        raise HTTPException(status_code=400, detail="asset_key or alert_id is required")
     _upsert_alert_state(db, body.asset_key, "assigned", assigned_to=body.assigned_to)
     return {"ok": True, "asset_key": body.asset_key, "assigned_to": body.assigned_to}

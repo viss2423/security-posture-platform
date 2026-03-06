@@ -1,0 +1,3 @@
+{"timestamp":"2026-03-05T08:55:12Z","type":"EXECVE","exe":"/usr/bin/sudo","comm":"sudo","auid":"1001","uid":"0","msg":"sudo privilege escalation by analyst"}
+{"timestamp":"2026-03-05T08:56:03Z","type":"USER_CMD","exe":"/usr/sbin/useradd","comm":"useradd","auid":"1001","uid":"0","msg":"useradd tempadmin"}
+{"timestamp":"2026-03-05T08:57:41Z","type":"PATH","exe":"/usr/bin/vim","comm":"vim","auid":"1001","uid":"1001","msg":"edit /etc/sudoers"}

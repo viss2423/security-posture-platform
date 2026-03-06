@@ -73,6 +73,12 @@ SELECT
   a.is_active,
   a.tags,
   a.metadata,
+  COALESCE(te.telemetry_events_24h, 0) AS telemetry_events_24h,
+  COALESCE(te.ioc_hits_24h, 0) AS ioc_hits_24h,
+  COALESCE(te.zeek_events_24h, 0) AS zeek_events_24h,
+  COALESCE(te.cowrie_events_24h, 0) AS cowrie_events_24h,
+  COALESCE(sa.suricata_high_alerts_24h, 0) AS suricata_high_alerts_24h,
+  COALESCE(an.anomaly_score, 0) AS anomaly_score,
   lbl.label,
   lbl.source AS label_source,
   lbl.created_at AS label_created_at,
@@ -80,6 +86,31 @@ SELECT
   lbl.note AS label_note
 FROM findings f
 LEFT JOIN assets a ON a.asset_id = f.asset_id
+LEFT JOIN LATERAL (
+  SELECT
+    COUNT(*) AS telemetry_events_24h,
+    COUNT(*) FILTER (WHERE se.ti_match = TRUE) AS ioc_hits_24h,
+    COUNT(*) FILTER (WHERE se.source = 'zeek') AS zeek_events_24h,
+    COUNT(*) FILTER (WHERE se.source = 'cowrie') AS cowrie_events_24h
+  FROM security_events se
+  WHERE se.asset_key = a.asset_key
+    AND se.event_time >= (NOW() - INTERVAL '24 hours')
+) te ON TRUE
+LEFT JOIN LATERAL (
+  SELECT COUNT(*) AS suricata_high_alerts_24h
+  FROM security_alerts sa
+  WHERE sa.asset_key = a.asset_key
+    AND sa.source = 'suricata'
+    AND sa.severity IN ('critical', 'high')
+    AND sa.last_seen_at >= (NOW() - INTERVAL '24 hours')
+) sa ON TRUE
+LEFT JOIN LATERAL (
+  SELECT anomaly_score
+  FROM asset_anomaly_scores an
+  WHERE an.asset_key = a.asset_key
+  ORDER BY an.computed_at DESC
+  LIMIT 1
+) an ON TRUE
 JOIN LATERAL (
   SELECT label, source, created_at, created_by, note
   FROM finding_risk_labels frl
@@ -87,8 +118,7 @@ JOIN LATERAL (
   ORDER BY
     CASE
       WHEN frl.source = 'analyst' THEN 0
-      WHEN frl.source = 'incident_linked' THEN 1
-      ELSE 2
+      ELSE 1
     END,
     frl.created_at DESC,
     frl.id DESC
@@ -121,11 +151,42 @@ SELECT
   a.is_active,
   a.tags,
   a.metadata,
+  COALESCE(te.telemetry_events_24h, 0) AS telemetry_events_24h,
+  COALESCE(te.ioc_hits_24h, 0) AS ioc_hits_24h,
+  COALESCE(te.zeek_events_24h, 0) AS zeek_events_24h,
+  COALESCE(te.cowrie_events_24h, 0) AS cowrie_events_24h,
+  COALESCE(sa.suricata_high_alerts_24h, 0) AS suricata_high_alerts_24h,
+  COALESCE(an.anomaly_score, 0) AS anomaly_score,
   lbl.label,
   lbl.source AS label_source,
   lbl.created_at AS label_created_at
 FROM findings f
 LEFT JOIN assets a ON a.asset_id = f.asset_id
+LEFT JOIN LATERAL (
+  SELECT
+    COUNT(*) AS telemetry_events_24h,
+    COUNT(*) FILTER (WHERE se.ti_match = TRUE) AS ioc_hits_24h,
+    COUNT(*) FILTER (WHERE se.source = 'zeek') AS zeek_events_24h,
+    COUNT(*) FILTER (WHERE se.source = 'cowrie') AS cowrie_events_24h
+  FROM security_events se
+  WHERE se.asset_key = a.asset_key
+    AND se.event_time >= (NOW() - INTERVAL '24 hours')
+) te ON TRUE
+LEFT JOIN LATERAL (
+  SELECT COUNT(*) AS suricata_high_alerts_24h
+  FROM security_alerts sa
+  WHERE sa.asset_key = a.asset_key
+    AND sa.source = 'suricata'
+    AND sa.severity IN ('critical', 'high')
+    AND sa.last_seen_at >= (NOW() - INTERVAL '24 hours')
+) sa ON TRUE
+LEFT JOIN LATERAL (
+  SELECT anomaly_score
+  FROM asset_anomaly_scores an
+  WHERE an.asset_key = a.asset_key
+  ORDER BY an.computed_at DESC
+  LIMIT 1
+) an ON TRUE
 LEFT JOIN LATERAL (
   SELECT label, source, created_at
   FROM finding_risk_labels frl
@@ -133,8 +194,7 @@ LEFT JOIN LATERAL (
   ORDER BY
     CASE
       WHEN frl.source = 'analyst' THEN 0
-      WHEN frl.source = 'incident_linked' THEN 1
-      ELSE 2
+      ELSE 1
     END,
     frl.created_at DESC,
     frl.id DESC
@@ -257,6 +317,12 @@ def _context_from_row(row: dict[str, Any]) -> dict[str, Any]:
             "first_seen": row.get("first_seen"),
             "accepted_risk_reason": row.get("accepted_risk_reason"),
             "accepted_risk_expires_at": row.get("accepted_risk_expires_at"),
+            "telemetry_events_24h": row.get("telemetry_events_24h"),
+            "ioc_hits_24h": row.get("ioc_hits_24h"),
+            "suricata_high_alerts_24h": row.get("suricata_high_alerts_24h"),
+            "zeek_events_24h": row.get("zeek_events_24h"),
+            "cowrie_events_24h": row.get("cowrie_events_24h"),
+            "anomaly_score": row.get("anomaly_score"),
         },
         "asset": {
             "asset_id": row.get("asset_id"),
@@ -269,6 +335,12 @@ def _context_from_row(row: dict[str, Any]) -> dict[str, Any]:
             "is_active": row.get("is_active"),
             "tags": row.get("tags"),
             "metadata": row.get("metadata"),
+            "telemetry_events_24h": row.get("telemetry_events_24h"),
+            "ioc_hits_24h": row.get("ioc_hits_24h"),
+            "suricata_high_alerts_24h": row.get("suricata_high_alerts_24h"),
+            "zeek_events_24h": row.get("zeek_events_24h"),
+            "cowrie_events_24h": row.get("cowrie_events_24h"),
+            "anomaly_score": row.get("anomaly_score"),
         },
     }
 
@@ -458,6 +530,12 @@ def bootstrap_risk_labels(conn: Any, *, actor: str = DEFAULT_BOOTSTRAP_ACTOR) ->
         conn.execute(
             text(
                 """
+            WITH incident_linked AS (
+              SELECT DISTINCT f.finding_id
+              FROM findings f
+              JOIN assets a ON a.asset_id = f.asset_id
+              JOIN incident_alerts ia ON ia.asset_key = a.asset_key
+            )
             INSERT INTO finding_risk_labels (finding_id, label, source, note, created_by)
             SELECT
               f.finding_id,
@@ -467,6 +545,7 @@ def bootstrap_risk_labels(conn: Any, *, actor: str = DEFAULT_BOOTSTRAP_ACTOR) ->
               :actor
             FROM findings f
             WHERE COALESCE(f.status, 'open') IN ('accepted_risk', 'remediated')
+              AND f.finding_id NOT IN (SELECT finding_id FROM incident_linked)
               AND NOT EXISTS (
                 SELECT 1
                 FROM finding_risk_labels existing
@@ -488,10 +567,164 @@ def bootstrap_risk_labels(conn: Any, *, actor: str = DEFAULT_BOOTSTRAP_ACTOR) ->
         .all()
     )
 
+    def _effective_label_counts() -> dict[str, int]:
+        rows = (
+            conn.execute(
+                text(
+                    """
+                WITH ranked AS (
+                  SELECT
+                    frl.finding_id,
+                    frl.label,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY frl.finding_id
+                      ORDER BY
+                        CASE WHEN frl.source = 'analyst' THEN 0 ELSE 1 END,
+                        frl.created_at DESC,
+                        frl.id DESC
+                    ) AS rn
+                  FROM finding_risk_labels frl
+                )
+                SELECT label, COUNT(*) AS count
+                FROM ranked
+                WHERE rn = 1
+                GROUP BY label
+                """
+                )
+            )
+            .mappings()
+            .all()
+        )
+        counts: dict[str, int] = {}
+        for row in rows:
+            counts[str(row.get("label") or "")] = int(row.get("count") or 0)
+        return counts
+
+    balanced_positive = 0
+    balanced_negative = 0
+    effective_counts = _effective_label_counts()
+
+    if effective_counts.get("incident_worthy", 0) <= 0:
+        balanced_positive_rows = (
+            conn.execute(
+                text(
+                    """
+                WITH candidates AS (
+                  SELECT
+                    f.finding_id,
+                    CASE COALESCE(f.severity, 'medium')
+                      WHEN 'critical' THEN 4
+                      WHEN 'high' THEN 3
+                      WHEN 'medium' THEN 2
+                      WHEN 'low' THEN 1
+                      ELSE 0
+                    END AS severity_rank,
+                    COALESCE(f.risk_score, 0) AS risk_score,
+                    CASE
+                      WHEN COALESCE(a.environment, 'dev') IN ('prod', 'production') THEN 2
+                      ELSE 1
+                    END AS env_rank
+                  FROM findings f
+                  LEFT JOIN assets a ON a.asset_id = f.asset_id
+                  WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM finding_risk_labels existing
+                    WHERE existing.finding_id = f.finding_id
+                      AND existing.source = 'analyst'
+                  )
+                    AND NOT EXISTS (
+                      SELECT 1
+                      FROM finding_risk_labels existing
+                      WHERE existing.finding_id = f.finding_id
+                        AND existing.label = 'incident_worthy'
+                    )
+                )
+                INSERT INTO finding_risk_labels (finding_id, label, source, note, created_by)
+                SELECT
+                  c.finding_id,
+                  'incident_worthy',
+                  'bootstrap_balanced',
+                  'Bootstrap balancing label to keep training classes available',
+                  :actor
+                FROM candidates c
+                ORDER BY c.severity_rank DESC, c.env_rank DESC, c.risk_score DESC, c.finding_id ASC
+                LIMIT 5
+                RETURNING finding_id
+                """
+                ),
+                {"actor": actor},
+            )
+            .mappings()
+            .all()
+        )
+        balanced_positive = len(balanced_positive_rows)
+        effective_counts = _effective_label_counts()
+
+    if effective_counts.get("benign", 0) <= 0:
+        balanced_negative_rows = (
+            conn.execute(
+                text(
+                    """
+                WITH candidates AS (
+                  SELECT
+                    f.finding_id,
+                    CASE COALESCE(f.severity, 'medium')
+                      WHEN 'critical' THEN 4
+                      WHEN 'high' THEN 3
+                      WHEN 'medium' THEN 2
+                      WHEN 'low' THEN 1
+                      ELSE 0
+                    END AS severity_rank,
+                    COALESCE(f.risk_score, 0) AS risk_score,
+                    CASE
+                      WHEN COALESCE(a.environment, 'dev') IN ('prod', 'production') THEN 2
+                      ELSE 1
+                    END AS env_rank
+                  FROM findings f
+                  LEFT JOIN assets a ON a.asset_id = f.asset_id
+                  WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM finding_risk_labels existing
+                    WHERE existing.finding_id = f.finding_id
+                      AND existing.source = 'analyst'
+                  )
+                    AND NOT EXISTS (
+                      SELECT 1
+                      FROM finding_risk_labels existing
+                      WHERE existing.finding_id = f.finding_id
+                        AND existing.label = 'benign'
+                    )
+                )
+                INSERT INTO finding_risk_labels (finding_id, label, source, note, created_by)
+                SELECT
+                  c.finding_id,
+                  'benign',
+                  'bootstrap_balanced',
+                  'Bootstrap balancing label to keep training classes available',
+                  :actor
+                FROM candidates c
+                ORDER BY c.severity_rank ASC, c.env_rank ASC, c.risk_score ASC, c.finding_id ASC
+                LIMIT 5
+                RETURNING finding_id
+                """
+                ),
+                {"actor": actor},
+            )
+            .mappings()
+            .all()
+        )
+        balanced_negative = len(balanced_negative_rows)
+
     return {
-        "inserted_positive": len(positive_rows),
-        "inserted_negative": len(negative_rows) + len(workflow_rows),
-        "inserted_total": len(positive_rows) + len(negative_rows) + len(workflow_rows),
+        "inserted_positive": len(positive_rows) + balanced_positive,
+        "inserted_negative": len(negative_rows) + len(workflow_rows) + balanced_negative,
+        "inserted_total": len(positive_rows)
+        + len(negative_rows)
+        + len(workflow_rows)
+        + balanced_positive
+        + balanced_negative,
+        "inserted_balanced_positive": balanced_positive,
+        "inserted_balanced_negative": balanced_negative,
         "summary": get_risk_label_summary(conn)["summary"],
     }
 

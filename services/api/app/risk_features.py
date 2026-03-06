@@ -160,6 +160,23 @@ def extract_risk_primitives(
     age_days = finding_age_days(first_seen, now=now)
     age_bucket = finding_age_bucket(age_days)
     tags = coerce_tags(asset.get("tags"))
+    telemetry_events_24h = int(
+        finding.get("telemetry_events_24h") or asset.get("telemetry_events_24h") or 0
+    )
+    ioc_hits_24h = int(finding.get("ioc_hits_24h") or asset.get("ioc_hits_24h") or 0)
+    suricata_high_alerts_24h = int(
+        finding.get("suricata_high_alerts_24h") or asset.get("suricata_high_alerts_24h") or 0
+    )
+    zeek_events_24h = int(finding.get("zeek_events_24h") or asset.get("zeek_events_24h") or 0)
+    cowrie_events_24h = int(finding.get("cowrie_events_24h") or asset.get("cowrie_events_24h") or 0)
+    try:
+        anomaly_score = float(
+            finding.get("anomaly_score")
+            if finding.get("anomaly_score") is not None
+            else (asset.get("anomaly_score") or 0.0)
+        )
+    except (TypeError, ValueError):
+        anomaly_score = 0.0
 
     return {
         "finding": finding,
@@ -180,6 +197,12 @@ def extract_risk_primitives(
         "age_days": age_days,
         "age_bucket": age_bucket,
         "tags": tags,
+        "telemetry_events_24h": telemetry_events_24h,
+        "ioc_hits_24h": ioc_hits_24h,
+        "suricata_high_alerts_24h": suricata_high_alerts_24h,
+        "zeek_events_24h": zeek_events_24h,
+        "cowrie_events_24h": cowrie_events_24h,
+        "anomaly_score": anomaly_score,
         "metadata": coerce_metadata(asset.get("metadata")),
         "asset_type": normalized(asset.get("asset_type")) or "unknown",
         "asset_kind": normalized(asset.get("type")) or "unknown",
@@ -220,4 +243,13 @@ def build_risk_feature_vector(
             primitives["criticality"] == "high" and primitives["internet_facing"]
         ),
         "verified_external": int(primitives["verified"] and primitives["internet_facing"]),
+        "telemetry_events_24h": primitives["telemetry_events_24h"],
+        "ioc_hits_24h": primitives["ioc_hits_24h"],
+        "suricata_high_alerts_24h": primitives["suricata_high_alerts_24h"],
+        "zeek_events_24h": primitives["zeek_events_24h"],
+        "cowrie_events_24h": primitives["cowrie_events_24h"],
+        "anomaly_score": round(float(primitives["anomaly_score"]), 4),
+        "ioc_hit_present": int(primitives["ioc_hits_24h"] > 0),
+        "high_anomaly": int(float(primitives["anomaly_score"]) >= 2.5),
+        "honeypot_activity_present": int(primitives["cowrie_events_24h"] > 0),
     }

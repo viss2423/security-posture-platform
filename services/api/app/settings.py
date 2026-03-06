@@ -95,5 +95,50 @@ class Settings(BaseSettings):
     RISK_MODEL_ENABLED: bool = False
     RISK_MODEL_ARTIFACT_PATH: str | None = "/app/models/finding-risk-model.joblib"
 
+    # Repository scanner controls used by website-triggered OSV/Trivy jobs.
+    REPOSITORY_SCAN_DEFAULT_PATH: str = "/workspace"
+    REPOSITORY_SCAN_DEFAULT_ASSET_KEY: str = "secplat-repo"
+    REPOSITORY_SCAN_DEFAULT_ASSET_NAME: str = "SecPlat repository"
+    REPOSITORY_SCAN_DEFAULT_ENVIRONMENT: str = "dev"
+    REPOSITORY_SCAN_DEFAULT_CRITICALITY: str = "medium"
+    OSV_SCANNER_BIN: str = "/usr/local/bin/osv-scanner"
+    OSV_SCANNER_TIMEOUT_SECONDS: int = 600
+    TRIVY_BIN: str = "/usr/local/bin/trivy"
+    TRIVY_SCANNERS: str = "vuln,misconfig"
+    TRIVY_TIMEOUT_SECONDS: int = 1200
+    THREAT_INTEL_HTTP_TIMEOUT_SECONDS: int = 30
+    THREAT_INTEL_FEEDS_JSON: str = ""
+    THREAT_INTEL_CROWDSEC_API_KEY: str = ""
+    THREAT_INTEL_ABUSEIPDB_API_KEY: str = ""
+    TELEMETRY_IMPORT_MAX_EVENTS: int = 20000
+    TELEMETRY_MIRROR_TO_OPENSEARCH: bool = True
+    TELEMETRY_OPENSEARCH_INDEX_PREFIX: str = "secplat-telemetry"
+    TELEMETRY_DEFAULT_LOOKBACK_HOURS: int = 24
+    ENABLE_SCHEDULED_TELEMETRY_IMPORT: bool = False
+    SCHEDULED_TELEMETRY_IMPORT_INTERVAL_SECONDS: int = 300
+    TELEMETRY_SCHEDULED_SOURCES: str = "suricata,zeek,auditd,cowrie"
+    ENABLE_TELEMETRY_KEEPALIVE: bool = True
+    TELEMETRY_KEEPALIVE_INTERVAL_SECONDS: int = 120
+    TELEMETRY_KEEPALIVE_MAX_SILENCE_MINUTES: int = 3
+    TELEMETRY_KEEPALIVE_CREATE_ALERTS: bool = False
+    TELEMETRY_KEEPALIVE_ASSET_KEY: str = ""
+    NETWORK_ANOMALY_THRESHOLD: float = 2.5
+    ENABLE_SCHEDULED_NETWORK_ANOMALY: bool = True
+    SCHEDULED_NETWORK_ANOMALY_INTERVAL_MINUTES: int = 60
+    ATTACK_LAB_ALLOWED_NETWORKS: str = "127.0.0.1/32,172.16.0.0/12,192.168.0.0/16"
+    ATTACK_LAB_DEFAULT_PORTS: str = "22,80,443,3000,5432,6379,9200"
+    ATTACK_LAB_NMAP_BIN: str = "/usr/bin/nmap"
+    ATTACK_LAB_WEB_SCAN_TIMEOUT_SECONDS: int = 90
+    TELEMETRY_SURICATA_LOG_PATH: str = "/workspace/lab-data/suricata/eve.json"
+    TELEMETRY_ZEEK_LOG_PATH: str = "/workspace/lab-data/zeek/conn.log"
+    TELEMETRY_AUDITD_LOG_PATH: str = "/workspace/lab-data/auditd/audit.log"
+    TELEMETRY_COWRIE_LOG_PATH: str = "/workspace/lab-data/cowrie/cowrie.json"
+    CYBERLAB_AUTO_SEED_DEMO: bool = False
+    CYBERLAB_AUTO_SEED_FORCE: bool = False
+    CYBERLAB_AUTO_SEED_ONCE_VERSION: str = "v1"
+    CYBERLAB_DEMO_ASSET_KEY: str = "cyberlab-demo-asset"
+    CYBERLAB_DEMO_REPO_ASSET_KEY: str = "cyberlab-demo-repo"
+    CYBERLAB_DEMO_IOC_SOURCE: str = "cyberlab-demo"
+
 
 settings = Settings()

@@ -3,7 +3,8 @@
 import { useDeferredValue, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { formatDateTime } from '@/lib/format';
-import type { AssetPosture } from '@/lib/api';
+import { runAttackLabAssetScan, type AssetPosture } from '@/lib/api';
+import { useAuth } from '@/contexts/AuthContext';
 
 type AssetsPageClientProps = {
   items: AssetPosture[];
@@ -55,9 +56,13 @@ function CriticalityCell({ value }: { value: string | null | undefined }) {
 }
 
 export default function AssetsPageClient({ items }: AssetsPageClientProps) {
+  const { isAdmin } = useAuth();
   const [search, setSearch] = useState('');
   const [sortKey, setSortKey] = useState<SortKey>(null);
   const [sortDir, setSortDir] = useState<SortDir>('asc');
+  const [scanBusyByAsset, setScanBusyByAsset] = useState<Record<string, boolean>>({});
+  const [scanNotice, setScanNotice] = useState<string | null>(null);
+  const [scanError, setScanError] = useState<string | null>(null);
   const deferredSearch = useDeferredValue(search);
 
   const filteredAndSorted = useMemo(() => {
@@ -124,6 +129,22 @@ export default function AssetsPageClient({ items }: AssetsPageClientProps) {
   const gridCols = '120px 100px 90px 100px 120px 90px 70px 1fr';
   const assetKey = (asset: AssetPosture) => asset.asset_key ?? asset.asset_id ?? '';
 
+  const handleScanAsset = async (asset: AssetPosture) => {
+    const key = assetKey(asset);
+    if (!key || !isAdmin) return;
+    setScanError(null);
+    setScanNotice(null);
+    setScanBusyByAsset((current) => ({ ...current, [key]: true }));
+    try {
+      const job = await runAttackLabAssetScan({ asset_key: key });
+      setScanNotice(`Scan queued for ${key} (job ${job.job_id}). Track progress in Jobs.`);
+    } catch (error) {
+      setScanError(error instanceof Error ? error.message : 'Failed to queue scan');
+    } finally {
+      setScanBusyByAsset((current) => ({ ...current, [key]: false }));
+    }
+  };
+
   return (
     <main className="page-shell overflow-visible">
       <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -149,10 +170,21 @@ export default function AssetsPageClient({ items }: AssetsPageClientProps) {
         )}
       </div>
 
+      {scanNotice && (
+        <div className="mb-4 rounded-xl border border-[var(--green)]/30 bg-[var(--green)]/10 px-4 py-3 text-sm text-[var(--text)]">
+          {scanNotice}
+        </div>
+      )}
+      {scanError && (
+        <div className="mb-4 rounded-xl border border-[var(--red)]/30 bg-[var(--red)]/10 px-4 py-3 text-sm text-[var(--text)]">
+          {scanError}
+        </div>
+      )}
+
       {items.length > 0 && filteredAndSorted.length > 0 && (
         <div className="card animate-in overflow-hidden rounded-2xl p-0">
           <div className="overflow-x-auto rounded-b-2xl" style={{ minWidth: 0 }}>
-            <div role="table" className="assets-grid-table" style={{ minWidth: 900, gridTemplateColumns: gridCols }}>
+            <div role="table" className="assets-grid-table" style={{ minWidth: 980, gridTemplateColumns: `${gridCols} 120px` }}>
               <div role="row" className="assets-grid-header">
                 <div role="columnheader" className={headerClass}>
                   <SortButton label="Asset" value="asset_key" />
@@ -177,6 +209,9 @@ export default function AssetsPageClient({ items }: AssetsPageClientProps) {
                 </div>
                 <div role="columnheader" className={headerClass}>
                   <SortButton label="Last seen" value="last_seen" />
+                </div>
+                <div role="columnheader" className={headerClass}>
+                  Action
                 </div>
               </div>
               {filteredAndSorted.map((asset, index) => (
@@ -218,6 +253,20 @@ export default function AssetsPageClient({ items }: AssetsPageClientProps) {
                   </div>
                   <div role="cell" className="px-5 py-3 text-sm tabular-nums text-[var(--muted)]">
                     {asset.last_seen ? formatDateTime(asset.last_seen) : '-'}
+                  </div>
+                  <div role="cell" className="px-5 py-3">
+                    {isAdmin ? (
+                      <button
+                        type="button"
+                        onClick={() => void handleScanAsset(asset)}
+                        disabled={Boolean(scanBusyByAsset[assetKey(asset)])}
+                        className="btn-secondary px-2 py-1 text-xs"
+                      >
+                        {scanBusyByAsset[assetKey(asset)] ? 'Queueing...' : 'Scan this asset'}
+                      </button>
+                    ) : (
+                      <span className="text-xs text-[var(--muted)]">Admin only</span>
+                    )}
                   </div>
                 </div>
               ))}

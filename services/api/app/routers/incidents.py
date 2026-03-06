@@ -214,7 +214,7 @@ def get_incident(
     incident = _serialize_incident(dict(row))
 
     alerts_q = text(
-        "SELECT incident_id, asset_key, added_at, added_by FROM incident_alerts WHERE incident_id = :id ORDER BY added_at"
+        "SELECT incident_id, asset_key, alert_id, added_at, added_by FROM incident_alerts WHERE incident_id = :id ORDER BY added_at"
     )
     alerts = db.execute(alerts_q, {"id": incident_id}).mappings().all()
     incident["alerts"] = [_serialize_incident(dict(a)) for a in alerts]
@@ -237,6 +237,7 @@ class CreateIncidentBody(BaseModel):
     assigned_to: str | None = None
     sla_due_at: str | None = None  # ISO datetime
     asset_keys: list[str] | None = None  # link these alerts (asset_keys) to the incident
+    alert_ids: list[int] | None = None  # link event alerts (security_alerts.alert_id)
 
 
 @router.post("", status_code=201)
@@ -339,6 +340,59 @@ def create_incident(
                     "incident_id": incident_id,
                     "author": user,
                     "details": json.dumps({"asset_keys": linked_asset_keys}),
+                },
+            )
+
+    linked_alert_ids: list[int] = []
+    if body.alert_ids:
+        for alert_id in body.alert_ids:
+            if not alert_id:
+                continue
+            alert_row = (
+                db.execute(
+                    text(
+                        "SELECT alert_id, asset_key FROM security_alerts WHERE alert_id = :alert_id"
+                    ),
+                    {"alert_id": int(alert_id)},
+                )
+                .mappings()
+                .first()
+            )
+            if not alert_row:
+                continue
+            derived_asset_key = str(alert_row.get("asset_key") or f"event:{int(alert_id)}")
+            link_q = text("""
+                INSERT INTO incident_alerts (incident_id, asset_key, alert_id, added_by)
+                VALUES (:incident_id, :asset_key, :alert_id, :added_by)
+                ON CONFLICT (incident_id, asset_key) DO NOTHING
+                RETURNING alert_id
+            """)
+            linked = (
+                db.execute(
+                    link_q,
+                    {
+                        "incident_id": incident_id,
+                        "asset_key": derived_asset_key,
+                        "alert_id": int(alert_id),
+                        "added_by": user,
+                    },
+                )
+                .mappings()
+                .first()
+            )
+            if linked and linked.get("alert_id") is not None:
+                linked_alert_ids.append(int(linked["alert_id"]))
+        if linked_alert_ids:
+            note_q = text("""
+                INSERT INTO incident_notes (incident_id, event_type, author, details)
+                VALUES (:incident_id, 'alert_added', :author, CAST(:details AS jsonb))
+            """)
+            db.execute(
+                note_q,
+                {
+                    "incident_id": incident_id,
+                    "author": user,
+                    "details": json.dumps({"alert_ids": linked_alert_ids}),
                 },
             )
 
@@ -496,7 +550,8 @@ def add_incident_note(
 
 
 class LinkAlertBody(BaseModel):
-    asset_key: str
+    asset_key: str | None = None
+    alert_id: int | None = None
 
 
 @router.post("/{incident_id}/alerts", status_code=201)
@@ -506,7 +561,7 @@ def link_alert(
     db: Session = Depends(get_db),
     user: str = Depends(require_role(["admin", "analyst"])),
 ):
-    """Link an alert (by asset_key) to this incident."""
+    """Link an alert (by asset_key or alert_id) to this incident."""
     exists = db.execute(
         text("SELECT id FROM incidents WHERE id = :id"), {"id": incident_id}
     ).scalar()
@@ -514,17 +569,38 @@ def link_alert(
         raise HTTPException(status_code=404, detail="Incident not found")
 
     asset_key = (body.asset_key or "").strip()
-    if not asset_key:
-        raise HTTPException(status_code=400, detail="asset_key required")
+    alert_id = int(body.alert_id) if body.alert_id else None
+    if not asset_key and not alert_id:
+        raise HTTPException(status_code=400, detail="asset_key or alert_id required")
+    if alert_id and not asset_key:
+        alert_row = (
+            db.execute(
+                text("SELECT asset_key FROM security_alerts WHERE alert_id = :alert_id"),
+                {"alert_id": alert_id},
+            )
+            .mappings()
+            .first()
+        )
+        if not alert_row:
+            raise HTTPException(status_code=404, detail="Alert not found")
+        asset_key = str(alert_row.get("asset_key") or f"event:{alert_id}")
 
     q = text("""
-        INSERT INTO incident_alerts (incident_id, asset_key, added_by)
-        VALUES (:incident_id, :asset_key, :added_by)
+        INSERT INTO incident_alerts (incident_id, asset_key, alert_id, added_by)
+        VALUES (:incident_id, :asset_key, :alert_id, :added_by)
         ON CONFLICT (incident_id, asset_key) DO NOTHING
-        RETURNING incident_id, asset_key, added_at, added_by
+        RETURNING incident_id, asset_key, alert_id, added_at, added_by
     """)
     row = (
-        db.execute(q, {"incident_id": incident_id, "asset_key": asset_key, "added_by": user})
+        db.execute(
+            q,
+            {
+                "incident_id": incident_id,
+                "asset_key": asset_key,
+                "alert_id": alert_id,
+                "added_by": user,
+            },
+        )
         .mappings()
         .first()
     )
@@ -543,7 +619,7 @@ def link_alert(
         {
             "incident_id": incident_id,
             "author": user,
-            "details": json.dumps({"asset_key": asset_key}),
+            "details": json.dumps({"asset_key": asset_key, "alert_id": alert_id}),
         },
     )
     db.commit()

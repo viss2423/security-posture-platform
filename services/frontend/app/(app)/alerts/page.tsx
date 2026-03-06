@@ -56,8 +56,18 @@ function labelize(value: string | null | undefined): string {
 }
 
 function formatLastSeen(item: AlertItem): string {
-  if (!item.last_seen) return 'No recent posture sample';
-  return `Last seen ${formatDateTime(item.last_seen)}`;
+  const value = item.last_seen_at || item.last_seen;
+  if (!value) return 'No recent posture sample';
+  return `Last seen ${formatDateTime(value)}`;
+}
+
+function alertMutationTarget(item: AlertItem): { asset_key?: string; alert_id?: number } {
+  if (item.alert_id != null) return { alert_id: item.alert_id };
+  return { asset_key: item.asset_key };
+}
+
+function alertMutationKey(item: AlertItem): string {
+  return item.alert_id != null ? `event-${item.alert_id}` : item.asset_key;
 }
 
 function AlertRow({
@@ -70,10 +80,10 @@ function AlertRow({
   canMutate,
 }: {
   item: AlertItem;
-  onAck: (key: string, reason?: string) => void;
-  onSuppress: (key: string, until: string) => void;
-  onResolve: (key: string) => void;
-  onAssign: (key: string, who: string) => void;
+  onAck: (item: AlertItem, reason?: string) => void;
+  onSuppress: (item: AlertItem, until: string) => void;
+  onResolve: (item: AlertItem) => void;
+  onAssign: (item: AlertItem, who: string) => void;
   loading: string | null;
   canMutate: boolean;
 }) {
@@ -87,7 +97,9 @@ function AlertRow({
   const [guidanceGenerating, setGuidanceGenerating] = useState(false);
   const [guidanceMessage, setGuidanceMessage] = useState<string | null>(null);
   const key = item.asset_key;
-  const isBusy = loading === key;
+  const isBusy = loading === alertMutationKey(item);
+  const canOpenAsset = !key.startsWith('event:');
+  const canUseAi = canOpenAsset;
 
   useEffect(() => {
     setAssignTo(item.assigned_to ?? '');
@@ -162,18 +174,32 @@ function AlertRow({
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <Link
-              href={`/assets/${encodeURIComponent(key)}`}
-              className="text-base font-semibold text-[var(--text)] hover:text-[var(--green)]"
-            >
-              {item.asset_name || key}
-            </Link>
+            {canOpenAsset ? (
+              <Link
+                href={`/assets/${encodeURIComponent(key)}`}
+                className="text-base font-semibold text-[var(--text)] hover:text-[var(--green)]"
+              >
+                {item.asset_name || item.title || key}
+              </Link>
+            ) : (
+              <span className="text-base font-semibold text-[var(--text)]">
+                {item.asset_name || item.title || key}
+              </span>
+            )}
             <span className="rounded-full border border-[var(--border)] px-2 py-0.5 font-mono text-[11px] text-[var(--muted)]">
               {key}
             </span>
             {item.posture_status && (
               <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium uppercase ${badgeClass(item.posture_status)}`}>
                 {item.posture_status}
+              </span>
+            )}
+            {item.source && (
+              <span className="stat-chip uppercase">{item.source}</span>
+            )}
+            {item.severity && (
+              <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium uppercase ${badgeClass(item.severity)}`}>
+                {item.severity}
               </span>
             )}
             {item.ai_recommended_action && (
@@ -197,7 +223,14 @@ function AlertRow({
               <span className="stat-chip">{item.verified ? 'Verified asset' : 'Unverified asset'}</span>
             )}
             <span className="stat-chip">{formatLastSeen(item)}</span>
+            {item.event_count != null && item.event_count > 1 && (
+              <span className="stat-chip">{item.event_count} events</span>
+            )}
           </div>
+
+          {item.description && (
+            <p className="mt-3 text-sm text-[var(--text-muted)]">{item.description}</p>
+          )}
 
           {(keySignals.length > 0 || maintenanceNote || item.assigned_to || item.ack_reason) && (
             <div className="mt-3 space-y-2 text-sm text-[var(--text-muted)]">
@@ -229,9 +262,11 @@ function AlertRow({
         </div>
 
         <div className="flex flex-wrap items-center gap-2 xl:justify-end">
-          <button type="button" onClick={toggleGuidance} className="btn-secondary text-sm">
-            {guidanceOpen ? 'Hide AI' : 'AI guidance'}
-          </button>
+          {canUseAi && (
+            <button type="button" onClick={toggleGuidance} className="btn-secondary text-sm">
+              {guidanceOpen ? 'Hide AI' : 'AI guidance'}
+            </button>
+          )}
           {canMutate && (
             <>
               <button
@@ -244,7 +279,7 @@ function AlertRow({
               </button>
               <button
                 type="button"
-                onClick={() => onResolve(key)}
+                onClick={() => onResolve(item)}
                 disabled={isBusy}
                 className="btn-secondary text-sm"
               >
@@ -302,7 +337,7 @@ function AlertRow({
               <button
                 type="button"
                 onClick={() => {
-                  onAck(key, ackReason || undefined);
+                  onAck(item, ackReason || undefined);
                   setActionMode(null);
                 }}
                 disabled={isBusy}
@@ -328,7 +363,7 @@ function AlertRow({
                 type="button"
                 onClick={() => {
                   const until = suppressUntil || defaultSuppress();
-                  onSuppress(key, new Date(until).toISOString());
+                  onSuppress(item, new Date(until).toISOString());
                   setActionMode(null);
                 }}
                 disabled={isBusy}
@@ -354,7 +389,7 @@ function AlertRow({
               <button
                 type="button"
                 onClick={() => {
-                  onAssign(key, assignTo);
+                  onAssign(item, assignTo);
                   setActionMode(null);
                 }}
                 disabled={isBusy}
@@ -482,20 +517,24 @@ export default function AlertsPage() {
     }
   };
 
-  const handleAck = async (asset_key: string, reason?: string) => {
-    await withMutation(asset_key, () => postAlertAck(asset_key, reason));
+  const handleAck = async (item: AlertItem, reason?: string) => {
+    const target = alertMutationTarget(item);
+    await withMutation(alertMutationKey(item), () => postAlertAck(target, reason));
   };
 
-  const handleSuppress = async (asset_key: string, until_iso: string) => {
-    await withMutation(asset_key, () => postAlertSuppress(asset_key, until_iso));
+  const handleSuppress = async (item: AlertItem, until_iso: string) => {
+    const target = alertMutationTarget(item);
+    await withMutation(alertMutationKey(item), () => postAlertSuppress(target, until_iso));
   };
 
-  const handleResolve = async (asset_key: string) => {
-    await withMutation(asset_key, () => postAlertResolve(asset_key));
+  const handleResolve = async (item: AlertItem) => {
+    const target = alertMutationTarget(item);
+    await withMutation(alertMutationKey(item), () => postAlertResolve(target));
   };
 
-  const handleAssign = async (asset_key: string, assigned_to: string) => {
-    await withMutation(asset_key, () => postAlertAssign(asset_key, assigned_to));
+  const handleAssign = async (item: AlertItem, assigned_to: string) => {
+    const target = alertMutationTarget(item);
+    await withMutation(alertMutationKey(item), () => postAlertAssign(target, assigned_to));
   };
 
   const grafanaUrl = process.env.NEXT_PUBLIC_GRAFANA_URL || 'http://localhost:3001';

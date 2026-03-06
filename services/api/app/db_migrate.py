@@ -1,6 +1,8 @@
 """Ensure audit_events and alert_states exist. Safe to run on every startup (CREATE TABLE IF NOT EXISTS)."""
 
 import logging
+import time
+from typing import Any
 
 import bcrypt
 from sqlalchemy import text
@@ -51,6 +53,18 @@ ALTER TABLE findings ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'open';
 ALTER TABLE findings ADD COLUMN IF NOT EXISTS source TEXT;
 """
 FINDINGS_UNIQUE_INDEX = "CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_finding_key ON findings(finding_key) WHERE finding_key IS NOT NULL;"
+FINDINGS_SCANNER_METADATA_SQL = """
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS vulnerability_id TEXT;
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS package_ecosystem TEXT;
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS package_name TEXT;
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS package_version TEXT;
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS fixed_version TEXT;
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS scanner_metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+CREATE INDEX IF NOT EXISTS idx_findings_vulnerability_id
+  ON findings(vulnerability_id) WHERE vulnerability_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_findings_package_name
+  ON findings(package_name) WHERE package_name IS NOT NULL;
+"""
 
 # Findings: risk acceptance (Phase A.2)
 FINDINGS_RISK_ACCEPTANCE_SQL = """
@@ -184,7 +198,8 @@ CREATE TABLE IF NOT EXISTS scan_jobs (
   finished_at      TIMESTAMPTZ,
   error            TEXT,
   log_output       TEXT,
-  retry_count      INTEGER NOT NULL DEFAULT 0
+  retry_count      INTEGER NOT NULL DEFAULT 0,
+  job_params_json  JSONB NOT NULL DEFAULT '{}'::jsonb
 );
 CREATE INDEX IF NOT EXISTS idx_scan_jobs_status ON scan_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_scan_jobs_created_at ON scan_jobs(created_at DESC);
@@ -193,6 +208,7 @@ ALTER_SCAN_JOBS_LOG = "ALTER TABLE scan_jobs ADD COLUMN IF NOT EXISTS log_output
 ALTER_SCAN_JOBS_RETRY = (
     "ALTER TABLE scan_jobs ADD COLUMN IF NOT EXISTS retry_count INTEGER NOT NULL DEFAULT 0;"
 )
+ALTER_SCAN_JOBS_PARAMS = "ALTER TABLE scan_jobs ADD COLUMN IF NOT EXISTS job_params_json JSONB NOT NULL DEFAULT '{}'::jsonb;"
 
 # Phase B.2: policy bundles
 POLICY_BUNDLES_SQL = """
@@ -364,15 +380,233 @@ CREATE INDEX IF NOT EXISTS idx_alert_ai_guidance_generated_at
 CREATE INDEX IF NOT EXISTS idx_alert_ai_guidance_action
   ON alert_ai_guidance(recommended_action, generated_at DESC);
 """
+THREAT_IOCS_SQL = """
+CREATE TABLE IF NOT EXISTS threat_iocs (
+  id              SERIAL PRIMARY KEY,
+  source          TEXT NOT NULL,
+  indicator       TEXT NOT NULL,
+  indicator_type  TEXT NOT NULL CHECK (indicator_type IN ('ip', 'domain')),
+  feed_url        TEXT,
+  first_seen_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_seen_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+  metadata        JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (source, indicator_type, indicator)
+);
+CREATE INDEX IF NOT EXISTS idx_threat_iocs_source
+  ON threat_iocs(source, indicator_type);
+CREATE INDEX IF NOT EXISTS idx_threat_iocs_active
+  ON threat_iocs(is_active, last_seen_at DESC);
+CREATE TABLE IF NOT EXISTS threat_ioc_asset_matches (
+  id              SERIAL PRIMARY KEY,
+  threat_ioc_id   INTEGER NOT NULL REFERENCES threat_iocs(id) ON DELETE CASCADE,
+  asset_id        INTEGER NOT NULL REFERENCES assets(asset_id) ON DELETE CASCADE,
+  asset_key       TEXT NOT NULL,
+  match_field     TEXT NOT NULL,
+  matched_value   TEXT NOT NULL,
+  first_seen_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_seen_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  metadata        JSONB NOT NULL DEFAULT '{}'::jsonb,
+  UNIQUE (threat_ioc_id, asset_id, match_field, matched_value)
+);
+CREATE INDEX IF NOT EXISTS idx_threat_ioc_matches_asset
+  ON threat_ioc_asset_matches(asset_key, last_seen_at DESC);
+CREATE INDEX IF NOT EXISTS idx_threat_ioc_matches_ioc
+  ON threat_ioc_asset_matches(threat_ioc_id, last_seen_at DESC);
+"""
+TELEMETRY_SECURITY_SQL = """
+CREATE TABLE IF NOT EXISTS security_events (
+  event_id         BIGSERIAL PRIMARY KEY,
+  source           TEXT NOT NULL,
+  event_type       TEXT NOT NULL DEFAULT 'event',
+  asset_id         INTEGER REFERENCES assets(asset_id) ON DELETE SET NULL,
+  asset_key        TEXT,
+  severity         INTEGER,
+  src_ip           TEXT,
+  src_port         INTEGER,
+  dst_ip           TEXT,
+  dst_port         INTEGER,
+  domain           TEXT,
+  url              TEXT,
+  protocol         TEXT,
+  event_time       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ti_match         BOOLEAN NOT NULL DEFAULT FALSE,
+  ti_source        TEXT,
+  mitre_techniques JSONB NOT NULL DEFAULT '[]'::jsonb,
+  anomaly_score    DOUBLE PRECISION,
+  payload_json     JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_security_events_source_time
+  ON security_events(source, event_time DESC);
+CREATE INDEX IF NOT EXISTS idx_security_events_asset_time
+  ON security_events(asset_key, event_time DESC);
+CREATE INDEX IF NOT EXISTS idx_security_events_ti_match
+  ON security_events(ti_match, event_time DESC);
+
+CREATE TABLE IF NOT EXISTS security_alerts (
+  alert_id           BIGSERIAL PRIMARY KEY,
+  alert_key          TEXT NOT NULL UNIQUE,
+  dedupe_key         TEXT NOT NULL,
+  source             TEXT NOT NULL,
+  alert_type         TEXT NOT NULL DEFAULT 'detection',
+  asset_id           INTEGER REFERENCES assets(asset_id) ON DELETE SET NULL,
+  asset_key          TEXT,
+  severity           TEXT NOT NULL DEFAULT 'medium'
+                     CHECK (severity IN ('critical', 'high', 'medium', 'low', 'info')),
+  status             TEXT NOT NULL DEFAULT 'firing'
+                     CHECK (status IN ('firing', 'acked', 'suppressed', 'resolved')),
+  title              TEXT NOT NULL,
+  description        TEXT,
+  event_count        INTEGER NOT NULL DEFAULT 1,
+  first_seen_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_seen_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  acknowledged_by    TEXT,
+  acknowledged_at    TIMESTAMPTZ,
+  suppression_reason TEXT,
+  suppressed_until   TIMESTAMPTZ,
+  resolved_by        TEXT,
+  resolved_at        TIMESTAMPTZ,
+  assigned_to        TEXT,
+  ti_match           BOOLEAN NOT NULL DEFAULT FALSE,
+  ti_source          TEXT,
+  mitre_techniques   JSONB NOT NULL DEFAULT '[]'::jsonb,
+  payload_json       JSONB NOT NULL DEFAULT '{}'::jsonb,
+  context_json       JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_security_alerts_status
+  ON security_alerts(status, last_seen_at DESC);
+CREATE INDEX IF NOT EXISTS idx_security_alerts_source
+  ON security_alerts(source, status, last_seen_at DESC);
+CREATE INDEX IF NOT EXISTS idx_security_alerts_asset
+  ON security_alerts(asset_key, status, last_seen_at DESC);
+CREATE INDEX IF NOT EXISTS idx_security_alerts_dedupe
+  ON security_alerts(dedupe_key);
+
+ALTER TABLE incident_alerts
+  ADD COLUMN IF NOT EXISTS alert_id BIGINT REFERENCES security_alerts(alert_id) ON DELETE CASCADE;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_incident_alerts_incident_alert_id
+  ON incident_alerts(incident_id, alert_id) WHERE alert_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_incident_alerts_alert_id
+  ON incident_alerts(alert_id) WHERE alert_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS detection_rules (
+  rule_id            SERIAL PRIMARY KEY,
+  name               TEXT NOT NULL UNIQUE,
+  description        TEXT,
+  source             TEXT,
+  rule_format        TEXT NOT NULL DEFAULT 'json' CHECK (rule_format IN ('json', 'sigma')),
+  severity           TEXT NOT NULL DEFAULT 'medium'
+                     CHECK (severity IN ('critical', 'high', 'medium', 'low', 'info')),
+  enabled            BOOLEAN NOT NULL DEFAULT TRUE,
+  definition_json    JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by         TEXT,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_tested_at     TIMESTAMPTZ,
+  last_test_matches  INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_detection_rules_enabled
+  ON detection_rules(enabled, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS detection_rule_runs (
+  run_id             BIGSERIAL PRIMARY KEY,
+  rule_id            INTEGER NOT NULL REFERENCES detection_rules(rule_id) ON DELETE CASCADE,
+  executed_by        TEXT,
+  lookback_hours     INTEGER NOT NULL DEFAULT 24,
+  status             TEXT NOT NULL DEFAULT 'done' CHECK (status IN ('running', 'done', 'failed')),
+  matches            INTEGER NOT NULL DEFAULT 0,
+  started_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  finished_at        TIMESTAMPTZ,
+  error              TEXT,
+  results_json       JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_detection_rule_runs_rule
+  ON detection_rule_runs(rule_id, started_at DESC);
+
+CREATE TABLE IF NOT EXISTS attack_lab_runs (
+  run_id             BIGSERIAL PRIMARY KEY,
+  task_type          TEXT NOT NULL,
+  target_asset_id    INTEGER REFERENCES assets(asset_id) ON DELETE SET NULL,
+  target_asset_key   TEXT,
+  target             TEXT,
+  status             TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'running', 'done', 'failed')),
+  requested_by       TEXT,
+  started_at         TIMESTAMPTZ,
+  finished_at        TIMESTAMPTZ,
+  error              TEXT,
+  output_json        JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_attack_lab_runs_created
+  ON attack_lab_runs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_attack_lab_runs_status
+  ON attack_lab_runs(status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS asset_anomaly_scores (
+  id                 BIGSERIAL PRIMARY KEY,
+  asset_key          TEXT NOT NULL,
+  computed_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  anomaly_score      DOUBLE PRECISION NOT NULL,
+  baseline_mean      DOUBLE PRECISION,
+  baseline_std       DOUBLE PRECISION,
+  current_value      DOUBLE PRECISION,
+  source_breakdown   JSONB NOT NULL DEFAULT '{}'::jsonb,
+  context_json       JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_asset_anomaly_scores_asset_time
+  ON asset_anomaly_scores(asset_key, computed_at DESC);
+"""
 
 
 def _bcrypt_hash(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
+def _acquire_startup_migration_lock(conn: Any) -> None:
+    """Serialize startup migrations to avoid concurrent DDL deadlocks."""
+    try:
+        conn.execute(text("SELECT pg_advisory_xact_lock(:lock_key)"), {"lock_key": 781245903})
+    except Exception:
+        # Non-Postgres engines or restricted permissions: continue best-effort.
+        logger.debug("startup_migration: advisory lock unavailable", exc_info=True)
+
+
+def _execute_with_deadlock_retry(
+    conn: Any,
+    sql: str,
+    params: dict[str, Any] | None = None,
+    *,
+    retries: int = 4,
+    initial_delay_seconds: float = 0.1,
+) -> None:
+    """Execute SQL with bounded retry on Postgres deadlock errors."""
+    attempt = 0
+    while True:
+        try:
+            conn.execute(text(sql), params or {})
+            return
+        except Exception as exc:
+            if "deadlock detected" not in str(exc).lower() or attempt >= retries:
+                raise
+            delay = initial_delay_seconds * (2**attempt)
+            logger.warning(
+                "startup_migration: deadlock retry for SQL statement (attempt=%s delay=%.3fs)",
+                attempt + 1,
+                delay,
+            )
+            time.sleep(delay)
+            attempt += 1
+
+
 def run_startup_migrations() -> None:
     """Create audit_events and alert_states if missing (e.g. DB created before they were in init.sql)."""
     with engine.begin() as conn:
+        _acquire_startup_migration_lock(conn)
         for name, sql in [("audit_events", AUDIT_EVENTS_SQL), ("alert_states", ALERT_STATES_SQL)]:
             try:
                 for stmt in sql.strip().split(";"):
@@ -394,6 +628,15 @@ def run_startup_migrations() -> None:
         except Exception as e:
             logger.warning("startup_migration: findings extend failed: %s", e)
             raise
+        try:
+            for stmt in FINDINGS_SCANNER_METADATA_SQL.strip().split(";"):
+                stmt = stmt.strip()
+                if stmt:
+                    conn.execute(text(stmt))
+            logger.info("startup_migration: ensured findings scanner metadata columns exist")
+        except Exception as e:
+            logger.warning("startup_migration: findings scanner metadata failed: %s", e)
+            raise
         # Findings: risk acceptance columns (Phase A.2)
         try:
             for stmt in FINDINGS_RISK_ACCEPTANCE_SQL.strip().split(";"):
@@ -404,19 +647,16 @@ def run_startup_migrations() -> None:
         except Exception as e:
             logger.warning("startup_migration: findings risk acceptance failed: %s", e)
             raise
-        # Findings: contextual risk scoring (Phase AI-2)
+        # Findings: contextual risk scoring columns (Phase AI-2).
+        # Backfill runs later after all dependent telemetry tables exist.
         try:
             for stmt in FINDINGS_RISK_SCORING_SQL.strip().split(";"):
                 stmt = stmt.strip()
                 if stmt:
                     conn.execute(text(stmt))
-            updated = backfill_finding_risk_scores(conn)
-            logger.info(
-                "startup_migration: ensured findings risk scoring columns exist; backfilled=%s",
-                updated,
-            )
+            logger.info("startup_migration: ensured findings risk scoring columns exist")
         except Exception as e:
-            logger.warning("startup_migration: findings risk scoring failed: %s", e)
+            logger.warning("startup_migration: findings risk scoring columns failed: %s", e)
             raise
         try:
             for stmt in FINDING_RISK_LABELS_SQL.strip().split(";"):
@@ -455,24 +695,24 @@ def run_startup_migrations() -> None:
             for stmt in USERS_SQL.strip().split(";"):
                 stmt = stmt.strip()
                 if stmt:
-                    conn.execute(text(stmt))
-            conn.execute(text(USERS_ADD_PASSWORD_COLUMN))
-            conn.execute(
-                text(
-                    "INSERT INTO users (username, role) VALUES (:u, 'admin') ON CONFLICT (username) DO NOTHING"
-                ),
+                    _execute_with_deadlock_retry(conn, stmt)
+            _execute_with_deadlock_retry(conn, USERS_ADD_PASSWORD_COLUMN)
+            _execute_with_deadlock_retry(
+                conn,
+                "INSERT INTO users (username, role) VALUES (:u, 'admin') ON CONFLICT (username) DO NOTHING",
                 {"u": settings.ADMIN_USERNAME},
             )
             # Seed viewer account (password: viewer). Pre-computed hash to avoid passlib/bcrypt
             # backend detection bug (ValueError: password cannot be longer than 72 bytes) in some envs.
             VIEWER_BCRYPT_HASH = "$2b$12$wITIujVXwHS5q4g/TLizOeTTDFWkpEC9/sAz6h20H5x4GXzz37WGW"
-            conn.execute(
-                text("""
+            _execute_with_deadlock_retry(
+                conn,
+                """
                     INSERT INTO users (username, role, password_hash)
                     VALUES ('viewer', 'viewer', :ph)
                     ON CONFLICT (username) DO UPDATE SET password_hash = EXCLUDED.password_hash
                     WHERE users.username = 'viewer'
-                """),
+                """,
                 {"ph": VIEWER_BCRYPT_HASH},
             )
 
@@ -496,17 +736,16 @@ def run_startup_migrations() -> None:
             for username, password, role in service_identities:
                 if not username or not password:
                     continue
-                conn.execute(
-                    text(
-                        """
+                _execute_with_deadlock_retry(
+                    conn,
+                    """
                         INSERT INTO users (username, role, password_hash, disabled)
                         VALUES (:u, :r, :ph, FALSE)
                         ON CONFLICT (username) DO UPDATE
                         SET role = EXCLUDED.role,
                             password_hash = EXCLUDED.password_hash,
                             disabled = FALSE
-                    """
-                    ),
+                    """,
                     {"u": username, "r": role, "ph": _bcrypt_hash(password)},
                 )
 
@@ -524,6 +763,7 @@ def run_startup_migrations() -> None:
                     conn.execute(text(stmt))
             conn.execute(text(ALTER_SCAN_JOBS_LOG))
             conn.execute(text(ALTER_SCAN_JOBS_RETRY))
+            conn.execute(text(ALTER_SCAN_JOBS_PARAMS))
             logger.info("startup_migration: ensured scan_jobs table exists")
         except Exception as e:
             logger.warning("startup_migration: scan_jobs failed: %s", e)
@@ -570,6 +810,8 @@ def run_startup_migrations() -> None:
             ("asset_ai_diagnoses", ASSET_AI_DIAGNOSES_SQL),
             ("job_ai_triages", JOB_AI_TRIAGES_SQL),
             ("alert_ai_guidance", ALERT_AI_GUIDANCE_SQL),
+            ("threat_iocs", THREAT_IOCS_SQL),
+            ("telemetry_security", TELEMETRY_SECURITY_SQL),
         ]:
             try:
                 for stmt in sql.strip().split(";"):
@@ -580,3 +822,11 @@ def run_startup_migrations() -> None:
             except Exception as e:
                 logger.warning("startup_migration: %s failed: %s", name, e)
                 raise
+        # Run risk scoring backfill last because the context query now joins
+        # telemetry and anomaly tables created above.
+        try:
+            updated = backfill_finding_risk_scores(conn)
+            logger.info("startup_migration: findings risk scoring backfilled=%s", updated)
+        except Exception as e:
+            logger.warning("startup_migration: findings risk scoring backfill failed: %s", e)
+            raise

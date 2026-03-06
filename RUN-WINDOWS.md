@@ -58,7 +58,11 @@ docker compose logs -f api
 
 ## 7. Running the frontend locally (optional)
 
-If you run the frontend with `npm run dev` in `services/frontend` (instead of using the Dockerized frontend), it will try to reach the API at **http://127.0.0.1:8000**. Ensure the API is running (e.g. `docker compose up -d` so the API container is on 8000). To use a different API URL, create `services/frontend/.env.local` with:
+From the repo root, `npm run dev` now preflights the API at **http://127.0.0.1:8000**. If the API is down and Docker Desktop is running, it automatically runs `docker compose up -d --build api`, waits for `/health`, then starts Next.js.
+
+If Docker Desktop is not running, `npm run dev` exits early with a precise message instead of starting a broken frontend.
+
+If you run the frontend directly in `services/frontend` instead, it will still try to reach the API at **http://127.0.0.1:8000**. Ensure the API is running first, or point it at another backend via `services/frontend/.env.local`:
 
 ```
 API_URL=http://127.0.0.1:8000

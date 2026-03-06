@@ -1,0 +1,34 @@
+[1 - Suricata-Main] 2026-03-05 17:11:19 Notice: suricata: This is Suricata version 8.0.3 RELEASE running in SYSTEM mode
+[1 - Suricata-Main] 2026-03-05 17:11:19 Info: cpu: CPUs/cores online: 16
+[1 - Suricata-Main] 2026-03-05 17:11:19 Info: suricata: Setting engine mode to IDS mode by default
+[1 - Suricata-Main] 2026-03-05 17:11:19 Info: exception-policy: master exception-policy set to: auto
+[1 - Suricata-Main] 2026-03-05 17:11:20 Info: conf: Running in live mode, activating unix socket
+[1 - Suricata-Main] 2026-03-05 17:11:20 Info: logopenfile: fast output device (regular) initialized: fast.log
+[1 - Suricata-Main] 2026-03-05 17:11:20 Info: logopenfile: eve-log output device (regular) initialized: eve.json
+[1 - Suricata-Main] 2026-03-05 17:11:20 Info: logopenfile: stats output device (regular) initialized: stats.log
+[1 - Suricata-Main] 2026-03-05 17:11:20 Warning: detect: No rule files match the pattern /var/lib/suricata/rules/suricata.rules
+[1 - Suricata-Main] 2026-03-05 17:11:20 Warning: detect: 1 rule files specified, but no rules were loaded!
+[1 - Suricata-Main] 2026-03-05 17:11:20 Info: threshold-config: Threshold config parsed: 0 rule(s) found
+[1 - Suricata-Main] 2026-03-05 17:11:20 Info: detect: 0 signatures processed. 0 are IP-only rules, 0 are inspecting packet payload, 0 inspect application layer, 0 are decoder event only
+[1 - Suricata-Main] 2026-03-05 17:11:20 Notice: mpm-hs: Rule group caching - loaded: 0 newly cached: 0 total cacheable: 0
+[1 - Suricata-Main] 2026-03-05 17:11:20 Info: unix-manager: unix socket '/var/run/suricata/suricata-command.socket'
+[1 - Suricata-Main] 2026-03-05 17:11:20 Info: runmodes: eth0: creating 16 threads
+[17 - W#01-eth0] 2026-03-05 17:11:20 Info: ioctl: eth0: MTU 1500
+[1 - Suricata-Main] 2026-03-05 17:11:21 Notice: threads: Threads created -> W: 16 FM: 1 FR: 1   Engine started.
+[1 - Suricata-Main] 2026-03-06 00:18:16 Notice: suricata: Signal Received.  Stopping engine.
+[1 - Suricata-Main] 2026-03-06 00:18:21 Notice: suricata: This is Suricata version 8.0.3 RELEASE running in SYSTEM mode
+[1 - Suricata-Main] 2026-03-06 00:18:21 Info: cpu: CPUs/cores online: 16
+[1 - Suricata-Main] 2026-03-06 00:18:21 Info: suricata: Setting engine mode to IDS mode by default
+[1 - Suricata-Main] 2026-03-06 00:18:21 Info: exception-policy: master exception-policy set to: auto
+[1 - Suricata-Main] 2026-03-06 00:18:22 Info: conf: Running in live mode, activating unix socket
+[1 - Suricata-Main] 2026-03-06 00:18:23 Info: logopenfile: fast output device (regular) initialized: fast.log
+[1 - Suricata-Main] 2026-03-06 00:18:23 Info: logopenfile: eve-log output device (regular) initialized: eve.json
+[1 - Suricata-Main] 2026-03-06 00:18:23 Info: logopenfile: stats output device (regular) initialized: stats.log
+[1 - Suricata-Main] 2026-03-06 00:18:23 Info: detect: 1 rule files processed. 4 rules successfully loaded, 0 rules failed, 0 rules skipped
+[1 - Suricata-Main] 2026-03-06 00:18:23 Info: threshold-config: Threshold config parsed: 0 rule(s) found
+[1 - Suricata-Main] 2026-03-06 00:18:23 Info: detect: 4 signatures processed. 0 are IP-only rules, 0 are inspecting packet payload, 3 inspect application layer, 0 are decoder event only
+[1 - Suricata-Main] 2026-03-06 00:18:23 Notice: mpm-hs: Rule group caching - loaded: 0 newly cached: 3 total cacheable: 3
+[1 - Suricata-Main] 2026-03-06 00:18:23 Info: unix-manager: unix socket '/var/run/suricata/suricata-command.socket'
+[1 - Suricata-Main] 2026-03-06 00:18:23 Info: runmodes: eth0: creating 16 threads
+[17 - W#01-eth0] 2026-03-06 00:18:24 Info: ioctl: eth0: MTU 1500
+[1 - Suricata-Main] 2026-03-06 00:18:25 Notice: threads: Threads created -> W: 16 FM: 1 FR: 1   Engine started.

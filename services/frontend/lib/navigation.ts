@@ -2,6 +2,11 @@ export type NavIconKey =
   | 'activity'
   | 'dashboard'
   | 'assets'
+  | 'intel'
+  | 'telemetry'
+  | 'detections'
+  | 'attack'
+  | 'range'
   | 'findings'
   | 'alerts'
   | 'incidents'
@@ -52,6 +57,37 @@ export const NAV_GROUPS: NavGroup[] = [
         label: 'Assets',
         icon: 'assets',
         description: 'Asset inventory, status and ownership.',
+      },
+      {
+        href: '/threat-intel',
+        label: 'Threat Intel',
+        icon: 'intel',
+        description: 'IOC feeds, matched assets and refresh health.',
+      },
+      {
+        href: '/telemetry',
+        label: 'Telemetry',
+        icon: 'telemetry',
+        description: 'Suricata, Zeek, auditd and honeypot event streams.',
+      },
+      {
+        href: '/detections',
+        label: 'Detections',
+        icon: 'detections',
+        description: 'Rule editor and detection test runs.',
+      },
+      {
+        href: '/attack-lab',
+        label: 'Attack Lab',
+        icon: 'attack',
+        description: 'Controlled attack simulations for purple-team exercises.',
+        adminOnly: true,
+      },
+      {
+        href: '/cyber-range',
+        label: 'Cyber Range',
+        icon: 'range',
+        description: 'Guided training missions using live lab telemetry and workflows.',
       },
       {
         href: '/findings',

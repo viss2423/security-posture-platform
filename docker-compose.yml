@@ -58,6 +58,10 @@ services:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
       GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
     ports:
       - "127.0.0.1:${GRAFANA_PORT}:3000"
     volumes:
@@ -128,9 +132,53 @@ services:
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4.1-mini}
       RISK_MODEL_ENABLED: ${RISK_MODEL_ENABLED:-false}
       RISK_MODEL_ARTIFACT_PATH: ${RISK_MODEL_ARTIFACT_PATH:-/app/models/finding-risk-model.joblib}
+      REPOSITORY_SCAN_DEFAULT_PATH: ${REPOSITORY_SCAN_DEFAULT_PATH:-/workspace}
+      REPOSITORY_SCAN_DEFAULT_ASSET_KEY: ${REPOSITORY_SCAN_DEFAULT_ASSET_KEY:-secplat-repo}
+      REPOSITORY_SCAN_DEFAULT_ASSET_NAME: ${REPOSITORY_SCAN_DEFAULT_ASSET_NAME:-SecPlat repository}
+      REPOSITORY_SCAN_DEFAULT_ENVIRONMENT: ${REPOSITORY_SCAN_DEFAULT_ENVIRONMENT:-dev}
+      REPOSITORY_SCAN_DEFAULT_CRITICALITY: ${REPOSITORY_SCAN_DEFAULT_CRITICALITY:-medium}
+      OSV_SCANNER_BIN: /usr/local/bin/osv-scanner
+      OSV_SCANNER_TIMEOUT_SECONDS: ${OSV_SCANNER_TIMEOUT_SECONDS:-600}
+      TRIVY_BIN: /usr/local/bin/trivy
+      TRIVY_SCANNERS: ${TRIVY_SCANNERS:-vuln,misconfig}
+      TRIVY_TIMEOUT_SECONDS: ${TRIVY_TIMEOUT_SECONDS:-1200}
+      THREAT_INTEL_HTTP_TIMEOUT_SECONDS: ${THREAT_INTEL_HTTP_TIMEOUT_SECONDS:-30}
+      THREAT_INTEL_FEEDS_JSON: ${THREAT_INTEL_FEEDS_JSON:-}
+      THREAT_INTEL_CROWDSEC_API_KEY: ${THREAT_INTEL_CROWDSEC_API_KEY:-}
+      THREAT_INTEL_ABUSEIPDB_API_KEY: ${THREAT_INTEL_ABUSEIPDB_API_KEY:-}
+      TELEMETRY_IMPORT_MAX_EVENTS: ${TELEMETRY_IMPORT_MAX_EVENTS:-20000}
+      TELEMETRY_MIRROR_TO_OPENSEARCH: ${TELEMETRY_MIRROR_TO_OPENSEARCH:-true}
+      TELEMETRY_OPENSEARCH_INDEX_PREFIX: ${TELEMETRY_OPENSEARCH_INDEX_PREFIX:-secplat-telemetry}
+      TELEMETRY_DEFAULT_LOOKBACK_HOURS: ${TELEMETRY_DEFAULT_LOOKBACK_HOURS:-24}
+      ENABLE_SCHEDULED_TELEMETRY_IMPORT: ${ENABLE_SCHEDULED_TELEMETRY_IMPORT:-true}
+      SCHEDULED_TELEMETRY_IMPORT_INTERVAL_SECONDS: ${SCHEDULED_TELEMETRY_IMPORT_INTERVAL_SECONDS:-180}
+      TELEMETRY_SCHEDULED_SOURCES: ${TELEMETRY_SCHEDULED_SOURCES:-suricata,zeek,auditd,cowrie}
+      ENABLE_TELEMETRY_KEEPALIVE: ${ENABLE_TELEMETRY_KEEPALIVE:-true}
+      TELEMETRY_KEEPALIVE_INTERVAL_SECONDS: ${TELEMETRY_KEEPALIVE_INTERVAL_SECONDS:-120}
+      TELEMETRY_KEEPALIVE_MAX_SILENCE_MINUTES: ${TELEMETRY_KEEPALIVE_MAX_SILENCE_MINUTES:-3}
+      TELEMETRY_KEEPALIVE_CREATE_ALERTS: ${TELEMETRY_KEEPALIVE_CREATE_ALERTS:-false}
+      TELEMETRY_KEEPALIVE_ASSET_KEY: ${TELEMETRY_KEEPALIVE_ASSET_KEY:-cyberlab-demo-asset}
+      NETWORK_ANOMALY_THRESHOLD: ${NETWORK_ANOMALY_THRESHOLD:-2.5}
+      ENABLE_SCHEDULED_NETWORK_ANOMALY: ${ENABLE_SCHEDULED_NETWORK_ANOMALY:-true}
+      SCHEDULED_NETWORK_ANOMALY_INTERVAL_MINUTES: ${SCHEDULED_NETWORK_ANOMALY_INTERVAL_MINUTES:-60}
+      ATTACK_LAB_ALLOWED_NETWORKS: ${ATTACK_LAB_ALLOWED_NETWORKS:-127.0.0.1/32,172.16.0.0/12,192.168.0.0/16}
+      ATTACK_LAB_DEFAULT_PORTS: ${ATTACK_LAB_DEFAULT_PORTS:-22,80,443,3000,5432,6379,9200}
+      ATTACK_LAB_NMAP_BIN: ${ATTACK_LAB_NMAP_BIN:-/usr/bin/nmap}
+      ATTACK_LAB_WEB_SCAN_TIMEOUT_SECONDS: ${ATTACK_LAB_WEB_SCAN_TIMEOUT_SECONDS:-90}
+      TELEMETRY_SURICATA_LOG_PATH: ${TELEMETRY_SURICATA_LOG_PATH:-/workspace/lab-data/suricata/eve.json}
+      TELEMETRY_ZEEK_LOG_PATH: ${TELEMETRY_ZEEK_LOG_PATH:-/workspace/lab-data/zeek/conn.log}
+      TELEMETRY_AUDITD_LOG_PATH: ${TELEMETRY_AUDITD_LOG_PATH:-/workspace/lab-data/auditd/audit.log}
+      TELEMETRY_COWRIE_LOG_PATH: ${TELEMETRY_COWRIE_LOG_PATH:-/workspace/lab-data/cowrie/cowrie.json}
+      CYBERLAB_AUTO_SEED_DEMO: ${CYBERLAB_AUTO_SEED_DEMO:-false}
+      CYBERLAB_AUTO_SEED_FORCE: ${CYBERLAB_AUTO_SEED_FORCE:-false}
+      CYBERLAB_AUTO_SEED_ONCE_VERSION: ${CYBERLAB_AUTO_SEED_ONCE_VERSION:-v1}
+      CYBERLAB_DEMO_ASSET_KEY: ${CYBERLAB_DEMO_ASSET_KEY:-cyberlab-demo-asset}
+      CYBERLAB_DEMO_REPO_ASSET_KEY: ${CYBERLAB_DEMO_REPO_ASSET_KEY:-cyberlab-demo-repo}
+      CYBERLAB_DEMO_IOC_SOURCE: ${CYBERLAB_DEMO_IOC_SOURCE:-cyberlab-demo}
     volumes:
       - ./services/api/models:/app/models
       - ./services/api/exports:/app/exports
+      - ./:/workspace:ro
     ports:
       - "127.0.0.1:${API_PORT}:8000"
     depends_on:
@@ -210,13 +258,65 @@ services:
       SCANNER_SCOPE: ${SCANNER_SCOPE:-internal_only}
       VERIFY_WEB_URL: http://verify-web
       JUICE_URL: http://juiceshop:3000
+      DEPENDENCY_SCAN_ENABLED: ${DEPENDENCY_SCAN_ENABLED:-false}
+      DEPENDENCY_SCAN_PATH: ${DEPENDENCY_SCAN_PATH:-/workspace}
+      DEPENDENCY_SCAN_ASSET_KEY: ${DEPENDENCY_SCAN_ASSET_KEY:-secplat-repo}
+      DEPENDENCY_SCAN_ASSET_NAME: ${DEPENDENCY_SCAN_ASSET_NAME:-SecPlat repository}
+      DEPENDENCY_SCAN_ENVIRONMENT: ${DEPENDENCY_SCAN_ENVIRONMENT:-dev}
+      DEPENDENCY_SCAN_CRITICALITY: ${DEPENDENCY_SCAN_CRITICALITY:-medium}
+      OSV_SCANNER_TIMEOUT_SECONDS: ${OSV_SCANNER_TIMEOUT_SECONDS:-600}
+      TRIVY_SCAN_ENABLED: ${TRIVY_SCAN_ENABLED:-false}
+      TRIVY_SCAN_PATH: ${TRIVY_SCAN_PATH:-/workspace}
+      TRIVY_SCAN_ASSET_KEY: ${TRIVY_SCAN_ASSET_KEY:-secplat-repo}
+      TRIVY_SCAN_ASSET_NAME: ${TRIVY_SCAN_ASSET_NAME:-SecPlat repository}
+      TRIVY_SCAN_ENVIRONMENT: ${TRIVY_SCAN_ENVIRONMENT:-dev}
+      TRIVY_SCAN_CRITICALITY: ${TRIVY_SCAN_CRITICALITY:-medium}
+      TRIVY_SCANNERS: ${TRIVY_SCANNERS:-vuln,misconfig}
+      TRIVY_TIMEOUT_SECONDS: ${TRIVY_TIMEOUT_SECONDS:-1200}
       # Optional: override with "url|asset_key,url|asset_key"
       # INTERNAL_TARGETS: "http://verify-web|verify-web,http://juiceshop:3000|juice-shop,http://api:8000|secplat-api"
       SCAN_INTERVAL_SECONDS: ${SCAN_INTERVAL_SECONDS:-21600}
+    volumes:
+      - ./:/workspace:ro
     depends_on:
       api:
         condition: service_started
     restart: unless-stopped
+
+  suricata:
+    image: jasonish/suricata:latest
+    container_name: secplat-suricata
+    command: ["-i", "eth0", "-l", "/var/log/suricata", "-S", "/var/lib/suricata/rules/suricata.rules", "-k", "none"]
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    volumes:
+      - ./lab-data/suricata:/var/log/suricata
+      - ./infra/suricata/rules:/var/lib/suricata/rules:ro
+    profiles:
+      - cyberlab
+
+  zeek:
+    image: zeek/zeek:latest
+    container_name: secplat-zeek
+    command: ["zeek", "-C", "-i", "eth0", "local"]
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    volumes:
+      - ./lab-data/zeek:/opt/zeek/logs/current
+    profiles:
+      - cyberlab
+
+  cowrie:
+    image: ghcr.io/cowrie/cowrie:latest
+    container_name: secplat-cowrie
+    ports:
+      - "127.0.0.1:2222:2222"
+    volumes:
+      - ./lab-data/cowrie:/cowrie/cowrie-git/var/log/cowrie
+    profiles:
+      - cyberlab
 
   worker-web:
     build:

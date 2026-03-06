@@ -1,5 +1,6 @@
 import json
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -20,6 +21,11 @@ router = APIRouter()
 VALID_STATUS = ("open", "in_progress", "remediated", "accepted_risk")
 VALID_RISK_LEVELS = ("critical", "high", "medium", "low", "unscored")
 SENSITIVE_FINDING_FIELDS_FOR_VIEWER = {"evidence", "accepted_risk_reason"}
+REPOSITORY_SCAN_SOURCES = ("osv_scanner", "trivy_fs")
+SOURCE_LABELS = {
+    "osv_scanner": "OSV Scanner",
+    "trivy_fs": "Trivy FS",
+}
 
 
 def _redact_finding(row: dict, role: str) -> dict:
@@ -28,6 +34,18 @@ def _redact_finding(row: dict, role: str) -> dict:
         for key in SENSITIVE_FINDING_FIELDS_FOR_VIEWER:
             out[key] = None
     return out
+
+
+def _as_jsonb_or_none(value: dict[str, Any] | None) -> str | None:
+    if value is None:
+        return None
+    return json.dumps(value)
+
+
+def _serialize_datetime_value(value: Any) -> Any:
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return value
 
 
 @router.get("/")
@@ -79,6 +97,8 @@ def list_findings(
         a.asset_key,
         a.name AS asset_name,
         f.category, f.title, f.severity, f.confidence, f.evidence, f.remediation,
+        f.vulnerability_id, f.package_ecosystem, f.package_name, f.package_version,
+        f.fixed_version, f.scanner_metadata_json,
         f.risk_score, f.risk_level, f.risk_factors_json,
         rl.label AS risk_label,
         rl.source AS risk_label_source,
@@ -126,9 +146,461 @@ def list_findings(
                 out["risk_factors_json"] = json.loads(out["risk_factors_json"])
             except json.JSONDecodeError:
                 out["risk_factors_json"] = {}
+        if isinstance(out.get("scanner_metadata_json"), str):
+            try:
+                out["scanner_metadata_json"] = json.loads(out["scanner_metadata_json"])
+            except json.JSONDecodeError:
+                out["scanner_metadata_json"] = {}
         return out
 
     return [_redact_finding(_serialize(r), role=role) for r in rows]
+
+
+@router.get("/repository-summary")
+def get_repository_summary(
+    asset_key: str = Query("secplat-repo", description="Repository asset key"),
+    recent_limit: int = Query(8, ge=1, le=20),
+    db: Session = Depends(get_db),
+    _user: str = Depends(require_auth),
+):
+    asset = (
+        db.execute(
+            text(
+                """
+                SELECT asset_id, asset_key, name, asset_type, environment, criticality
+                FROM assets
+                WHERE asset_key = :asset_key
+                """
+            ),
+            {"asset_key": asset_key},
+        )
+        .mappings()
+        .first()
+    )
+    if not asset:
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+    params = {"asset_key": asset_key}
+    counts = (
+        db.execute(
+            text(
+                """
+                SELECT
+                  f.source,
+                  COALESCE(f.status, 'open') AS status,
+                  COALESCE(f.severity, 'medium') AS severity,
+                  COALESCE(f.category, 'uncategorized') AS category,
+                  COUNT(*) AS finding_count
+                FROM findings f
+                JOIN assets a ON a.asset_id = f.asset_id
+                WHERE a.asset_key = :asset_key
+                  AND COALESCE(f.source, '') IN ('osv_scanner', 'trivy_fs')
+                GROUP BY f.source, COALESCE(f.status, 'open'), COALESCE(f.severity, 'medium'), COALESCE(f.category, 'uncategorized')
+                """
+            ),
+            params,
+        )
+        .mappings()
+        .all()
+    )
+
+    sources: dict[str, dict[str, Any]] = {
+        source: {
+            "source": source,
+            "label": SOURCE_LABELS.get(source, source),
+            "total": 0,
+            "open": 0,
+            "in_progress": 0,
+            "accepted_risk": 0,
+            "remediated": 0,
+            "by_severity": {},
+            "by_category": {},
+        }
+        for source in REPOSITORY_SCAN_SOURCES
+    }
+    totals = {
+        "total_findings": 0,
+        "open_findings": 0,
+        "in_progress_findings": 0,
+        "accepted_risk_findings": 0,
+        "remediated_findings": 0,
+    }
+    for row in counts:
+        source = str(row.get("source") or "").strip()
+        if source not in sources:
+            continue
+        status = str(row.get("status") or "open").strip().lower()
+        severity = str(row.get("severity") or "medium").strip().lower()
+        category = str(row.get("category") or "uncategorized").strip() or "uncategorized"
+        count = int(row.get("finding_count") or 0)
+        bucket = sources[source]
+        bucket["total"] += count
+        bucket[status] = int(bucket.get(status) or 0) + count
+        bucket["by_severity"][severity] = int(bucket["by_severity"].get(severity) or 0) + count
+        bucket["by_category"][category] = int(bucket["by_category"].get(category) or 0) + count
+        totals["total_findings"] += count
+        totals_key = f"{status}_findings"
+        if totals_key in totals:
+            totals[totals_key] += count
+
+    recent_rows = (
+        db.execute(
+            text(
+                """
+                SELECT
+                  f.finding_id,
+                  f.finding_key,
+                  f.source,
+                  f.category,
+                  f.title,
+                  f.severity,
+                  COALESCE(f.status, 'open') AS status,
+                  f.package_name,
+                  f.package_version,
+                  f.fixed_version,
+                  f.vulnerability_id,
+                  f.risk_score,
+                  f.risk_level,
+                  COALESCE(f.last_seen, f.time) AS last_seen
+                FROM findings f
+                JOIN assets a ON a.asset_id = f.asset_id
+                WHERE a.asset_key = :asset_key
+                  AND COALESCE(f.source, '') IN ('osv_scanner', 'trivy_fs')
+                ORDER BY COALESCE(f.last_seen, f.time) DESC, f.finding_id DESC
+                LIMIT :recent_limit
+                """
+            ),
+            {"asset_key": asset_key, "recent_limit": recent_limit},
+        )
+        .mappings()
+        .all()
+    )
+    recent_findings = []
+    for row in recent_rows:
+        item = dict(row)
+        item["last_seen"] = _serialize_datetime_value(item.get("last_seen"))
+        recent_findings.append(item)
+
+    package_rows = (
+        db.execute(
+            text(
+                """
+                SELECT
+                  f.package_name,
+                  COUNT(*) AS total_count,
+                  SUM(CASE WHEN COALESCE(f.status, 'open') <> 'remediated' THEN 1 ELSE 0 END) AS active_count,
+                  MAX(
+                    CASE COALESCE(f.severity, 'medium')
+                      WHEN 'critical' THEN 4
+                      WHEN 'high' THEN 3
+                      WHEN 'medium' THEN 2
+                      WHEN 'low' THEN 1
+                      ELSE 0
+                    END
+                  ) AS severity_rank
+                FROM findings f
+                JOIN assets a ON a.asset_id = f.asset_id
+                WHERE a.asset_key = :asset_key
+                  AND COALESCE(f.source, '') IN ('osv_scanner', 'trivy_fs')
+                  AND f.package_name IS NOT NULL
+                GROUP BY f.package_name
+                ORDER BY active_count DESC, total_count DESC, package_name ASC
+                LIMIT 8
+                """
+            ),
+            params,
+        )
+        .mappings()
+        .all()
+    )
+    severity_by_rank = {4: "critical", 3: "high", 2: "medium", 1: "low", 0: "info"}
+    top_packages = [
+        {
+            "package_name": row.get("package_name"),
+            "active_count": int(row.get("active_count") or 0),
+            "total_count": int(row.get("total_count") or 0),
+            "max_severity": severity_by_rank.get(int(row.get("severity_rank") or 0), "info"),
+        }
+        for row in package_rows
+    ]
+
+    job_rows = (
+        db.execute(
+            text(
+                """
+                SELECT
+                  job_id,
+                  job_type,
+                  target_asset_id,
+                  status,
+                  created_at,
+                  started_at,
+                  finished_at,
+                  error,
+                  requested_by,
+                  job_params_json,
+                  job_params_json ->> 'asset_key' AS asset_key,
+                  job_params_json ->> 'asset_name' AS asset_name
+                FROM scan_jobs
+                WHERE job_type = 'repository_scan'
+                  AND COALESCE(job_params_json ->> 'asset_key', :asset_key) = :asset_key
+                ORDER BY created_at DESC
+                LIMIT 5
+                """
+            ),
+            params,
+        )
+        .mappings()
+        .all()
+    )
+    latest_jobs = []
+    for row in job_rows:
+        item = dict(row)
+        for key in ("created_at", "started_at", "finished_at"):
+            item[key] = _serialize_datetime_value(item.get(key))
+        if isinstance(item.get("job_params_json"), str):
+            try:
+                item["job_params_json"] = json.loads(item["job_params_json"])
+            except json.JSONDecodeError:
+                item["job_params_json"] = {}
+        latest_jobs.append(item)
+
+    return {
+        "asset_key": asset.get("asset_key"),
+        "asset_name": asset.get("name"),
+        "asset_type": asset.get("asset_type"),
+        "environment": asset.get("environment"),
+        "criticality": asset.get("criticality"),
+        **totals,
+        "sources": list(sources.values()),
+        "top_packages": top_packages,
+        "recent_findings": recent_findings,
+        "latest_jobs": latest_jobs,
+    }
+
+
+@router.get("/dependency-risk")
+def get_dependency_risk(
+    asset_key: str = Query("secplat-repo", description="Repository asset key"),
+    remediation_limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    _user: str = Depends(require_auth),
+):
+    asset = (
+        db.execute(
+            text(
+                """
+                SELECT asset_id, asset_key, name, asset_type, environment, criticality
+                FROM assets
+                WHERE asset_key = :asset_key
+                """
+            ),
+            {"asset_key": asset_key},
+        )
+        .mappings()
+        .first()
+    )
+    if not asset:
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+    counts = (
+        db.execute(
+            text(
+                """
+                SELECT
+                  COALESCE(f.source, 'unknown') AS source,
+                  COALESCE(f.status, 'open') AS status,
+                  COALESCE(f.severity, 'medium') AS severity,
+                  COALESCE(f.package_ecosystem, 'unknown') AS package_ecosystem,
+                  COUNT(*) AS finding_count
+                FROM findings f
+                JOIN assets a ON a.asset_id = f.asset_id
+                WHERE a.asset_key = :asset_key
+                  AND COALESCE(f.source, '') IN ('osv_scanner', 'trivy_fs')
+                GROUP BY
+                  COALESCE(f.source, 'unknown'),
+                  COALESCE(f.status, 'open'),
+                  COALESCE(f.severity, 'medium'),
+                  COALESCE(f.package_ecosystem, 'unknown')
+                """
+            ),
+            {"asset_key": asset_key},
+        )
+        .mappings()
+        .all()
+    )
+
+    totals = {
+        "total_findings": 0,
+        "active_findings": 0,
+        "remediated_findings": 0,
+        "accepted_risk_findings": 0,
+    }
+    by_source: dict[str, dict[str, Any]] = {}
+    severity_distribution_active: dict[str, int] = {}
+    ecosystem_distribution_active: dict[str, int] = {}
+    for row in counts:
+        source = str(row.get("source") or "unknown")
+        status = str(row.get("status") or "open").strip().lower()
+        severity = str(row.get("severity") or "medium").strip().lower()
+        ecosystem = str(row.get("package_ecosystem") or "unknown").strip().lower() or "unknown"
+        count = int(row.get("finding_count") or 0)
+
+        totals["total_findings"] += count
+        if status == "remediated":
+            totals["remediated_findings"] += count
+        else:
+            totals["active_findings"] += count
+            severity_distribution_active[severity] = (
+                int(severity_distribution_active.get(severity) or 0) + count
+            )
+            ecosystem_distribution_active[ecosystem] = (
+                int(ecosystem_distribution_active.get(ecosystem) or 0) + count
+            )
+            if status == "accepted_risk":
+                totals["accepted_risk_findings"] += count
+
+        bucket = by_source.setdefault(
+            source,
+            {
+                "source": source,
+                "total": 0,
+                "active": 0,
+                "remediated": 0,
+                "accepted_risk": 0,
+                "by_severity": {},
+            },
+        )
+        bucket["total"] += count
+        if status == "remediated":
+            bucket["remediated"] += count
+        else:
+            bucket["active"] += count
+            bucket["by_severity"][severity] = int(bucket["by_severity"].get(severity) or 0) + count
+            if status == "accepted_risk":
+                bucket["accepted_risk"] += count
+
+    dependency_rows = (
+        db.execute(
+            text(
+                """
+                SELECT
+                  f.package_name,
+                  COALESCE(f.package_ecosystem, 'unknown') AS package_ecosystem,
+                  COUNT(*) AS total_count,
+                  SUM(CASE WHEN COALESCE(f.status, 'open') <> 'remediated' THEN 1 ELSE 0 END) AS active_count,
+                  MAX(COALESCE(f.risk_score, 0)) AS max_risk_score,
+                  MAX(
+                    CASE COALESCE(f.severity, 'medium')
+                      WHEN 'critical' THEN 4
+                      WHEN 'high' THEN 3
+                      WHEN 'medium' THEN 2
+                      WHEN 'low' THEN 1
+                      ELSE 0
+                    END
+                  ) AS severity_rank,
+                  MAX(COALESCE(f.last_seen, f.time)) AS last_seen
+                FROM findings f
+                JOIN assets a ON a.asset_id = f.asset_id
+                WHERE a.asset_key = :asset_key
+                  AND COALESCE(f.source, '') IN ('osv_scanner', 'trivy_fs')
+                  AND f.package_name IS NOT NULL
+                GROUP BY f.package_name, COALESCE(f.package_ecosystem, 'unknown')
+                ORDER BY
+                  SUM(CASE WHEN COALESCE(f.status, 'open') <> 'remediated' THEN 1 ELSE 0 END) DESC,
+                  MAX(COALESCE(f.risk_score, 0)) DESC,
+                  COUNT(*) DESC
+                LIMIT 25
+                """
+            ),
+            {"asset_key": asset_key},
+        )
+        .mappings()
+        .all()
+    )
+    severity_by_rank = {4: "critical", 3: "high", 2: "medium", 1: "low", 0: "info"}
+    dependency_distribution = []
+    active_dependency_count = 0
+    for row in dependency_rows:
+        active_count = int(row.get("active_count") or 0)
+        if active_count > 0:
+            active_dependency_count += 1
+        dependency_distribution.append(
+            {
+                "package_name": row.get("package_name"),
+                "package_ecosystem": row.get("package_ecosystem"),
+                "active_count": active_count,
+                "total_count": int(row.get("total_count") or 0),
+                "max_risk_score": int(round(float(row.get("max_risk_score") or 0))),
+                "max_severity": severity_by_rank.get(int(row.get("severity_rank") or 0), "info"),
+                "last_seen": _serialize_datetime_value(row.get("last_seen")),
+            }
+        )
+
+    remediation_rows = (
+        db.execute(
+            text(
+                """
+                SELECT
+                  f.finding_id,
+                  f.finding_key,
+                  f.title,
+                  f.source,
+                  COALESCE(f.status, 'open') AS status,
+                  COALESCE(f.severity, 'medium') AS severity,
+                  f.vulnerability_id,
+                  f.package_ecosystem,
+                  f.package_name,
+                  f.package_version,
+                  f.fixed_version,
+                  f.risk_score,
+                  f.risk_level,
+                  COALESCE(f.last_seen, f.time) AS last_seen
+                FROM findings f
+                JOIN assets a ON a.asset_id = f.asset_id
+                WHERE a.asset_key = :asset_key
+                  AND COALESCE(f.source, '') IN ('osv_scanner', 'trivy_fs')
+                  AND f.package_name IS NOT NULL
+                  AND COALESCE(f.status, 'open') <> 'remediated'
+                ORDER BY
+                  COALESCE(f.risk_score, 0) DESC,
+                  CASE COALESCE(f.severity, 'medium')
+                    WHEN 'critical' THEN 4
+                    WHEN 'high' THEN 3
+                    WHEN 'medium' THEN 2
+                    WHEN 'low' THEN 1
+                    ELSE 0
+                  END DESC,
+                  COALESCE(f.last_seen, f.time) DESC,
+                  f.finding_id DESC
+                LIMIT :remediation_limit
+                """
+            ),
+            {"asset_key": asset_key, "remediation_limit": remediation_limit},
+        )
+        .mappings()
+        .all()
+    )
+    remediation_queue = []
+    for row in remediation_rows:
+        item = dict(row)
+        item["last_seen"] = _serialize_datetime_value(item.get("last_seen"))
+        remediation_queue.append(item)
+
+    return {
+        "asset_key": asset.get("asset_key"),
+        "asset_name": asset.get("name"),
+        "asset_type": asset.get("asset_type"),
+        "environment": asset.get("environment"),
+        "criticality": asset.get("criticality"),
+        **totals,
+        "active_dependency_count": active_dependency_count,
+        "source_distribution": list(by_source.values()),
+        "severity_distribution_active": severity_distribution_active,
+        "ecosystem_distribution_active": ecosystem_distribution_active,
+        "dependency_distribution": dependency_distribution,
+        "remediation_queue": remediation_queue,
+    }
 
 
 class FindingUpsertBody(BaseModel):
@@ -142,18 +614,16 @@ class FindingUpsertBody(BaseModel):
     evidence: str | None = None
     remediation: str | None = None
     source: str | None = None  # e.g. tls_scan, header_scan
+    vulnerability_id: str | None = None
+    package_ecosystem: str | None = None
+    package_name: str | None = None
+    package_version: str | None = None
+    fixed_version: str | None = None
+    scanner_metadata_json: dict[str, Any] | None = None
 
 
-@router.post("/")
-def upsert_finding(
-    body: FindingUpsertBody,
-    db: Session = Depends(get_db),
-    _user: str = Depends(require_role(["admin", "analyst"])),
-):
-    """
-    Upsert by finding_key. If exists: update last_seen (and optionally evidence).
-    If new: insert with first_seen=last_seen=now. Requires asset_id or asset_key to resolve.
-    """
+def upsert_finding_record(db: Session, body: FindingUpsertBody) -> dict[str, Any]:
+    """Internal helper so scanner-style imports and HTTP route share one finding lifecycle path."""
     asset_id = body.asset_id
     if asset_id is None and body.asset_key:
         row = (
@@ -190,6 +660,16 @@ def upsert_finding(
                 severity = COALESCE(NULLIF(:severity, ''), severity),
                 confidence = COALESCE(NULLIF(:confidence, ''), confidence),
                 source = COALESCE(NULLIF(:source, ''), source),
+                vulnerability_id = COALESCE(NULLIF(:vulnerability_id, ''), vulnerability_id),
+                package_ecosystem = COALESCE(NULLIF(:package_ecosystem, ''), package_ecosystem),
+                package_name = COALESCE(NULLIF(:package_name, ''), package_name),
+                package_version = COALESCE(NULLIF(:package_version, ''), package_version),
+                fixed_version = COALESCE(NULLIF(:fixed_version, ''), fixed_version),
+                scanner_metadata_json = COALESCE(CAST(:scanner_metadata_json AS jsonb), scanner_metadata_json),
+                status = CASE
+                  WHEN COALESCE(status, 'open') = 'remediated' THEN 'open'
+                  ELSE COALESCE(status, 'open')
+                END,
                 asset_id = COALESCE(:asset_id, asset_id)
               WHERE finding_key = :k
             """),
@@ -202,6 +682,12 @@ def upsert_finding(
                 "severity": body.severity,
                 "confidence": body.confidence,
                 "source": body.source,
+                "vulnerability_id": body.vulnerability_id,
+                "package_ecosystem": body.package_ecosystem,
+                "package_name": body.package_name,
+                "package_version": body.package_version,
+                "fixed_version": body.fixed_version,
+                "scanner_metadata_json": _as_jsonb_or_none(body.scanner_metadata_json),
                 "asset_id": asset_id,
             },
         )
@@ -212,8 +698,17 @@ def upsert_finding(
         row = (
             db.execute(
                 text("""
-              INSERT INTO findings (finding_key, asset_id, first_seen, last_seen, time, status, source, category, title, severity, confidence, evidence, remediation)
-              VALUES (:finding_key, :asset_id, NOW(), NOW(), NOW(), 'open', :source, :category, :title, :severity, :confidence, :evidence, :remediation)
+              INSERT INTO findings (
+                finding_key, asset_id, first_seen, last_seen, time, status, source, category,
+                title, severity, confidence, evidence, remediation, vulnerability_id,
+                package_ecosystem, package_name, package_version, fixed_version, scanner_metadata_json
+              )
+              VALUES (
+                :finding_key, :asset_id, NOW(), NOW(), NOW(), 'open', :source, :category,
+                :title, :severity, :confidence, :evidence, :remediation, :vulnerability_id,
+                :package_ecosystem, :package_name, :package_version, :fixed_version,
+                CAST(:scanner_metadata_json AS jsonb)
+              )
               RETURNING finding_id
             """),
                 {
@@ -226,6 +721,12 @@ def upsert_finding(
                     "confidence": body.confidence,
                     "evidence": body.evidence or "",
                     "remediation": body.remediation or "",
+                    "vulnerability_id": body.vulnerability_id,
+                    "package_ecosystem": body.package_ecosystem,
+                    "package_name": body.package_name,
+                    "package_version": body.package_version,
+                    "fixed_version": body.fixed_version,
+                    "scanner_metadata_json": _as_jsonb_or_none(body.scanner_metadata_json) or "{}",
                 },
             )
             .mappings()
@@ -254,6 +755,19 @@ def upsert_finding(
                 incident_key=f"finding:{ak}:{body.finding_key}",
             )
         return {"ok": True, "finding_key": body.finding_key, "updated": False}
+
+
+@router.post("/")
+def upsert_finding(
+    body: FindingUpsertBody,
+    db: Session = Depends(get_db),
+    _user: str = Depends(require_role(["admin", "analyst"])),
+):
+    """
+    Upsert by finding_key. If exists: update last_seen (and optionally evidence).
+    If new: insert with first_seen=last_seen=now. Requires asset_id or asset_key to resolve.
+    """
+    return upsert_finding_record(db, body)
 
 
 class UpdateStatusBody(BaseModel):

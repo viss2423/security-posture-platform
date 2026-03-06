@@ -2,7 +2,7 @@
   "name": "security-posture-platform",
   "private": true,
   "scripts": {
-    "dev": "npm run dev --prefix services/frontend",
+    "dev": "node scripts/dev.js",
     "build": "npm run build --prefix services/frontend",
     "start": "npm run start --prefix services/frontend",
     "frontend:install": "npm install --prefix services/frontend",

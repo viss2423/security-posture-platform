@@ -529,6 +529,7 @@ export type JobItem = {
   finished_at: string | null;
   error: string | null;
   retry_count?: number;
+  job_params_json?: Record<string, unknown> | null;
 };
 
 export type JobDetail = JobItem & {
@@ -548,7 +549,12 @@ export async function getJob(id: number): Promise<JobDetail> {
   return apiFetch<JobDetail>(`/jobs/${id}`);
 }
 
-export async function createJob(payload: { job_type: string; target_asset_id?: number; requested_by?: string }): Promise<JobItem> {
+export async function createJob(payload: {
+  job_type: string;
+  target_asset_id?: number;
+  requested_by?: string;
+  job_params_json?: Record<string, unknown>;
+}): Promise<JobItem> {
   return apiFetch<JobItem>('/jobs', { method: 'POST', body: JSON.stringify(payload) });
 }
 
@@ -583,6 +589,19 @@ export async function generateJobAITriage(
 
 export type AlertItem = {
   asset_key: string;
+  alert_id?: number;
+  source?: string | null;
+  title?: string | null;
+  description?: string | null;
+  event_count?: number | null;
+  first_seen_at?: string | null;
+  last_seen_at?: string | null;
+  severity?: 'critical' | 'high' | 'medium' | 'low' | 'info' | null;
+  ti_match?: boolean;
+  ti_source?: string | null;
+  mitre_techniques?: string[];
+  payload_json?: Record<string, unknown>;
+  context_json?: Record<string, unknown>;
   state?: string;
   asset_name?: string | null;
   owner?: string | null;
@@ -630,31 +649,45 @@ export async function getAlerts(): Promise<AlertsResponse> {
   return apiFetch<AlertsResponse>('/alerts');
 }
 
-export async function postAlertAck(asset_key: string, reason?: string): Promise<{ ok: boolean }> {
+export type AlertActionTarget = {
+  asset_key?: string;
+  alert_id?: number;
+};
+
+export async function postAlertAck(
+  target: AlertActionTarget,
+  reason?: string
+): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>('/alerts/ack', {
     method: 'POST',
-    body: JSON.stringify({ asset_key, reason }),
+    body: JSON.stringify({ ...target, reason }),
   });
 }
 
-export async function postAlertSuppress(asset_key: string, until_iso: string): Promise<{ ok: boolean }> {
+export async function postAlertSuppress(
+  target: AlertActionTarget,
+  until_iso: string
+): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>('/alerts/suppress', {
     method: 'POST',
-    body: JSON.stringify({ asset_key, until_iso }),
+    body: JSON.stringify({ ...target, until_iso }),
   });
 }
 
-export async function postAlertResolve(asset_key: string): Promise<{ ok: boolean }> {
+export async function postAlertResolve(target: AlertActionTarget): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>('/alerts/resolve', {
     method: 'POST',
-    body: JSON.stringify({ asset_key }),
+    body: JSON.stringify({ ...target }),
   });
 }
 
-export async function postAlertAssign(asset_key: string, assigned_to: string): Promise<{ ok: boolean }> {
+export async function postAlertAssign(
+  target: AlertActionTarget,
+  assigned_to: string
+): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>('/alerts/assign', {
     method: 'POST',
-    body: JSON.stringify({ asset_key, assigned_to }),
+    body: JSON.stringify({ ...target, assigned_to }),
   });
 }
 
@@ -737,6 +770,12 @@ export type Finding = {
   confidence: string;
   evidence: string | null;
   remediation: string | null;
+  vulnerability_id?: string | null;
+  package_ecosystem?: string | null;
+  package_name?: string | null;
+  package_version?: string | null;
+  fixed_version?: string | null;
+  scanner_metadata_json?: Record<string, unknown> | null;
   risk_score?: number | null;
   risk_level?: 'critical' | 'high' | 'medium' | 'low' | null;
   risk_factors_json?: Record<string, unknown> | null;
@@ -777,6 +816,480 @@ export async function getFindings(filters?: FindingsFilters): Promise<Finding[]>
   if (filters?.limit != null) p.set('limit', String(filters.limit));
   const q = p.toString();
   return apiFetch<Finding[]>('/findings/' + (q ? `?${q}` : ''));
+}
+
+export type RepositorySourceSummary = {
+  source: string;
+  label: string;
+  total: number;
+  open: number;
+  in_progress: number;
+  accepted_risk: number;
+  remediated: number;
+  by_severity: Record<string, number>;
+  by_category: Record<string, number>;
+};
+
+export type RepositoryRecentFinding = {
+  finding_id: number;
+  finding_key: string | null;
+  source: string | null;
+  category: string | null;
+  title: string;
+  severity: string;
+  status: FindingStatus;
+  package_name?: string | null;
+  package_version?: string | null;
+  fixed_version?: string | null;
+  vulnerability_id?: string | null;
+  risk_score?: number | null;
+  risk_level?: 'critical' | 'high' | 'medium' | 'low' | null;
+  last_seen?: string | null;
+};
+
+export type RepositoryPackageSummary = {
+  package_name: string;
+  active_count: number;
+  total_count: number;
+  max_severity: string;
+};
+
+export type RepositoryScanSummary = {
+  asset_key: string;
+  asset_name?: string | null;
+  asset_type?: string | null;
+  environment?: string | null;
+  criticality?: string | null;
+  total_findings: number;
+  open_findings: number;
+  in_progress_findings: number;
+  accepted_risk_findings: number;
+  remediated_findings: number;
+  sources: RepositorySourceSummary[];
+  top_packages: RepositoryPackageSummary[];
+  recent_findings: RepositoryRecentFinding[];
+  latest_jobs: JobItem[];
+};
+
+export async function getRepositoryScanSummary(
+  assetKey: string = 'secplat-repo'
+): Promise<RepositoryScanSummary> {
+  return apiFetch<RepositoryScanSummary>(
+    `/findings/repository-summary?asset_key=${encodeURIComponent(assetKey)}`
+  );
+}
+
+export type DependencyRiskSourceDistribution = {
+  source: string;
+  total: number;
+  active: number;
+  remediated: number;
+  accepted_risk: number;
+  by_severity: Record<string, number>;
+};
+
+export type DependencyRiskPackage = {
+  package_name: string;
+  package_ecosystem: string;
+  active_count: number;
+  total_count: number;
+  max_risk_score: number;
+  max_severity: string;
+  last_seen?: string | null;
+};
+
+export type DependencyRiskRemediationItem = {
+  finding_id: number;
+  finding_key?: string | null;
+  title: string;
+  source?: string | null;
+  status: FindingStatus;
+  severity: string;
+  vulnerability_id?: string | null;
+  package_ecosystem?: string | null;
+  package_name?: string | null;
+  package_version?: string | null;
+  fixed_version?: string | null;
+  risk_score?: number | null;
+  risk_level?: 'critical' | 'high' | 'medium' | 'low' | null;
+  last_seen?: string | null;
+};
+
+export type DependencyRiskSummary = {
+  asset_key: string;
+  asset_name?: string | null;
+  asset_type?: string | null;
+  environment?: string | null;
+  criticality?: string | null;
+  total_findings: number;
+  active_findings: number;
+  remediated_findings: number;
+  accepted_risk_findings: number;
+  active_dependency_count: number;
+  source_distribution: DependencyRiskSourceDistribution[];
+  severity_distribution_active: Record<string, number>;
+  ecosystem_distribution_active: Record<string, number>;
+  dependency_distribution: DependencyRiskPackage[];
+  remediation_queue: DependencyRiskRemediationItem[];
+};
+
+export async function getDependencyRiskSummary(
+  assetKey: string = 'secplat-repo',
+  remediationLimit: number = 20
+): Promise<DependencyRiskSummary> {
+  const query = new URLSearchParams({
+    asset_key: assetKey,
+    remediation_limit: String(remediationLimit),
+  });
+  return apiFetch<DependencyRiskSummary>(`/findings/dependency-risk?${query.toString()}`);
+}
+
+export type ThreatIntelSourceSummary = {
+  source: string;
+  feed_url?: string | null;
+  indicator_count: number;
+  by_type: { ip: number; domain: number };
+  last_seen_at?: string | null;
+};
+
+export type ThreatIntelMatchedAsset = {
+  asset_key: string;
+  asset_name?: string | null;
+  environment?: string | null;
+  criticality?: string | null;
+  match_count: number;
+  indicators: string[];
+};
+
+export type ThreatIntelRecentIndicator = {
+  source: string;
+  indicator: string;
+  indicator_type: 'ip' | 'domain';
+  last_seen_at?: string | null;
+};
+
+export type ThreatIntelAssetMatch = {
+  asset_key: string;
+  asset_name?: string | null;
+  match_field: string;
+  matched_value: string;
+  source: string;
+  indicator: string;
+  indicator_type: 'ip' | 'domain';
+  last_seen_at?: string | null;
+};
+
+export type ThreatIntelAssetMatches = {
+  asset_key: string;
+  total: number;
+  items: ThreatIntelAssetMatch[];
+};
+
+export type ThreatIntelSummary = {
+  total_indicators: number;
+  source_count: number;
+  total_asset_matches: number;
+  matched_asset_count: number;
+  last_refreshed_at?: string | null;
+  sources: ThreatIntelSourceSummary[];
+  matched_assets: ThreatIntelMatchedAsset[];
+  recent_indicators: ThreatIntelRecentIndicator[];
+  latest_jobs: JobItem[];
+};
+
+export async function getThreatIntelSummary(): Promise<ThreatIntelSummary> {
+  return apiFetch<ThreatIntelSummary>('/threat-intel/summary');
+}
+
+export async function getThreatIntelAssetMatches(
+  assetKey: string
+): Promise<ThreatIntelAssetMatches> {
+  return apiFetch<ThreatIntelAssetMatches>(
+    `/threat-intel/assets/${encodeURIComponent(assetKey)}`
+  );
+}
+
+export type TelemetryEvent = {
+  event_id: number;
+  source: string;
+  event_type: string;
+  asset_id?: number | null;
+  asset_key?: string | null;
+  severity?: number | null;
+  src_ip?: string | null;
+  src_port?: number | null;
+  dst_ip?: string | null;
+  dst_port?: number | null;
+  domain?: string | null;
+  url?: string | null;
+  protocol?: string | null;
+  event_time?: string | null;
+  ti_match?: boolean;
+  ti_source?: string | null;
+  mitre_techniques?: string[];
+  anomaly_score?: number | null;
+  payload_json?: Record<string, unknown>;
+};
+
+export type TelemetrySummary = {
+  totals: {
+    events: number;
+    ti_matches: number;
+    assets: number;
+    sources: number;
+  };
+  sources: Array<{
+    source: string;
+    event_count: number;
+    ti_matches: number;
+    asset_count: number;
+    last_event_at?: string | null;
+    alerts: Record<string, number>;
+  }>;
+  recent_alerts: AlertItem[];
+  latest_anomaly_scores: Array<{
+    asset_key: string;
+    anomaly_score: number;
+    baseline_mean?: number | null;
+    baseline_std?: number | null;
+    current_value?: number | null;
+    computed_at?: string | null;
+  }>;
+};
+
+export async function getTelemetrySummary(): Promise<TelemetrySummary> {
+  return apiFetch<TelemetrySummary>('/telemetry/summary');
+}
+
+export async function getTelemetryEvents(params?: {
+  source?: string;
+  asset_key?: string;
+  ti_match?: boolean;
+  limit?: number;
+}): Promise<{ items: TelemetryEvent[] }> {
+  const query = new URLSearchParams();
+  if (params?.source) query.set('source', params.source);
+  if (params?.asset_key) query.set('asset_key', params.asset_key);
+  if (params?.ti_match != null) query.set('ti_match', params.ti_match ? 'true' : 'false');
+  if (params?.limit != null) query.set('limit', String(params.limit));
+  const suffix = query.toString();
+  return apiFetch<{ items: TelemetryEvent[] }>(`/telemetry/events${suffix ? `?${suffix}` : ''}`);
+}
+
+export async function getTelemetryAssetLogs(
+  assetKey: string,
+  params?: { source?: string; limit?: number }
+): Promise<{ asset_key: string; items: TelemetryEvent[] }> {
+  const query = new URLSearchParams();
+  if (params?.source) query.set('source', params.source);
+  if (params?.limit != null) query.set('limit', String(params.limit));
+  const suffix = query.toString();
+  return apiFetch<{ asset_key: string; items: TelemetryEvent[] }>(
+    `/telemetry/assets/${encodeURIComponent(assetKey)}${suffix ? `?${suffix}` : ''}`
+  );
+}
+
+export async function ingestTelemetry(body: {
+  source: string;
+  events: Array<Record<string, unknown>>;
+  asset_key?: string;
+  create_alerts?: boolean;
+}): Promise<{
+  ok: boolean;
+  source: string;
+  processed_events: number;
+  alert_updates: number;
+  ti_matches: number;
+  ti_sources: Record<string, number>;
+}> {
+  return apiFetch('/telemetry/ingest', { method: 'POST', body: JSON.stringify(body) });
+}
+
+export type DetectionRule = {
+  rule_id: number;
+  name: string;
+  description?: string | null;
+  source?: string | null;
+  rule_format: 'json' | 'sigma';
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
+  enabled: boolean;
+  definition_json: Record<string, unknown>;
+  created_by?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  last_tested_at?: string | null;
+  last_test_matches?: number | null;
+};
+
+export type DetectionRun = {
+  run_id: number;
+  rule_id: number;
+  rule_name: string;
+  executed_by?: string | null;
+  lookback_hours: number;
+  status: 'running' | 'done' | 'failed';
+  matches: number;
+  started_at?: string | null;
+  finished_at?: string | null;
+  error?: string | null;
+  results_json?: Record<string, unknown>;
+};
+
+export async function getDetectionRules(include_disabled: boolean = true): Promise<{ items: DetectionRule[] }> {
+  const suffix = include_disabled ? '?include_disabled=true' : '';
+  return apiFetch<{ items: DetectionRule[] }>(`/detections/rules${suffix}`);
+}
+
+export async function createDetectionRule(body: {
+  name: string;
+  description?: string | null;
+  source?: string | null;
+  severity?: string;
+  enabled?: boolean;
+  definition_json: Record<string, unknown>;
+}): Promise<DetectionRule> {
+  return apiFetch<DetectionRule>('/detections/rules', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function updateDetectionRule(
+  ruleId: number,
+  body: {
+    description?: string | null;
+    source?: string | null;
+    severity?: string | null;
+    enabled?: boolean | null;
+    definition_json?: Record<string, unknown>;
+  }
+): Promise<DetectionRule> {
+  return apiFetch<DetectionRule>(`/detections/rules/${ruleId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function testDetectionRule(
+  ruleId: number,
+  body?: { lookback_hours?: number; create_alerts?: boolean }
+): Promise<{
+  rule_id: number;
+  run_id?: number | null;
+  lookback_hours: number;
+  candidate_events: number;
+  matches: number;
+  sample_matches: TelemetryEvent[];
+  generated_alert?: AlertItem | null;
+}> {
+  return apiFetch(`/detections/rules/${ruleId}/test`, {
+    method: 'POST',
+    body: JSON.stringify(body ?? {}),
+  });
+}
+
+export async function getDetectionRuns(params?: {
+  rule_id?: number;
+  limit?: number;
+}): Promise<{ items: DetectionRun[] }> {
+  const query = new URLSearchParams();
+  if (params?.rule_id != null) query.set('rule_id', String(params.rule_id));
+  if (params?.limit != null) query.set('limit', String(params.limit));
+  const suffix = query.toString();
+  return apiFetch<{ items: DetectionRun[] }>(`/detections/runs${suffix ? `?${suffix}` : ''}`);
+}
+
+export type AttackLabTask = {
+  task_type: string;
+  label: string;
+  description: string;
+};
+
+export type AttackLabRun = {
+  run_id: number;
+  task_type: string;
+  target_asset_id?: number | null;
+  target_asset_key?: string | null;
+  target?: string | null;
+  status: 'queued' | 'running' | 'done' | 'failed';
+  requested_by?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  error?: string | null;
+  output_json?: Record<string, unknown>;
+  created_at?: string | null;
+};
+
+export async function getAttackLabTasks(): Promise<{ items: AttackLabTask[] }> {
+  return apiFetch<{ items: AttackLabTask[] }>('/attack-lab/tasks');
+}
+
+export async function runAttackLabTask(body: {
+  task_type: string;
+  target: string;
+  asset_key?: string;
+}): Promise<JobItem> {
+  return apiFetch<JobItem>('/attack-lab/run', { method: 'POST', body: JSON.stringify(body) });
+}
+
+export async function runAttackLabAssetScan(body: {
+  asset_key: string;
+  task_type?: string;
+}): Promise<JobItem> {
+  return apiFetch<JobItem>('/attack-lab/scan-asset', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function getAttackLabRuns(params?: {
+  status?: string;
+  limit?: number;
+}): Promise<{ items: AttackLabRun[] }> {
+  const query = new URLSearchParams();
+  if (params?.status) query.set('status', params.status);
+  if (params?.limit != null) query.set('limit', String(params.limit));
+  const suffix = query.toString();
+  return apiFetch<{ items: AttackLabRun[] }>(`/attack-lab/runs${suffix ? `?${suffix}` : ''}`);
+}
+
+export type CyberRangeMission = {
+  mission_id: string;
+  title: string;
+  description: string;
+  asset_key: string;
+  task_type: string;
+  target: string;
+  difficulty: 'beginner' | 'intermediate' | 'advanced' | string;
+  focus: string;
+  mitre_techniques: string[];
+  asset?: {
+    asset_key: string;
+    name?: string | null;
+    owner?: string | null;
+    environment?: string | null;
+    criticality?: string | null;
+    asset_type?: string | null;
+    verified?: boolean | null;
+  } | null;
+  asset_available: boolean;
+  latest_job?: JobItem | null;
+};
+
+export async function getCyberRangeMissions(): Promise<{
+  generated_at: string;
+  items: CyberRangeMission[];
+}> {
+  return apiFetch('/cyber-range/missions');
+}
+
+export async function launchCyberRangeMission(missionId: string): Promise<{
+  mission_id: string;
+  job: JobItem;
+}> {
+  return apiFetch(`/cyber-range/missions/${encodeURIComponent(missionId)}/launch`, {
+    method: 'POST',
+  });
 }
 
 export async function updateFindingStatus(finding_id: number, status: FindingStatus): Promise<{ ok: boolean; finding_id: number; status: string }> {

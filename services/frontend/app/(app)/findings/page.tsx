@@ -110,6 +110,12 @@ function formatRiskDriverLabel(driver: string): string {
   return driver.replace(/_/g, ' ');
 }
 
+function packageChip(finding: Finding): string | null {
+  if (!finding.package_name) return null;
+  if (!finding.package_version) return finding.package_name;
+  return `${finding.package_name}@${finding.package_version}`;
+}
+
 export default function FindingsPage() {
   const { canMutate, isAdmin } = useAuth();
   const [findings, setFindings] = useState<Finding[]>([]);
@@ -562,6 +568,11 @@ export default function FindingsPage() {
                     </p>
                     <div className="mt-3 flex flex-wrap gap-2">
                       <span className="stat-chip">{scoreSource(f)}</span>
+                      {f.vulnerability_id && <span className="stat-chip">{f.vulnerability_id}</span>}
+                      {packageChip(f) && <span className="stat-chip">{packageChip(f)}</span>}
+                      {f.fixed_version && (
+                        <span className="stat-chip">Fix {f.fixed_version}</span>
+                      )}
                       {drivers.map((driver) => (
                         <span key={driver} className="stat-chip">
                           {formatRiskDriverLabel(driver)}
@@ -613,6 +624,21 @@ export default function FindingsPage() {
                       <div>
                         <dt className="kv-label">Asset</dt>
                         <dd className="text-sm text-[var(--text)] break-words">{f.asset_name || f.asset_key || '-'}</dd>
+                      </div>
+                      <div>
+                        <dt className="kv-label">Vulnerability</dt>
+                        <dd className="text-sm text-[var(--text)]">{f.vulnerability_id || '-'}</dd>
+                      </div>
+                      <div>
+                        <dt className="kv-label">Package</dt>
+                        <dd className="text-sm text-[var(--text)]">
+                          {packageChip(f) || '-'}
+                          {f.package_ecosystem ? ` (${f.package_ecosystem})` : ''}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="kv-label">Fixed version</dt>
+                        <dd className="text-sm text-[var(--text)]">{f.fixed_version || '-'}</dd>
                       </div>
                       <div>
                         <dt className="kv-label">Category</dt>

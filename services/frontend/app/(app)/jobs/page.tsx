@@ -17,6 +17,50 @@ import { formatDateTime } from '@/lib/format';
 import { ApiDownHint, EmptyState } from '@/components/EmptyState';
 import { friendlyApiMessage } from '@/lib/apiError';
 
+type EnqueueJobType =
+  | 'web_exposure'
+  | 'score_recompute'
+  | 'repository_scan'
+  | 'threat_intel_refresh'
+  | 'telemetry_import'
+  | 'network_anomaly_score'
+  | 'attack_lab_run'
+  | 'detection_rule_test';
+
+const DEFAULT_REPOSITORY_SCAN = {
+  path: '/workspace',
+  assetKey: 'secplat-repo',
+  assetName: 'SecPlat repository',
+  environment: 'dev',
+  criticality: 'medium',
+  trivyScanners: 'vuln,misconfig,secret',
+};
+
+const DEFAULT_JOB_PARAMS: Partial<Record<EnqueueJobType, string>> = {
+  telemetry_import: JSON.stringify(
+    {
+      source: 'suricata',
+      file_path: '/workspace/lab-data/suricata/eve.json',
+      asset_key: 'secplat-api',
+    },
+    null,
+    2
+  ),
+  network_anomaly_score: JSON.stringify({ lookback_hours: 24, threshold: 2.5 }, null, 2),
+  attack_lab_run: JSON.stringify(
+    { task_type: 'port_scan', target: 'verify-web', asset_key: 'verify-web' },
+    null,
+    2
+  ),
+  detection_rule_test: JSON.stringify({ rule_id: 1, lookback_hours: 24 }, null, 2),
+};
+
+function formatJobParamValue(value: unknown): string {
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (value == null || value === '') return '-';
+  return String(value);
+}
+
 export default function JobsPage() {
   const { canMutate } = useAuth();
   const [data, setData] = useState<{ items: JobItem[] } | null>(null);
@@ -24,11 +68,22 @@ export default function JobsPage() {
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState('');
   const [retryingId, setRetryingId] = useState<number | null>(null);
-  const [enqueueType, setEnqueueType] = useState<'web_exposure' | 'score_recompute'>(
-    'web_exposure'
-  );
+  const [enqueueType, setEnqueueType] = useState<EnqueueJobType>('web_exposure');
   const [enqueueAssetId, setEnqueueAssetId] = useState('');
+  const [repoPath, setRepoPath] = useState(DEFAULT_REPOSITORY_SCAN.path);
+  const [repoAssetKey, setRepoAssetKey] = useState(DEFAULT_REPOSITORY_SCAN.assetKey);
+  const [repoAssetName, setRepoAssetName] = useState(DEFAULT_REPOSITORY_SCAN.assetName);
+  const [repoEnvironment, setRepoEnvironment] = useState(DEFAULT_REPOSITORY_SCAN.environment);
+  const [repoCriticality, setRepoCriticality] = useState(DEFAULT_REPOSITORY_SCAN.criticality);
+  const [repoTrivyScanners, setRepoTrivyScanners] = useState(
+    DEFAULT_REPOSITORY_SCAN.trivyScanners
+  );
+  const [repoEnableOsv, setRepoEnableOsv] = useState(true);
+  const [repoEnableTrivy, setRepoEnableTrivy] = useState(true);
   const [enqueueing, setEnqueueing] = useState(false);
+  const [customJobParams, setCustomJobParams] = useState<string>(
+    DEFAULT_JOB_PARAMS.telemetry_import || '{}'
+  );
   const [aiTriage, setAiTriage] = useState<AIJobTriage | null>(null);
   const [triageLoading, setTriageLoading] = useState(false);
   const [triageGenerating, setTriageGenerating] = useState(false);
@@ -46,6 +101,12 @@ export default function JobsPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (enqueueType in DEFAULT_JOB_PARAMS) {
+      setCustomJobParams(DEFAULT_JOB_PARAMS[enqueueType] || '{}');
+    }
+  }, [enqueueType]);
 
   const openDetail = (id: number) => {
     setAiTriage(null);
@@ -77,6 +138,72 @@ export default function JobsPage() {
   }, [detail]);
 
   const handleEnqueue = () => {
+    if (enqueueType === 'repository_scan') {
+      if (!repoEnableOsv && !repoEnableTrivy) {
+        setError('Enable at least one repository scanner');
+        return;
+      }
+      setError(null);
+      setEnqueueing(true);
+      createJob({
+        job_type: enqueueType,
+        job_params_json: {
+          path: repoPath.trim() || DEFAULT_REPOSITORY_SCAN.path,
+          asset_key: repoAssetKey.trim() || DEFAULT_REPOSITORY_SCAN.assetKey,
+          asset_name: repoAssetName.trim() || DEFAULT_REPOSITORY_SCAN.assetName,
+          environment: repoEnvironment.trim() || DEFAULT_REPOSITORY_SCAN.environment,
+          criticality: repoCriticality.trim() || DEFAULT_REPOSITORY_SCAN.criticality,
+          trivy_scanners:
+            repoTrivyScanners.trim() || DEFAULT_REPOSITORY_SCAN.trivyScanners,
+          enable_osv: repoEnableOsv,
+          enable_trivy: repoEnableTrivy,
+        },
+      })
+        .then((job) => {
+          load();
+          openDetail(job.job_id);
+        })
+        .catch((e) => setError(e.message))
+        .finally(() => setEnqueueing(false));
+      return;
+    }
+    if (enqueueType === 'threat_intel_refresh') {
+      setError(null);
+      setEnqueueing(true);
+      createJob({ job_type: enqueueType })
+        .then((job) => {
+          load();
+          openDetail(job.job_id);
+        })
+        .catch((e) => setError(e.message))
+        .finally(() => setEnqueueing(false));
+      return;
+    }
+    if (
+      enqueueType === 'telemetry_import' ||
+      enqueueType === 'network_anomaly_score' ||
+      enqueueType === 'attack_lab_run' ||
+      enqueueType === 'detection_rule_test'
+    ) {
+      let parsedParams: Record<string, unknown> = {};
+      try {
+        parsedParams = customJobParams.trim() ? JSON.parse(customJobParams) : {};
+      } catch {
+        setError('Job params must be valid JSON');
+        return;
+      }
+      setError(null);
+      setEnqueueing(true);
+      createJob({ job_type: enqueueType, job_params_json: parsedParams })
+        .then((job) => {
+          load();
+          openDetail(job.job_id);
+        })
+        .catch((e) => setError(e.message))
+        .finally(() => setEnqueueing(false));
+      return;
+    }
+
     const assetId = enqueueAssetId.trim() ? parseInt(enqueueAssetId, 10) : undefined;
     if (assetId != null && Number.isNaN(assetId)) {
       setError('Asset ID must be a number');
@@ -153,42 +280,180 @@ export default function JobsPage() {
         {canMutate && (
           <section className="section-panel">
             <h2 className="section-title">Enqueue job</h2>
-            <div className="grid gap-4 sm:grid-cols-[180px_minmax(0,1fr)_auto] sm:items-end">
-              <label className="text-sm text-[var(--muted)]">
-                Type
-                <select
-                  value={enqueueType}
-                  onChange={(e) =>
-                    setEnqueueType(e.target.value as 'web_exposure' | 'score_recompute')
-                  }
-                  className="input mt-1"
+            <div className="grid gap-4">
+              <div className="grid gap-4 sm:grid-cols-[220px_minmax(0,1fr)]">
+                <label className="text-sm text-[var(--muted)]">
+                  Type
+                  <select
+                    value={enqueueType}
+                    onChange={(e) => setEnqueueType(e.target.value as EnqueueJobType)}
+                    className="input mt-1"
+                  >
+                    <option value="web_exposure">web_exposure</option>
+                    <option value="score_recompute">score_recompute</option>
+                    <option value="repository_scan">repository_scan</option>
+                    <option value="threat_intel_refresh">threat_intel_refresh</option>
+                    <option value="telemetry_import">telemetry_import</option>
+                    <option value="network_anomaly_score">network_anomaly_score</option>
+                    <option value="attack_lab_run">attack_lab_run</option>
+                    <option value="detection_rule_test">detection_rule_test</option>
+                  </select>
+                </label>
+                {enqueueType !== 'repository_scan' &&
+                  enqueueType !== 'threat_intel_refresh' &&
+                  enqueueType !== 'telemetry_import' &&
+                  enqueueType !== 'network_anomaly_score' &&
+                  enqueueType !== 'attack_lab_run' &&
+                  enqueueType !== 'detection_rule_test' && (
+                  <label className="text-sm text-[var(--muted)]">
+                    Asset ID
+                    <input
+                      type="text"
+                      value={enqueueAssetId}
+                      onChange={(e) => setEnqueueAssetId(e.target.value)}
+                      placeholder="Optional for web_exposure"
+                      className="input mt-1"
+                    />
+                  </label>
+                )}
+              </div>
+
+              {enqueueType === 'repository_scan' ? (
+                <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface-elevated)]/40 p-4">
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    <label className="text-sm text-[var(--muted)]">
+                      Scan path
+                      <input
+                        type="text"
+                        value={repoPath}
+                        onChange={(e) => setRepoPath(e.target.value)}
+                        className="input mt-1"
+                      />
+                    </label>
+                    <label className="text-sm text-[var(--muted)]">
+                      Repository asset key
+                      <input
+                        type="text"
+                        value={repoAssetKey}
+                        onChange={(e) => setRepoAssetKey(e.target.value)}
+                        className="input mt-1"
+                      />
+                    </label>
+                    <label className="text-sm text-[var(--muted)]">
+                      Display name
+                      <input
+                        type="text"
+                        value={repoAssetName}
+                        onChange={(e) => setRepoAssetName(e.target.value)}
+                        className="input mt-1"
+                      />
+                    </label>
+                    <label className="text-sm text-[var(--muted)]">
+                      Environment
+                      <input
+                        type="text"
+                        value={repoEnvironment}
+                        onChange={(e) => setRepoEnvironment(e.target.value)}
+                        className="input mt-1"
+                      />
+                    </label>
+                    <label className="text-sm text-[var(--muted)]">
+                      Criticality
+                      <select
+                        value={repoCriticality}
+                        onChange={(e) => setRepoCriticality(e.target.value)}
+                        className="input mt-1"
+                      >
+                        <option value="high">high</option>
+                        <option value="medium">medium</option>
+                        <option value="low">low</option>
+                      </select>
+                    </label>
+                    <label className="text-sm text-[var(--muted)]">
+                      Trivy scanners
+                      <input
+                        type="text"
+                        value={repoTrivyScanners}
+                        onChange={(e) => setRepoTrivyScanners(e.target.value)}
+                        className="input mt-1"
+                      />
+                    </label>
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-5 text-sm text-[var(--text)]">
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={repoEnableOsv}
+                        onChange={(e) => setRepoEnableOsv(e.target.checked)}
+                      />
+                      <span>Run OSV scanner</span>
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={repoEnableTrivy}
+                        onChange={(e) => setRepoEnableTrivy(e.target.checked)}
+                      />
+                      <span>Run Trivy filesystem scan</span>
+                    </label>
+                  </div>
+                </div>
+              ) : enqueueType === 'threat_intel_refresh' ? (
+                <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface-elevated)]/40 p-4">
+                  <p className="text-sm text-[var(--text)]">
+                    Refreshes configured IOC feeds and recomputes matches against known assets.
+                  </p>
+                  <p className="mt-2 text-xs text-[var(--muted)]">
+                    Feed URLs come from API configuration. Use this to update the
+                    Threat intelligence panel in Overview.
+                  </p>
+                </div>
+              ) : enqueueType === 'telemetry_import' ||
+                enqueueType === 'network_anomaly_score' ||
+                enqueueType === 'attack_lab_run' ||
+                enqueueType === 'detection_rule_test' ? (
+                <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface-elevated)]/40 p-4">
+                  <label className="text-sm text-[var(--muted)]">
+                    Job params JSON
+                    <textarea
+                      value={customJobParams}
+                      onChange={(e) => setCustomJobParams(e.target.value)}
+                      rows={8}
+                      className="input mt-1 font-mono text-xs"
+                    />
+                  </label>
+                  <p className="mt-2 text-xs text-[var(--muted)]">
+                    Use this for telemetry imports, anomaly scoring, attack-lab execution, and detection rule tests.
+                  </p>
+                </div>
+              ) : null}
+
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <p className="text-xs text-[var(--muted)]">
+                  {enqueueType === 'repository_scan'
+                    ? 'Repository scans run inside the API container and can take several minutes on /workspace.'
+                    : enqueueType === 'threat_intel_refresh'
+                      ? 'Threat-intel refresh runs inside the API container and updates IOC summaries plus asset matches.'
+                      : enqueueType === 'telemetry_import'
+                        ? 'Telemetry imports parse log files and generate event-centric alerts.'
+                        : enqueueType === 'network_anomaly_score'
+                          ? 'Network anomaly scoring computes per-asset deviations from recent telemetry baseline.'
+                          : enqueueType === 'attack_lab_run'
+                            ? 'Attack-lab runs controlled simulations and auto-generates incidents from resulting alerts.'
+                            : enqueueType === 'detection_rule_test'
+                              ? 'Detection rule tests evaluate rules against recent telemetry and can emit rule-match alerts.'
+                    : 'Process queued jobs with docker compose up -d worker-web.'}
+                </p>
+                <button
+                  type="button"
+                  onClick={handleEnqueue}
+                  disabled={enqueueing}
+                  className="btn-primary"
                 >
-                  <option value="web_exposure">web_exposure</option>
-                  <option value="score_recompute">score_recompute</option>
-                </select>
-              </label>
-              <label className="text-sm text-[var(--muted)]">
-                Asset ID
-                <input
-                  type="text"
-                  value={enqueueAssetId}
-                  onChange={(e) => setEnqueueAssetId(e.target.value)}
-                  placeholder="Optional for web_exposure"
-                  className="input mt-1"
-                />
-              </label>
-              <button
-                type="button"
-                onClick={handleEnqueue}
-                disabled={enqueueing}
-                className="btn-primary"
-              >
-                {enqueueing ? 'Enqueueing...' : 'Enqueue'}
-              </button>
+                  {enqueueing ? 'Enqueueing...' : 'Enqueue'}
+                </button>
+              </div>
             </div>
-            <p className="mt-3 text-xs text-[var(--muted)]">
-              Process queued jobs with <code className="rounded bg-[var(--bg)] px-1">docker compose up -d worker-web</code>.
-            </p>
           </section>
         )}
 
@@ -374,6 +639,23 @@ export default function JobsPage() {
                   {detail.error}
                 </div>
               )}
+
+              {detail.job_params_json &&
+                Object.keys(detail.job_params_json).length > 0 && (
+                  <div className="mt-5 rounded-2xl border border-[var(--border)] bg-[var(--surface-elevated)]/50 p-4">
+                    <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">
+                      Parameters
+                    </h3>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                      {Object.entries(detail.job_params_json).map(([key, value]) => (
+                        <div key={key} className="kv-item">
+                          <span className="kv-label">{key.replace(/_/g, ' ')}</span>
+                          <div className="kv-value">{formatJobParamValue(value)}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
             </div>
 
             {detail.log_output != null && detail.log_output !== '' && (

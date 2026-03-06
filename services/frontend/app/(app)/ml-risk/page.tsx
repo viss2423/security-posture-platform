@@ -6,12 +6,14 @@ import {
   bootstrapRiskModelLabels,
   createFindingRiskLabel,
   createRiskModelSnapshot,
+  getDependencyRiskSummary,
   getRiskModelEvaluation,
   getRiskModelSnapshot,
   getRiskModelStatus,
   listRiskModelSnapshots,
   setRiskModelThreshold,
   trainRiskModel,
+  type DependencyRiskSummary,
   type RiskModelEvaluation,
   type RiskModelSnapshotSummary,
   type RiskModelStatus,
@@ -131,6 +133,8 @@ export default function MlRiskPage() {
   const [status, setStatus] = useState<RiskModelStatus | null>(null);
   const [evaluation, setEvaluation] = useState<RiskModelEvaluation | null>(null);
   const [snapshots, setSnapshots] = useState<RiskModelSnapshotSummary[]>([]);
+  const [dependencyRisk, setDependencyRisk] = useState<DependencyRiskSummary | null>(null);
+  const [dependencyRiskError, setDependencyRiskError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -142,19 +146,49 @@ export default function MlRiskPage() {
 
   const load = useCallback((thresholdOverride?: number) => {
     setLoading(true);
-    Promise.all([
+    Promise.allSettled([
       getRiskModelStatus(),
       getRiskModelEvaluation({ review_limit: 12, threshold: thresholdOverride }),
       listRiskModelSnapshots({ limit: 12 }),
+      getDependencyRiskSummary('secplat-repo', 20),
     ])
-      .then(([statusOut, evaluationOut, snapshotsOut]) => {
-        setStatus(statusOut);
-        setEvaluation(evaluationOut);
-        setSnapshots(snapshotsOut.items);
-        setThresholdDraft(formatThreshold(evaluationOut.threshold));
-        setError(null);
+      .then(([statusOut, evaluationOut, snapshotsOut, dependencyOut]) => {
+        const primaryError =
+          statusOut.status === 'rejected'
+            ? statusOut.reason
+            : evaluationOut.status === 'rejected'
+              ? evaluationOut.reason
+              : snapshotsOut.status === 'rejected'
+                ? snapshotsOut.reason
+                : null;
+        if (primaryError) {
+          setError(primaryError instanceof Error ? primaryError.message : 'Failed to load model evaluation');
+        } else {
+          if (statusOut.status === 'fulfilled') {
+            setStatus(statusOut.value);
+          }
+          if (evaluationOut.status === 'fulfilled') {
+            setEvaluation(evaluationOut.value);
+            setThresholdDraft(formatThreshold(evaluationOut.value.threshold));
+          }
+          if (snapshotsOut.status === 'fulfilled') {
+            setSnapshots(snapshotsOut.value.items);
+          }
+          setError(null);
+        }
+
+        if (dependencyOut.status === 'fulfilled') {
+          setDependencyRisk(dependencyOut.value);
+          setDependencyRiskError(null);
+        } else {
+          setDependencyRisk(null);
+          setDependencyRiskError(
+            dependencyOut.reason instanceof Error
+              ? dependencyOut.reason.message
+              : 'Failed to load dependency risk'
+          );
+        }
       })
-      .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load model evaluation'))
       .finally(() => setLoading(false));
   }, []);
 
@@ -450,6 +484,135 @@ export default function MlRiskPage() {
                   subtext="Probability calibration error"
                 />
               </section>
+
+              {(dependencyRisk || dependencyRiskError) && (
+                <section className="mb-8 grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+                  <div className="section-panel-tight">
+                    <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <h2 className="section-title">Dependency risk</h2>
+                        <p className="mt-1 text-sm text-[var(--muted)]">
+                          Live OSV/Trivy package exposure for ML feature context and remediation priority.
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Link href="/findings" className="btn-secondary text-xs">
+                          Open findings
+                        </Link>
+                        <Link href="/jobs" className="btn-secondary text-xs">
+                          Run scan
+                        </Link>
+                      </div>
+                    </div>
+                    {dependencyRiskError && (
+                      <div className="rounded-xl border border-[var(--red)]/30 bg-[var(--red)]/10 px-4 py-3 text-sm text-[var(--text)]">
+                        {dependencyRiskError}
+                      </div>
+                    )}
+                    {dependencyRisk && (
+                      <>
+                        <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                          <MetricCard
+                            label="Active findings"
+                            value={dependencyRisk.active_findings}
+                            subtext={`${dependencyRisk.total_findings} total`}
+                          />
+                          <MetricCard
+                            label="Active packages"
+                            value={dependencyRisk.active_dependency_count}
+                            subtext="Distinct vulnerable dependencies"
+                          />
+                          <MetricCard
+                            label="Accepted risk"
+                            value={dependencyRisk.accepted_risk_findings}
+                            subtext="Requires periodic review"
+                          />
+                          <MetricCard
+                            label="Remediated"
+                            value={dependencyRisk.remediated_findings}
+                            subtext="Closed from latest scans"
+                          />
+                        </div>
+                        <div className="grid gap-4 lg:grid-cols-2">
+                          <div className="rounded-xl border border-[var(--border)] p-4">
+                            <h3 className="mb-3 text-sm font-medium text-[var(--muted)]">Source distribution</h3>
+                            <ul className="space-y-2">
+                              {dependencyRisk.source_distribution.map((source) => (
+                                <li key={source.source} className="flex items-center justify-between text-sm">
+                                  <span className="text-[var(--text)]">{source.source}</span>
+                                  <span className="text-[var(--muted)]">
+                                    active {source.active} / total {source.total}
+                                  </span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                          <div className="rounded-xl border border-[var(--border)] p-4">
+                            <h3 className="mb-3 text-sm font-medium text-[var(--muted)]">Top vulnerable packages</h3>
+                            {dependencyRisk.dependency_distribution.length === 0 ? (
+                              <p className="text-sm text-[var(--muted)]">No package vulnerabilities found.</p>
+                            ) : (
+                              <ul className="space-y-2">
+                                {dependencyRisk.dependency_distribution.slice(0, 8).map((pkg) => (
+                                  <li key={`${pkg.package_ecosystem}:${pkg.package_name}`} className="rounded-lg border border-[var(--border)] px-3 py-2">
+                                    <div className="flex items-center justify-between gap-2 text-sm">
+                                      <span className="font-medium text-[var(--text)]">
+                                        {pkg.package_name}
+                                      </span>
+                                      <span className="text-[var(--muted)]">
+                                        {pkg.active_count} active
+                                      </span>
+                                    </div>
+                                    <p className="mt-1 text-xs text-[var(--muted)]">
+                                      {pkg.package_ecosystem} | max risk {pkg.max_risk_score} | {pkg.max_severity}
+                                    </p>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  <div className="section-panel-tight">
+                    <h2 className="section-title mb-4">Remediation queue</h2>
+                    {!dependencyRisk || dependencyRisk.remediation_queue.length === 0 ? (
+                      <p className="text-sm text-[var(--muted)]">No active dependency remediation items.</p>
+                    ) : (
+                      <ul className="space-y-3">
+                        {dependencyRisk.remediation_queue.map((item) => (
+                          <li key={item.finding_id} className="rounded-xl border border-[var(--border)] p-3">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0 flex-1">
+                                <p className="font-medium text-[var(--text)]">{item.title}</p>
+                                <p className="mt-1 text-xs text-[var(--muted)]">
+                                  {item.package_name || 'package'}{item.package_version ? `@${item.package_version}` : ''}
+                                  {item.fixed_version ? ` -> ${item.fixed_version}` : ''}
+                                </p>
+                                <p className="mt-1 text-xs text-[var(--muted)]">
+                                  {item.source || 'scanner'}
+                                  {item.vulnerability_id ? ` | ${item.vulnerability_id}` : ''}
+                                  {item.last_seen ? ` | ${formatDateTime(item.last_seen)}` : ''}
+                                </p>
+                              </div>
+                              <div className="text-right">
+                                <span className={`inline-block rounded px-2 py-0.5 text-xs font-semibold uppercase ${riskBadgeClass(item.risk_level || item.severity)}`}>
+                                  {item.risk_level || item.severity} {item.risk_score ?? '-'}
+                                </span>
+                                <p className="mt-1 text-[11px] capitalize text-[var(--muted)]">
+                                  {item.status.replace('_', ' ')}
+                                </p>
+                              </div>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </section>
+              )}
 
               <section className="mb-8 grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
                 <div className="section-panel-tight">

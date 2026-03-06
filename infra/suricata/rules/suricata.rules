@@ -1,0 +1,7 @@
+# SecPlat cyber-lab ruleset.
+# This is intentionally lightweight and deterministic for demo traffic.
+
+alert tcp any any -> $HOME_NET any (msg:"SECPATLAB Inbound TCP SYN burst"; flags:S; threshold:type both, track by_src, count 20, seconds 60; sid:4200001; rev:1;)
+alert http any any -> $HOME_NET any (msg:"SECPATLAB Suspicious User-Agent sqlmap"; content:"User-Agent|3a| sqlmap"; http_header; sid:4200002; rev:1;)
+alert dns any any -> any any (msg:"SECPATLAB DNS query suspicious-update.example"; dns.query; content:"suspicious-update.example"; nocase; sid:4200003; rev:1;)
+alert tls any any -> any any (msg:"SECPATLAB TLS SNI bad.example"; tls.sni; content:"bad.example"; nocase; endswith; sid:4200004; rev:1;)

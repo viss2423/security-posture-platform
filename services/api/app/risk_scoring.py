@@ -225,9 +225,41 @@ SELECT
   a.verified,
   a.is_active,
   a.tags,
-  a.metadata
+  a.metadata,
+  COALESCE(te.telemetry_events_24h, 0) AS telemetry_events_24h,
+  COALESCE(te.ioc_hits_24h, 0) AS ioc_hits_24h,
+  COALESCE(te.zeek_events_24h, 0) AS zeek_events_24h,
+  COALESCE(te.cowrie_events_24h, 0) AS cowrie_events_24h,
+  COALESCE(sa.suricata_high_alerts_24h, 0) AS suricata_high_alerts_24h,
+  COALESCE(an.anomaly_score, 0) AS anomaly_score
 FROM findings f
 LEFT JOIN assets a ON a.asset_id = f.asset_id
+LEFT JOIN LATERAL (
+  SELECT
+    COUNT(*) AS telemetry_events_24h,
+    COUNT(*) FILTER (WHERE se.ti_match = TRUE) AS ioc_hits_24h,
+    COUNT(*) FILTER (WHERE se.source = 'zeek') AS zeek_events_24h,
+    COUNT(*) FILTER (WHERE se.source = 'cowrie') AS cowrie_events_24h
+  FROM security_events se
+  WHERE se.asset_key = a.asset_key
+    AND se.event_time >= (NOW() - INTERVAL '24 hours')
+) te ON TRUE
+LEFT JOIN LATERAL (
+  SELECT
+    COUNT(*) AS suricata_high_alerts_24h
+  FROM security_alerts sa
+  WHERE sa.asset_key = a.asset_key
+    AND sa.source = 'suricata'
+    AND sa.severity IN ('critical', 'high')
+    AND sa.last_seen_at >= (NOW() - INTERVAL '24 hours')
+) sa ON TRUE
+LEFT JOIN LATERAL (
+  SELECT anomaly_score
+  FROM asset_anomaly_scores an
+  WHERE an.asset_key = a.asset_key
+  ORDER BY an.computed_at DESC
+  LIMIT 1
+) an ON TRUE
 WHERE {where_clause}
 """
 
@@ -244,6 +276,12 @@ def _row_to_context(row: dict[str, Any]) -> dict[str, Any]:
             "first_seen": row.get("first_seen"),
             "accepted_risk_reason": row.get("accepted_risk_reason"),
             "accepted_risk_expires_at": row.get("accepted_risk_expires_at"),
+            "telemetry_events_24h": row.get("telemetry_events_24h"),
+            "ioc_hits_24h": row.get("ioc_hits_24h"),
+            "suricata_high_alerts_24h": row.get("suricata_high_alerts_24h"),
+            "zeek_events_24h": row.get("zeek_events_24h"),
+            "cowrie_events_24h": row.get("cowrie_events_24h"),
+            "anomaly_score": row.get("anomaly_score"),
         },
         "asset": {
             "asset_id": row.get("asset_id"),
@@ -256,6 +294,12 @@ def _row_to_context(row: dict[str, Any]) -> dict[str, Any]:
             "is_active": row.get("is_active"),
             "tags": row.get("tags"),
             "metadata": row.get("metadata"),
+            "telemetry_events_24h": row.get("telemetry_events_24h"),
+            "ioc_hits_24h": row.get("ioc_hits_24h"),
+            "suricata_high_alerts_24h": row.get("suricata_high_alerts_24h"),
+            "zeek_events_24h": row.get("zeek_events_24h"),
+            "cowrie_events_24h": row.get("cowrie_events_24h"),
+            "anomaly_score": row.get("anomaly_score"),
         },
     }
 

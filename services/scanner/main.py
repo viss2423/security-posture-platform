@@ -1,5 +1,5 @@
 """
-SecPlat scanner: TLS + security headers. Supports two scopes:
+SecPlat scanner: TLS + security headers, plus optional repository scans. Supports two scopes:
 - internal_only: scan only INTERNAL_TARGETS (or VERIFY_WEB_URL, JUICE_URL, API_URL).
 - internal_and_verified: internal targets + assets from API with verified=true (external_web).
 """
@@ -11,16 +11,36 @@ import os
 import sys
 import time
 from datetime import UTC, datetime
+from urllib.parse import quote, urlencode
 
 import httpx
 from config import (
     API_URL,
+    DEPENDENCY_SCAN_ASSET_KEY,
+    DEPENDENCY_SCAN_ASSET_NAME,
+    DEPENDENCY_SCAN_CRITICALITY,
+    DEPENDENCY_SCAN_ENABLED,
+    DEPENDENCY_SCAN_ENVIRONMENT,
+    DEPENDENCY_SCAN_PATH,
     INTERNAL_TARGETS,
     MAX_TARGETS,
+    OSV_SCANNER_BIN,
+    OSV_SCANNER_TIMEOUT_SECONDS,
     SCAN_INTERVAL_SECONDS,
     SCOPE,
+    TRIVY_BIN,
+    TRIVY_SCAN_ASSET_KEY,
+    TRIVY_SCAN_ASSET_NAME,
+    TRIVY_SCAN_CRITICALITY,
+    TRIVY_SCAN_ENABLED,
+    TRIVY_SCAN_ENVIRONMENT,
+    TRIVY_SCAN_PATH,
+    TRIVY_SCANNERS,
+    TRIVY_TIMEOUT_SECONDS,
 )
+from dependency_scan import OSV_SOURCE, run_osv_scan
 from scans import run_scans
+from trivy_scan import TRIVY_SOURCE, run_trivy_scan
 
 RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504}
 MAX_HTTP_ATTEMPTS = int(os.getenv("SCANNER_HTTP_MAX_ATTEMPTS", "3"))
@@ -211,9 +231,15 @@ def _get_auth_headers(force_refresh: bool = False) -> dict[str, str]:
     return {"Authorization": f"Bearer {_api_access_token}"}
 
 
-def _api_request(
-    method: str, path: str, *, json_body: dict | None = None, timeout: float = 10.0
+def _api_request_raw(
+    method: str,
+    path: str,
+    *,
+    json_body: dict | None = None,
+    timeout: float = 10.0,
+    expected_statuses: set[int] | None = None,
 ) -> httpx.Response | None:
+    accepted_statuses = set(expected_statuses or set())
     for attempt in range(1, MAX_HTTP_ATTEMPTS + 1):
         headers = _get_auth_headers()
         try:
@@ -224,7 +250,7 @@ def _api_request(
                 headers=headers or None,
                 timeout=timeout,
             )
-            if r.status_code < 400:
+            if r.status_code < 400 or r.status_code in accepted_statuses:
                 return r
             if r.status_code in (401, 403) and API_AUTH_USERNAME and API_AUTH_PASSWORD:
                 # Token may have expired or been rotated; refresh once per attempt.
@@ -246,7 +272,7 @@ def _api_request(
                 },
             )
             if not retryable:
-                return None
+                return r
         except Exception as e:
             retryable = _is_retryable_transport_error(e)
             logger.warning(
@@ -266,6 +292,15 @@ def _api_request(
         if attempt < MAX_HTTP_ATTEMPTS:
             time.sleep(2 ** (attempt - 1))
     return None
+
+
+def _api_request(
+    method: str, path: str, *, json_body: dict | None = None, timeout: float = 10.0
+) -> httpx.Response | None:
+    response = _api_request_raw(method, path, json_body=json_body, timeout=timeout)
+    if response is None or response.status_code >= 400:
+        return None
+    return response
 
 
 def get_verified_targets() -> list[tuple[str, str]]:
@@ -343,8 +378,271 @@ def submit_finding(finding: dict, asset_key: str) -> bool:
         "remediation": finding.get("remediation"),
         "source": finding.get("source"),
     }
+    for key in (
+        "vulnerability_id",
+        "package_ecosystem",
+        "package_name",
+        "package_version",
+        "fixed_version",
+        "scanner_metadata_json",
+    ):
+        if key in finding and finding.get(key) is not None:
+            payload[key] = finding.get(key)
     r = _api_request("POST", "/findings/", json_body=payload, timeout=10.0)
     return r is not None
+
+
+def _empty_scan_stats(enabled: bool) -> dict[str, int | bool]:
+    return {
+        "enabled": enabled,
+        "detected": 0,
+        "submitted": 0,
+        "resolved": 0,
+    }
+
+
+def _ensure_repository_asset(
+    *,
+    asset_key: str,
+    asset_name: str,
+    scan_path: str,
+    environment: str,
+    criticality: str,
+    scanner_source: str,
+    extra_tags: list[str] | None = None,
+) -> bool:
+    if not asset_key:
+        logger.warning(
+            "repository_scan_asset_missing",
+            extra={
+                "action": "repository_scan_asset",
+                "status": "failed",
+                "retryable": False,
+                "error": "repository asset key is empty",
+                "scanner_source": scanner_source,
+            },
+        )
+        return False
+    path = f"/assets/by-key/{quote(asset_key, safe='')}"
+    existing = _api_request_raw("GET", path, timeout=10.0, expected_statuses={404})
+    if existing is not None and existing.status_code == 200:
+        return True
+    if existing is None or existing.status_code != 404:
+        return False
+    created = _api_request(
+        "POST",
+        "/assets/",
+        json_body={
+            "asset_key": asset_key,
+            "type": "app",
+            "name": asset_name,
+            "asset_type": "repository",
+            "environment": environment,
+            "criticality": criticality,
+            "tags": list(dict.fromkeys(["repository", *(extra_tags or [])])),
+            "metadata": {
+                "scanner_source": scanner_source,
+                "scan_path": scan_path,
+            },
+        },
+        timeout=10.0,
+    )
+    return created is not None
+
+
+def _list_findings_for_source(asset_key: str, source: str, *, limit: int = 500) -> list[dict]:
+    query = urlencode(
+        {
+            "asset_key": asset_key,
+            "source": source,
+            "limit": min(max(limit, 1), 500),
+        }
+    )
+    response = _api_request_raw("GET", f"/findings/?{query}", timeout=15.0)
+    if response is None or response.status_code >= 400:
+        return []
+    try:
+        payload = response.json()
+    except Exception:
+        return []
+    return payload if isinstance(payload, list) else []
+
+
+def _update_finding_status(finding_id: int, status: str) -> bool:
+    response = _api_request(
+        "PATCH",
+        f"/findings/{finding_id}/status",
+        json_body={"status": status},
+        timeout=10.0,
+    )
+    return response is not None
+
+
+def _reconcile_findings_for_source(asset_key: str, source: str, current_keys: set[str]) -> int:
+    resolved = 0
+    existing_findings = _list_findings_for_source(asset_key, source)
+    for finding in existing_findings:
+        finding_key = str(finding.get("finding_key") or "").strip()
+        if not finding_key or finding_key in current_keys:
+            continue
+        if str(finding.get("status") or "open").strip().lower() == "remediated":
+            continue
+        finding_id = finding.get("finding_id")
+        if isinstance(finding_id, int) and _update_finding_status(finding_id, "remediated"):
+            resolved += 1
+    return resolved
+
+
+def _run_dependency_scan() -> dict[str, int | bool]:
+    stats = _empty_scan_stats(DEPENDENCY_SCAN_ENABLED)
+    if not DEPENDENCY_SCAN_ENABLED:
+        return stats
+    if not _ensure_repository_asset(
+        asset_key=DEPENDENCY_SCAN_ASSET_KEY,
+        asset_name=DEPENDENCY_SCAN_ASSET_NAME,
+        scan_path=DEPENDENCY_SCAN_PATH,
+        environment=DEPENDENCY_SCAN_ENVIRONMENT,
+        criticality=DEPENDENCY_SCAN_CRITICALITY,
+        scanner_source=OSV_SOURCE,
+        extra_tags=["dependency-scan"],
+    ):
+        logger.warning(
+            "dependency_scan_asset_unavailable",
+            extra={
+                "action": "dependency_scan",
+                "status": "failed",
+                "retryable": True,
+                "asset_key": DEPENDENCY_SCAN_ASSET_KEY,
+            },
+        )
+        return stats
+    try:
+        result = run_osv_scan(
+            DEPENDENCY_SCAN_PATH,
+            asset_key=DEPENDENCY_SCAN_ASSET_KEY,
+            osv_scanner_bin=OSV_SCANNER_BIN,
+            timeout_seconds=OSV_SCANNER_TIMEOUT_SECONDS,
+        )
+    except Exception as e:
+        logger.warning(
+            "dependency_scan_failed",
+            extra={
+                "action": "dependency_scan",
+                "status": "failed",
+                "retryable": True,
+                "asset_key": DEPENDENCY_SCAN_ASSET_KEY,
+                "scan_path": DEPENDENCY_SCAN_PATH,
+                "error": str(e),
+            },
+        )
+        return stats
+
+    current_keys: set[str] = set()
+    findings = result.get("findings") or []
+    stats["detected"] = len(findings)
+    for finding in findings:
+        finding_key = str(finding.get("finding_key") or "").strip()
+        if finding_key:
+            current_keys.add(finding_key)
+        if submit_finding(finding, DEPENDENCY_SCAN_ASSET_KEY):
+            stats["submitted"] = int(stats["submitted"]) + 1
+    stats["resolved"] = _reconcile_findings_for_source(
+        DEPENDENCY_SCAN_ASSET_KEY,
+        OSV_SOURCE,
+        current_keys,
+    )
+    logger.info(
+        "dependency_scan_finished",
+        extra={
+            "action": "dependency_scan",
+            "status": "done",
+            "asset_key": DEPENDENCY_SCAN_ASSET_KEY,
+            "scan_path": DEPENDENCY_SCAN_PATH,
+            "detected": stats["detected"],
+            "submitted": stats["submitted"],
+            "resolved": stats["resolved"],
+            "tool_exit_code": result.get("exit_code"),
+            "tool_stderr": (result.get("stderr") or "")[:300],
+        },
+    )
+    return stats
+
+
+def _run_trivy_scan() -> dict[str, int | bool]:
+    stats = _empty_scan_stats(TRIVY_SCAN_ENABLED)
+    if not TRIVY_SCAN_ENABLED:
+        return stats
+    if not _ensure_repository_asset(
+        asset_key=TRIVY_SCAN_ASSET_KEY,
+        asset_name=TRIVY_SCAN_ASSET_NAME,
+        scan_path=TRIVY_SCAN_PATH,
+        environment=TRIVY_SCAN_ENVIRONMENT,
+        criticality=TRIVY_SCAN_CRITICALITY,
+        scanner_source=TRIVY_SOURCE,
+        extra_tags=["trivy-scan"],
+    ):
+        logger.warning(
+            "trivy_scan_asset_unavailable",
+            extra={
+                "action": "trivy_scan",
+                "status": "failed",
+                "retryable": True,
+                "asset_key": TRIVY_SCAN_ASSET_KEY,
+            },
+        )
+        return stats
+    try:
+        result = run_trivy_scan(
+            TRIVY_SCAN_PATH,
+            asset_key=TRIVY_SCAN_ASSET_KEY,
+            trivy_bin=TRIVY_BIN,
+            scanners=TRIVY_SCANNERS,
+            timeout_seconds=TRIVY_TIMEOUT_SECONDS,
+        )
+    except Exception as e:
+        logger.warning(
+            "trivy_scan_failed",
+            extra={
+                "action": "trivy_scan",
+                "status": "failed",
+                "retryable": True,
+                "asset_key": TRIVY_SCAN_ASSET_KEY,
+                "scan_path": TRIVY_SCAN_PATH,
+                "error": str(e),
+            },
+        )
+        return stats
+
+    current_keys: set[str] = set()
+    findings = result.get("findings") or []
+    stats["detected"] = len(findings)
+    for finding in findings:
+        finding_key = str(finding.get("finding_key") or "").strip()
+        if finding_key:
+            current_keys.add(finding_key)
+        if submit_finding(finding, TRIVY_SCAN_ASSET_KEY):
+            stats["submitted"] = int(stats["submitted"]) + 1
+    stats["resolved"] = _reconcile_findings_for_source(
+        TRIVY_SCAN_ASSET_KEY,
+        TRIVY_SOURCE,
+        current_keys,
+    )
+    logger.info(
+        "trivy_scan_finished",
+        extra={
+            "action": "trivy_scan",
+            "status": "done",
+            "asset_key": TRIVY_SCAN_ASSET_KEY,
+            "scan_path": TRIVY_SCAN_PATH,
+            "scanners": TRIVY_SCANNERS,
+            "detected": stats["detected"],
+            "submitted": stats["submitted"],
+            "resolved": stats["resolved"],
+            "tool_exit_code": result.get("exit_code"),
+            "tool_stderr": (result.get("stderr") or "")[:300],
+        },
+    )
+    return stats
 
 
 def run_once() -> None:
@@ -359,6 +657,8 @@ def run_once() -> None:
         },
     )
     submitted = 0
+    dependency_stats = _empty_scan_stats(DEPENDENCY_SCAN_ENABLED)
+    trivy_stats = _empty_scan_stats(TRIVY_SCAN_ENABLED)
     for url, asset_key in targets:
         try:
             findings = run_scans(url, asset_key)
@@ -377,6 +677,8 @@ def run_once() -> None:
                     "error": str(e),
                 },
             )
+    dependency_stats = _run_dependency_scan()
+    trivy_stats = _run_trivy_scan()
     logger.info(
         "scanner_run_finished",
         extra={
@@ -384,6 +686,14 @@ def run_once() -> None:
             "scope": SCOPE,
             "status": "done",
             "submitted_findings": submitted,
+            "dependency_scan_enabled": dependency_stats["enabled"],
+            "dependency_findings_detected": dependency_stats["detected"],
+            "dependency_findings_submitted": dependency_stats["submitted"],
+            "dependency_findings_resolved": dependency_stats["resolved"],
+            "trivy_scan_enabled": trivy_stats["enabled"],
+            "trivy_findings_detected": trivy_stats["detected"],
+            "trivy_findings_submitted": trivy_stats["submitted"],
+            "trivy_findings_resolved": trivy_stats["resolved"],
         },
     )
 
@@ -420,6 +730,11 @@ def main() -> None:
             "status": "ok",
             "scope": SCOPE,
             "interval_seconds": SCAN_INTERVAL_SECONDS,
+            "dependency_scan_enabled": DEPENDENCY_SCAN_ENABLED,
+            "dependency_scan_path": DEPENDENCY_SCAN_PATH,
+            "trivy_scan_enabled": TRIVY_SCAN_ENABLED,
+            "trivy_scan_path": TRIVY_SCAN_PATH,
+            "trivy_scanners": TRIVY_SCANNERS,
         },
     )
     while True:
