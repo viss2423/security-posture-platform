@@ -12,7 +12,7 @@ Use this to verify baseline, queue, and new services. All commands assume repo r
 
 ---
 
-## Phase 0 — Baseline (current stack)
+## Phase 0 - Baseline (lean local lane)
 
 ### 0.1 Stack starts clean
 
@@ -21,7 +21,16 @@ docker compose up -d --build
 docker compose ps
 ```
 
-**Expected:** All services `Up` (postgres, opensearch, redis, grafana, api, frontend, ingestion, verify-web, web, juiceshop, scanner, worker-web). No exits.
+**Expected:** Lean lane services `Up` (postgres, opensearch, redis, api, frontend, ingestion, verify-web, juiceshop). No exits.
+
+Optional profile services can be enabled explicitly:
+
+```powershell
+docker compose --profile observability up -d grafana
+docker compose --profile jobs up -d worker-web
+docker compose --profile scan up -d scanner
+docker compose --profile optional-web up -d web
+```
 
 ### 0.2 Request ID propagation
 
@@ -334,7 +343,7 @@ kubectl kustomize infra/k8s | Out-Null
 Review these files:
 - `infra/k8s/deployment-api.yaml`
 - `infra/k8s/deployment-worker-web.yaml`
-- `infra/k8s/networkpolicy-workers-egress.yaml`
+- `infra/k8s/networkpolicy-worker-egress.yaml`
 - `infra/k8s/networkpolicy-postgres-ingress-from-api.yaml`
 
 **Expected:**
@@ -350,6 +359,26 @@ kubectl apply -k infra/k8s
 ```
 
 **Expected:** Deployments, HPA, CronJobs, and NetworkPolicies are created in namespace `secplat`.
+
+### 5.4 CronJob success checks (manual run)
+
+```powershell
+$suffix = Get-Date -Format "yyyyMMddHHmmss"
+kubectl -n secplat create job --from=cronjob/secplat-ingestion-health "secplat-ingestion-health-manual-$suffix"
+kubectl -n secplat create job --from=cronjob/secplat-report-snapshot "secplat-report-snapshot-manual-$suffix"
+kubectl -n secplat get jobs
+```
+
+**Expected:** Both manual jobs complete successfully and logs show no repeated auth failures or read timeouts.
+
+### 5.5 No-parallel-run cutover checks
+
+```powershell
+.\scripts\runtime-lane-cutover.ps1 -To k8s -PreflightOnly
+.\scripts\runtime-lane-cutover.ps1 -To compose -PreflightOnly
+```
+
+**Expected:** Preflight blocks lane switches when opposite app lane is active, and passes once opposite lane is stopped.
 
 ---
 

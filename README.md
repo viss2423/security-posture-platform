@@ -110,6 +110,21 @@ docker compose up -d --build
 docker compose ps
 ```
 
+Default startup is the **lean local lane**: `frontend`, `api`, `postgres`, `opensearch`, `redis`, `ingestion`, plus local probe targets.
+
+Optional services are profile-gated:
+
+```bash
+docker compose --profile observability up -d grafana
+docker compose --profile jobs up -d worker-web
+docker compose --profile scan up -d scanner
+docker compose --profile optional-web up -d web
+docker compose --profile roadmap up -d deriver notifier correlator
+docker compose --profile cyberlab up -d suricata zeek cowrie
+```
+
+Do not run Compose app services and SecPlat Kubernetes app workloads at the same time. Use `scripts/runtime-lane-cutover.ps1` to enforce lane preflight checks during runtime switches.
+
 On **Windows**, this is enough: the `ingestion` service runs the health and posture scripts inside Docker every 60 seconds, so you don't run any scripts on the host. On **Linux**, you can either use the same (recommended) or run the scripts via cron as in the [Continuous ingestion](#continuous-ingestion-cron) section.
 
 ---
@@ -133,7 +148,7 @@ curl http://localhost:8081/.well-known/secplat-verification.txt
 
 1. **Start the worker** (processes queued scan jobs):
    ```bash
-   docker compose up -d worker-web
+   docker compose --profile jobs up -d worker-web
    ```
 2. **Create a job** from the UI: open **Jobs** in the nav, use the **Enqueue job** form (analyst/admin only). Pick type `web_exposure`, optionally set an Asset ID (e.g. an asset with type `external_web`), click **Enqueue**.
 3. **Refresh the Jobs list** — the job appears as queued, then (once the worker picks it up) running, then done or failed. Click a job to see **logs**; use **Retry** on failed jobs.
@@ -449,7 +464,8 @@ Alerting has been explored (e.g. LAST vs MAX reducers for “broken right now”
 # View logs
 docker compose logs -f api
 
-# Restart Grafana
+# Start or restart Grafana (profile-gated)
+docker compose --profile observability up -d grafana
 docker compose restart grafana
 
 # Validate compose file

@@ -23,6 +23,32 @@ Short procedures for common operational issues.
 
 ---
 
+## Runtime lanes and cutover
+
+SecPlat uses a two-lane runtime model:
+
+- **Compose lane (local/dev):** `docker compose up -d --build`
+- **Kubernetes lane (staged/prod):** `kubectl apply -k infra/k8s` (or overlay apply)
+
+Do not run both app lanes in parallel. Use preflight checks before switching:
+
+```powershell
+# Validate that Compose lane can be resumed safely.
+.\scripts\runtime-lane-cutover.ps1 -To compose -PreflightOnly
+
+# Validate that Kubernetes lane can be resumed safely.
+.\scripts\runtime-lane-cutover.ps1 -To k8s -PreflightOnly
+```
+
+Guarded switches:
+
+```powershell
+.\scripts\runtime-lane-cutover.ps1 -To compose -StopOtherLane
+.\scripts\runtime-lane-cutover.ps1 -To k8s -StopOtherLane
+```
+
+---
+
 ## Ingestion stopped
 
 **Symptom:** Assets not updating; "Last seen" times are old; posture stays stale.
@@ -31,6 +57,22 @@ Short procedures for common operational issues.
 2. Check logs: `docker compose logs -f ingestion`. Look for API/OpenSearch connection errors.
 3. Ensure API and OpenSearch are up: `curl -s http://localhost:8000/ready`.
 4. If ingestion runs as a cron or external job, verify the job is still scheduled and the network path to API and OpenSearch is open.
+
+---
+
+## Kubernetes CronJobs failing (401/timeouts)
+
+**Symptoms:** `secplat-ingestion-health` fails with `Not authenticated`, or `secplat-report-snapshot` times out.
+
+1. Confirm the secret has working credentials for:
+   - `INGESTION_SERVICE_USERNAME` / `INGESTION_SERVICE_PASSWORD`
+   - `ADMIN_USERNAME` / `ADMIN_PASSWORD`
+2. Restart API deployment after secret updates so env vars refresh:
+   `kubectl -n secplat rollout restart deployment/secplat-api`
+3. Re-run one job from each CronJob:
+   - `kubectl -n secplat create job --from=cronjob/secplat-ingestion-health secplat-ingestion-health-manual`
+   - `kubectl -n secplat create job --from=cronjob/secplat-report-snapshot secplat-report-snapshot-manual`
+4. Verify logs and check no repeated auth/timeouts before unsuspending frequent schedules.
 
 ---
 

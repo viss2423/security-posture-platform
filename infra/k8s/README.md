@@ -48,6 +48,12 @@ If the full Compose stack is already running, stop app services that bind local 
 docker compose stop api worker-web deriver notifier correlator frontend scanner ingestion web
 ```
 
+Or run the guarded cutover helper:
+
+```powershell
+.\scripts\runtime-lane-cutover.ps1 -To k8s -StopOtherLane
+```
+
 3. Create secret for local endpoints:
 
 ```bash
@@ -72,6 +78,14 @@ The overlay rewrites:
 
 ## Notes
 
+- This remains a first-pass Kubernetes baseline; use Compose as the default local/dev lane and Kubernetes as the staged/prod lane.
+- Do not run Compose app services and SecPlat Kubernetes app workloads in parallel.
+- Use `scripts/runtime-lane-cutover.ps1` for preflight-guarded lane switching.
+- Baseline right-sizing defaults:
+  - `secplat-api` replicas: `1`
+  - `secplat-worker-web` replicas: `1`
+  - Worker HPA: min `1`, max `4`
+  - API background schedulers disabled by default in `secplat-config`
 - Images are placeholders (`ghcr.io/your-org/...`); replace with your registry/tag strategy.
 - External Postgres/OpenSearch/Redis is supported by setting URLs/DSNs in `secplat-config` and `secplat-secrets`.
 - `networkpolicy-postgres-ingress-from-api.yaml` applies only if Postgres is in-cluster and labeled `app.kubernetes.io/name=postgres`.
