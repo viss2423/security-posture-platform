@@ -13,6 +13,8 @@ spec:
   concurrencyPolicy: Forbid
   jobTemplate:
     spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 900
       ttlSecondsAfterFinished: 300
       template:
         metadata:
@@ -39,7 +41,20 @@ spec:
               args:
                 - |
                   set -euo pipefail
-                  INDEX=secplat-assets API_URL="${API_URL}/assets/" OS_URL="${INGESTION_OS_URL}" /app/scripts/assets_to_opensearch.sh
+                  api_base="${API_URL%/}"
+                  token=""
+                  auth_user="${API_AUTH_USERNAME:-${INGESTION_SERVICE_USERNAME:-}}"
+                  auth_pass="${API_AUTH_PASSWORD:-${INGESTION_SERVICE_PASSWORD:-}}"
+                  if [ -n "${auth_user}" ] && [ -n "${auth_pass}" ]; then
+                    token="$(curl -sS --connect-timeout 5 --max-time 20 -X POST "${api_base}/auth/login" -H "Content-Type: application/x-www-form-urlencoded" --data-urlencode "username=${auth_user}" --data-urlencode "password=${auth_pass}" | jq -r '.access_token // empty')"
+                  fi
+                  if [ -z "${token}" ] && [ -n "${ADMIN_USERNAME:-}" ] && [ -n "${ADMIN_PASSWORD:-}" ]; then
+                    token="$(curl -sS --connect-timeout 5 --max-time 20 -X POST "${api_base}/auth/login" -H "Content-Type: application/x-www-form-urlencoded" --data-urlencode "username=${ADMIN_USERNAME}" --data-urlencode "password=${ADMIN_PASSWORD}" | jq -r '.access_token // empty')"
+                  fi
+                  if [ -n "${token}" ]; then
+                    export API_BEARER_TOKEN="${token}"
+                  fi
+                  INDEX=secplat-assets API_URL="${api_base}/assets/" OS_URL="${INGESTION_OS_URL}" /app/scripts/assets_to_opensearch.sh
                   OPENSEARCH_URL="${OPENSEARCH_URL}" API_HEALTH_URL="${API_URL}/health" VERIFY_WEB_URL="${INGESTION_VERIFY_WEB_URL}" EXAMPLE_COM_URL="${INGESTION_EXAMPLE_COM_URL}" /app/scripts/health_to_opensearch.sh
                   OPENSEARCH_URL="${OPENSEARCH_URL}" JUICE_URL="${INGESTION_JUICE_URL}" /app/scripts/juice_health_to_opensearch.sh
               envFrom:

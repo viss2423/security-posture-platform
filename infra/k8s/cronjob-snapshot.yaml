@@ -13,6 +13,8 @@ spec:
   concurrencyPolicy: Forbid
   jobTemplate:
     spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 300
       ttlSecondsAfterFinished: 600
       template:
         metadata:
@@ -37,24 +39,50 @@ spec:
               command: ["python", "-c"]
               args:
                 - |
-                  import os, sys, httpx
+                  import os, time, httpx
                   base = os.environ["API_URL"].rstrip("/")
                   user = os.environ["ADMIN_USERNAME"]
                   pwd = os.environ["ADMIN_PASSWORD"]
                   period = os.environ.get("SNAPSHOT_PERIOD", "24h")
-                  r = httpx.post(f"{base}/auth/login", data={"username": user, "password": pwd}, timeout=15.0)
-                  r.raise_for_status()
-                  token = r.json().get("access_token")
-                  if not token:
-                    raise RuntimeError("access_token missing from /auth/login response")
-                  s = httpx.post(
-                    f"{base}/posture/reports/snapshot",
-                    params={"period": period},
-                    headers={"Authorization": f"Bearer {token}"},
-                    timeout=20.0,
-                  )
-                  s.raise_for_status()
-                  print(s.text)
+                  timeout = httpx.Timeout(60.0, connect=10.0)
+                  with httpx.Client(timeout=timeout) as client:
+                    token = None
+                    last_exc = None
+                    for attempt in range(1, 4):
+                      try:
+                        r = client.post(
+                          f"{base}/auth/login",
+                          data={"username": user, "password": pwd},
+                        )
+                        r.raise_for_status()
+                        token = r.json().get("access_token")
+                        if not token:
+                          raise RuntimeError("access_token missing from /auth/login response")
+                        break
+                      except Exception as exc:
+                        last_exc = exc
+                        if attempt < 3:
+                          time.sleep(2 * attempt)
+                    if not token:
+                      raise last_exc or RuntimeError("login_failed")
+
+                    snap_resp = None
+                    for attempt in range(1, 4):
+                      try:
+                        snap_resp = client.post(
+                          f"{base}/posture/reports/snapshot",
+                          params={"period": period},
+                          headers={"Authorization": f"Bearer {token}"},
+                        )
+                        snap_resp.raise_for_status()
+                        break
+                      except Exception as exc:
+                        last_exc = exc
+                        if attempt < 3:
+                          time.sleep(2 * attempt)
+                    if snap_resp is None or snap_resp.is_error:
+                      raise last_exc or RuntimeError("snapshot_request_failed")
+                    print(snap_resp.text)
               envFrom:
                 - configMapRef:
                     name: secplat-config
