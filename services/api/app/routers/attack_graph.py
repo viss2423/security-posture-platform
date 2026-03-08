@@ -40,7 +40,9 @@ def query_attack_graph(
 ):
     lookback = max(1, min(int(body.lookback_hours), 720))
     if body.incident_id is not None:
-        graph = build_incident_attack_graph(db, incident_id=int(body.incident_id), lookback_hours=lookback)
+        graph = build_incident_attack_graph(
+            db, incident_id=int(body.incident_id), lookback_hours=lookback
+        )
         if graph["nodes"]:
             return graph
     if body.asset_key:
@@ -48,4 +50,3 @@ def query_attack_graph(
         if graph["nodes"]:
             return graph
     raise HTTPException(status_code=404, detail="No graph data found for query")
-

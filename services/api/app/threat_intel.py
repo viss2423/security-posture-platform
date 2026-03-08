@@ -65,6 +65,7 @@ def _run_db_with_retry(
             time.sleep(delay)
     raise RuntimeError("threat_intel_retry_exhausted")
 
+
 DEFAULT_THREAT_INTEL_FEEDS: list[dict[str, Any]] = [
     {
         "source": "abuseipdb-s100-mirror",
@@ -401,7 +402,13 @@ def _manual_iocs(job_params: dict[str, Any]) -> list[dict[str, Any]]:
             "campaign_title": str(campaign_tag or "").replace("-", " ").title() or None,
             "expires_at": None,
         }
-        for (source, indicator_type, source_priority, confidence_score, campaign_tag), indicators in grouped.items()
+        for (
+            source,
+            indicator_type,
+            source_priority,
+            confidence_score,
+            campaign_tag,
+        ), indicators in grouped.items()
     ]
 
 

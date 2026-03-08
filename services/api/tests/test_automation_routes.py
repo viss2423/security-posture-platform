@@ -137,11 +137,19 @@ def test_automation_playbook_run_approval_and_rollback(client, admin_headers):
     assert trigger_body["runs_created"] == 2
 
     low_run = next(
-        (item for item in trigger_body["items"] if int(item.get("playbook_id") or 0) == low_playbook_id),
+        (
+            item
+            for item in trigger_body["items"]
+            if int(item.get("playbook_id") or 0) == low_playbook_id
+        ),
         None,
     )
     medium_run = next(
-        (item for item in trigger_body["items"] if int(item.get("playbook_id") or 0) == medium_playbook_id),
+        (
+            item
+            for item in trigger_body["items"]
+            if int(item.get("playbook_id") or 0) == medium_playbook_id
+        ),
         None,
     )
     assert low_run is not None
@@ -176,7 +184,8 @@ def test_automation_playbook_run_approval_and_rollback(client, admin_headers):
     incident_list = client.get("/incidents?status=new&limit=50", headers=admin_headers)
     assert incident_list.status_code == 200, incident_list.text
     assert any(
-        asset_key in str(item.get("title") or "") for item in incident_list.json().get("items") or []
+        asset_key in str(item.get("title") or "")
+        for item in incident_list.json().get("items") or []
     )
 
     rollback_items = client.get("/automation/rollbacks?status=pending", headers=admin_headers)

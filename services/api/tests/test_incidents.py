@@ -443,7 +443,9 @@ def test_incident_collaboration_endpoints(client, auth_headers):
 
     checklist = client.get(f"/incidents/{incident_id}/checklist", headers=auth_headers)
     assert checklist.status_code == 200, checklist.text
-    assert any(int(item.get("item_id") or 0) == item_id for item in checklist.json().get("items") or [])
+    assert any(
+        int(item.get("item_id") or 0) == item_id for item in checklist.json().get("items") or []
+    )
 
     decision = client.post(
         f"/incidents/{incident_id}/decisions",
@@ -459,7 +461,10 @@ def test_incident_collaboration_endpoints(client, auth_headers):
 
     decisions = client.get(f"/incidents/{incident_id}/decisions", headers=auth_headers)
     assert decisions.status_code == 200, decisions.text
-    assert any("Contain host" in str(item.get("decision") or "") for item in decisions.json().get("items") or [])
+    assert any(
+        "Contain host" in str(item.get("decision") or "")
+        for item in decisions.json().get("items") or []
+    )
 
     timeline = client.get(f"/incidents/{incident_id}/timeline", headers=auth_headers)
     assert timeline.status_code == 200, timeline.text

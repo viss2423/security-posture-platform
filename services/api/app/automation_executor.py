@@ -9,7 +9,11 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from .alert_enricher import build_alert_enrichment, fetch_alert_related_events, get_security_alert_by_id
+from .alert_enricher import (
+    build_alert_enrichment,
+    fetch_alert_related_events,
+    get_security_alert_by_id,
+)
 from .notification_service import send_slack_notification
 
 
@@ -213,7 +217,9 @@ def _action_create_incident(
         asset_keys.append(str(params["asset_key"]))
     if trigger_payload.get("asset_key"):
         asset_keys.append(str(trigger_payload["asset_key"]))
-    normalized_asset_keys = sorted({str(item or "").strip() for item in asset_keys if str(item or "").strip()})
+    normalized_asset_keys = sorted(
+        {str(item or "").strip() for item in asset_keys if str(item or "").strip()}
+    )
     title = str(params.get("title") or "").strip()
     if not title:
         if normalized_asset_keys:
@@ -241,7 +247,9 @@ def _action_notify_slack(
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     text_value = str(params.get("message") or "").strip()
     if not text_value:
-        trigger = str(trigger_payload.get("trigger") or trigger_payload.get("event_type") or "automation")
+        trigger = str(
+            trigger_payload.get("trigger") or trigger_payload.get("event_type") or "automation"
+        )
         text_value = f"SecPlat automation action executed for trigger '{trigger}'."
     result = send_slack_notification(text=text_value)
     return result, None
@@ -295,7 +303,9 @@ def _action_create_jira(
     metadata = _safe_json(incident_payload.get("metadata"), default={})
     metadata.update({"jira_issue_key": issue_key, "jira_issue_url": browse_url})
     db.execute(
-        text("UPDATE incidents SET metadata = CAST(:metadata AS jsonb), updated_at = NOW() WHERE id = :incident_id"),
+        text(
+            "UPDATE incidents SET metadata = CAST(:metadata AS jsonb), updated_at = NOW() WHERE id = :incident_id"
+        ),
         {"metadata": json.dumps(metadata), "incident_id": incident_id},
     )
     return {"incident_id": incident_id, "issue_key": issue_key, "url": browse_url}, None
@@ -403,7 +413,9 @@ def _action_suppress_duplicates(
     params: dict[str, Any],
     trigger_payload: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    dedupe_key = str(params.get("dedupe_key") or trigger_payload.get("dedupe_key") or "").strip().lower()
+    dedupe_key = (
+        str(params.get("dedupe_key") or trigger_payload.get("dedupe_key") or "").strip().lower()
+    )
     if not dedupe_key:
         raise ValueError("suppress_duplicates_missing_dedupe_key")
     minutes = max(5, min(int(params.get("minutes") or 60), 60 * 24))
@@ -458,7 +470,11 @@ def _action_suppress_duplicates(
             ]
         },
     }
-    return {"dedupe_key": dedupe_key, "suppressed": len(rows), "until": until.isoformat()}, rollback_payload
+    return {
+        "dedupe_key": dedupe_key,
+        "suppressed": len(rows),
+        "until": until.isoformat(),
+    }, rollback_payload
 
 
 def _execute_action_handler(
@@ -473,7 +489,9 @@ def _execute_action_handler(
     if normalized == "enrich_alert":
         return _action_enrich_alert(db, params=params, trigger_payload=trigger_payload)
     if normalized == "create_incident":
-        return _action_create_incident(db, params=params, trigger_payload=trigger_payload, actor=actor)
+        return _action_create_incident(
+            db, params=params, trigger_payload=trigger_payload, actor=actor
+        )
     if normalized == "notify_slack":
         return _action_notify_slack(params=params, trigger_payload=trigger_payload)
     if normalized == "create_jira":

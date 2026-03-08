@@ -101,7 +101,9 @@ def _seed_finding(client: TestClient, headers: dict, prefix: str) -> int:
         items = listed_payload.get("items") or []
     else:
         items = []
-    match = next((item for item in items if str(item.get("finding_key") or "") == finding_key), None)
+    match = next(
+        (item for item in items if str(item.get("finding_key") or "") == finding_key), None
+    )
     assert match is not None, f"finding_key {finding_key} not found in listing"
     return int(match["finding_id"])
 

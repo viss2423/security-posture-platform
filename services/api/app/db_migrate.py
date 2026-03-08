@@ -21,6 +21,7 @@ _startup_migrations_completed = False
 class _RetryableStartupMigrationError(RuntimeError):
     """Signal that startup migrations should be retried in a fresh transaction."""
 
+
 AUDIT_EVENTS_SQL = """
 CREATE TABLE IF NOT EXISTS audit_events (
   id         SERIAL PRIMARY KEY,
@@ -1162,7 +1163,9 @@ def _execute_with_deadlock_retry(
     except Exception as exc:
         msg = str(exc).lower()
         if "deadlock detected" in msg or "current transaction is aborted" in msg:
-            raise _RetryableStartupMigrationError("startup migration transaction should retry") from exc
+            raise _RetryableStartupMigrationError(
+                "startup migration transaction should retry"
+            ) from exc
         raise
 
 

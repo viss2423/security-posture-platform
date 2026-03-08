@@ -114,7 +114,9 @@ def _normalize_entity_key(entity: str, entity_id: str) -> str:
     key_column = ENTITY_SUMMARY_TABLES[entity]["key_column"]
     if key_column.endswith("_id"):
         if not key.isdigit():
-            raise HTTPException(status_code=400, detail="entity_id must be numeric for this entity type")
+            raise HTTPException(
+                status_code=400, detail="entity_id must be numeric for this entity type"
+            )
         return str(int(key))
     return key
 
@@ -357,7 +359,9 @@ def create_summary_version(
                 "model": body.model or (base or {}).get("model"),
                 "generated_by": user,
                 "source_type": str(body.source_type or "generated").strip().lower() or "generated",
-                "context_json": json.dumps(body.context_json or (base or {}).get("context_json") or {}),
+                "context_json": json.dumps(
+                    body.context_json or (base or {}).get("context_json") or {}
+                ),
                 "evidence_json": json.dumps(body.evidence_json or {}),
             },
         )

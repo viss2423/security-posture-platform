@@ -21,8 +21,8 @@ from app.detections import (
     run_detection_rule_job,
 )
 from app.queue import publish_scan_job
-from app.request_context import request_id_ctx
 from app.repository_scan import launch_repository_scan_job, run_repository_scan_job
+from app.request_context import request_id_ctx
 from app.risk_scoring import backfill_finding_risk_scores, recompute_asset_findings_risk
 from app.routers.auth import require_auth, require_role
 from app.settings import settings
@@ -598,13 +598,17 @@ def create_job(
             raise HTTPException(status_code=400, detail="job_params_json must be an object")
         lookback_minutes = int(job_params.get("lookback_minutes") or 60)
         if lookback_minutes < 5 or lookback_minutes > 10080:
-            raise HTTPException(status_code=400, detail="lookback_minutes must be between 5 and 10080")
+            raise HTTPException(
+                status_code=400, detail="lookback_minutes must be between 5 and 10080"
+            )
         correlation_rule_id = job_params.get("correlation_rule_id")
         if correlation_rule_id is not None:
             try:
                 numeric_rule_id = int(correlation_rule_id)
             except (TypeError, ValueError) as exc:
-                raise HTTPException(status_code=400, detail="correlation_rule_id must be an integer") from exc
+                raise HTTPException(
+                    status_code=400, detail="correlation_rule_id must be an integer"
+                ) from exc
             if numeric_rule_id <= 0:
                 raise HTTPException(status_code=400, detail="correlation_rule_id must be positive")
 

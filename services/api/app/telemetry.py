@@ -848,7 +848,9 @@ def ingest_telemetry_events(
         normalized["event_time"] = event_time
         ingest_lag_seconds = max(0.0, (datetime.now(UTC) - event_time).total_seconds())
         lag_seconds_values.append(ingest_lag_seconds)
-        event_collector = str(raw.get("collector") or normalized_collector).strip() or normalized_collector
+        event_collector = (
+            str(raw.get("collector") or normalized_collector).strip() or normalized_collector
+        )
         event_ingest_job_id = _parse_int(raw.get("ingest_job_id"))
         if event_ingest_job_id is None:
             event_ingest_job_id = normalized_ingest_job_id
@@ -905,7 +907,9 @@ def ingest_telemetry_events(
             )
         )
         inserted_events += 1
-        if event_collector and (event_ingest_job_id is not None or event_raw_path or event_raw_offset):
+        if event_collector and (
+            event_ingest_job_id is not None or event_raw_path or event_raw_offset
+        ):
             traceable_events += 1
 
         severity_text = normalize_alert_severity(normalized.get("severity_text"))

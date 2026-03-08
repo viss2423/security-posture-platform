@@ -314,7 +314,9 @@ def run_detection_rule(
                         .isoformat()
                         .replace("+00:00", "Z"),
                         "window_end": window_end.astimezone(UTC).isoformat().replace("+00:00", "Z"),
-                        "matched_event_ids": [int(event["event_id"]) for event in sorted_matches[:500]],
+                        "matched_event_ids": [
+                            int(event["event_id"]) for event in sorted_matches[:500]
+                        ],
                         "sample_matches": sorted_matches[:30],
                     }
                 ),
@@ -430,15 +432,13 @@ def run_detection_rule_job(job_id: int) -> None:
         lookback_hours = int(params.get("lookback_hours") or 24)
         job_type = str(job_row.get("job_type") or "detection_rule_test").strip().lower()
         run_mode = _normalize_run_mode(
-            str(params.get("run_mode") or "").strip().lower() or (
-                "scheduled" if job_type == "detection_rule_schedule" else "test"
-            ),
+            str(params.get("run_mode") or "").strip().lower()
+            or ("scheduled" if job_type == "detection_rule_schedule" else "test"),
             fallback="scheduled" if job_type == "detection_rule_schedule" else "test",
         )
         trigger_source = _normalize_trigger_source(
-            str(params.get("trigger_source") or "").strip().lower() or (
-                "scheduler" if job_type == "detection_rule_schedule" else "job"
-            ),
+            str(params.get("trigger_source") or "").strip().lower()
+            or ("scheduler" if job_type == "detection_rule_schedule" else "job"),
             fallback="scheduler" if job_type == "detection_rule_schedule" else "job",
         )
         schedule_ref = str(params.get("schedule_ref") or "").strip() or None
@@ -544,7 +544,9 @@ def _launch_detection_job(job_id: int, *, queued_job_type: str) -> None:
         requested_by,
     )
     if not published:
-        logger.warning("detection_rule_enqueue_failed job_id=%s job_type=%s", job_id, queued_job_type)
+        logger.warning(
+            "detection_rule_enqueue_failed job_id=%s job_type=%s", job_id, queued_job_type
+        )
 
 
 def launch_detection_rule_job(job_id: int) -> None:
@@ -669,7 +671,9 @@ def _correlation_step_matches(alert: dict[str, Any], step: dict[str, Any]) -> bo
         else:
             if str(alert.get("severity") or "").strip().lower() != str(severity).strip().lower():
                 return False
-    min_event_count = _safe_positive_int(step.get("min_event_count"), fallback=1, minimum=1, maximum=100000)
+    min_event_count = _safe_positive_int(
+        step.get("min_event_count"), fallback=1, minimum=1, maximum=100000
+    )
     try:
         event_count = int(alert.get("event_count") or 1)
     except (TypeError, ValueError):
@@ -696,7 +700,10 @@ def run_correlation_rule(
         fallback="asset_key",
     )
     effective_lookback = _safe_positive_int(
-        lookback_minutes or rule_row.get("window_minutes") or rule_definition.get("window_minutes") or 60,
+        lookback_minutes
+        or rule_row.get("window_minutes")
+        or rule_definition.get("window_minutes")
+        or 60,
         fallback=60,
         minimum=5,
         maximum=10080,
@@ -736,7 +743,9 @@ def run_correlation_rule(
         chain_step_counts: list[dict[str, Any]] = []
         chain_alert_ids: set[int] = set()
         for idx, step in enumerate(steps, start=1):
-            min_count = _safe_positive_int(step.get("min_count"), fallback=1, minimum=1, maximum=1000)
+            min_count = _safe_positive_int(
+                step.get("min_count"), fallback=1, minimum=1, maximum=1000
+            )
             matched = [alert for alert in alerts if _correlation_step_matches(alert, step)]
             if len(matched) < min_count:
                 chain_step_counts = []
@@ -774,7 +783,10 @@ def run_correlation_rule(
             }
         )
 
-    ordered_chains = sorted(matched_chains, key=lambda item: (str(item.get("group_key") or ""), str(item.get("group_by") or "")))
+    ordered_chains = sorted(
+        matched_chains,
+        key=lambda item: (str(item.get("group_key") or ""), str(item.get("group_by") or "")),
+    )
     snapshot_json = {
         "snapshot_version": 1,
         "correlation_rule_id": int(rule_row.get("correlation_rule_id") or 0),
@@ -830,7 +842,11 @@ def run_correlation_rule(
                 f"corr:{int(rule_row.get('correlation_rule_id') or 0)}:"
                 f"{group_key}:{window_end.strftime('%Y%m%d%H%M')}"
             )
-            asset_key = group_key if group_by == "asset_key" and group_key not in {"", "unassigned"} else None
+            asset_key = (
+                group_key
+                if group_by == "asset_key" and group_key not in {"", "unassigned"}
+                else None
+            )
             mitre_techniques = [str(rule_row.get("mitre_technique") or "").strip()]
             mitre_techniques = [item for item in mitre_techniques if item]
             alert = upsert_security_alert(
@@ -1007,21 +1023,20 @@ def run_correlation_pass_job(job_id: int) -> None:
         if not job_row:
             raise ValueError("correlation_job_not_found")
         params = _safe_json(job_row.get("job_params_json"), default={})
-        lookback_minutes = _safe_positive_int(params.get("lookback_minutes"), fallback=60, minimum=5, maximum=10080)
+        lookback_minutes = _safe_positive_int(
+            params.get("lookback_minutes"), fallback=60, minimum=5, maximum=10080
+        )
         correlation_rule_id = params.get("correlation_rule_id")
         if correlation_rule_id is not None:
             correlation_rule_id = int(correlation_rule_id)
         job_type = str(job_row.get("job_type") or "correlation_pass").strip().lower()
         run_mode = _normalize_correlation_run_mode(
-            str(params.get("run_mode") or "").strip().lower() or (
-                "job"
-            ),
+            str(params.get("run_mode") or "").strip().lower() or ("job"),
             fallback="job",
         )
         trigger_source = _normalize_trigger_source(
-            str(params.get("trigger_source") or "").strip().lower() or (
-                "scheduler" if run_mode == "scheduled" else "job"
-            ),
+            str(params.get("trigger_source") or "").strip().lower()
+            or ("scheduler" if run_mode == "scheduled" else "job"),
             fallback="scheduler" if run_mode == "scheduled" else "job",
         )
         schedule_ref = str(params.get("schedule_ref") or "").strip() or None

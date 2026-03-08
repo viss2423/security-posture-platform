@@ -190,7 +190,9 @@ def execute_rollback(
         }
 
 
-def list_rollbacks(db: Session, *, status: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+def list_rollbacks(
+    db: Session, *, status: str | None = None, limit: int = 200
+) -> list[dict[str, Any]]:
     clauses = ["1=1"]
     params: dict[str, Any] = {"limit": max(1, min(int(limit), 1000))}
     if status:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -21,7 +20,6 @@ from app.playbook_engine import (
     evaluate_playbook,
     load_enabled_playbooks,
     normalize_playbook_row,
-    required_role_for_risk_tier,
 )
 from app.request_context import request_id_ctx
 from app.rollback_service import execute_rollback, list_rollbacks
@@ -345,7 +343,9 @@ def update_playbook(
                     if body.rollback_steps is not None
                     else _safe_json(current.get("rollback_steps_json"), default=[])
                 ),
-                "enabled": bool(body.enabled) if body.enabled is not None else bool(current.get("enabled")),
+                "enabled": bool(body.enabled)
+                if body.enabled is not None
+                else bool(current.get("enabled")),
             },
         )
         .mappings()
@@ -879,4 +879,3 @@ def execute_rollback_item(
     )
     db.commit()
     return {"rollback": result, "run_status": run_status}
-

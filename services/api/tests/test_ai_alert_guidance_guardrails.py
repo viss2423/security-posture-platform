@@ -158,7 +158,10 @@ def test_alert_guidance_guardrails_drop_unknown_evidence(
                     {"statement": "Unsupported claim should be removed.", "evidence": ["E999"]}
                 ],
                 "recommendations": [
-                    {"statement": "Assign the responder and track timeline events.", "evidence": ["E2"]}
+                    {
+                        "statement": "Assign the responder and track timeline events.",
+                        "evidence": ["E2"],
+                    }
                 ],
             }
         ),
@@ -205,11 +208,17 @@ def test_alert_guidance_guardrails_fallback_on_invalid_output(
     assert generated.status_code == 200, generated.text
     body = generated.json()
     assert body.get("provider", "").endswith("-guarded")
-    assert body.get("recommended_action") in {"ack", "suppress", "assign", "escalate", "resolve", "monitor"}
+    assert body.get("recommended_action") in {
+        "ack",
+        "suppress",
+        "assign",
+        "escalate",
+        "resolve",
+        "monitor",
+    }
     assert body.get("urgency") in {"critical", "high", "medium", "low"}
 
     guardrails = (body.get("context_json") or {}).get("guardrails") or {}
     assert guardrails.get("mode") == "alert_grounded_v1"
     assert guardrails.get("parse_mode") == "fallback"
     assert guardrails.get("used_fallback_sections") is True
-

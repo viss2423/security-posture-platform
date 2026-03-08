@@ -512,7 +512,9 @@ def _list_security_event_alerts(
         enrichment_item = (enrichment_map or {}).get(asset_key) if asset_key else None
         if enrichment_item:
             item.update(enrichment_item)
-        item.update(_compute_effective_severity_fields(base_item=item, enrichment_item=enrichment_item))
+        item.update(
+            _compute_effective_severity_fields(base_item=item, enrichment_item=enrichment_item)
+        )
         out.append(item)
     return out
 
@@ -797,7 +799,9 @@ def alert_enrichment(
         for row in dedupe_rows
     ]
     payload["effective_severity"] = payload.get("severity_analysis", {}).get("effective_severity")
-    payload["effective_severity_score"] = payload.get("severity_analysis", {}).get("effective_score")
+    payload["effective_severity_score"] = payload.get("severity_analysis", {}).get(
+        "effective_score"
+    )
     return payload
 
 

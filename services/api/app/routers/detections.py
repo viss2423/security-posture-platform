@@ -7,9 +7,9 @@ import re
 from typing import Any
 from uuid import uuid4
 
+import yaml
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-import yaml
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -78,11 +78,15 @@ def _parse_rule_definition(
             if parsed is None:
                 parsed = {}
             if not isinstance(parsed, dict):
-                raise HTTPException(status_code=400, detail="YAML rule definition must be an object")
+                raise HTTPException(
+                    status_code=400, detail="YAML rule definition must be an object"
+                )
             return parsed, preferred_format, yaml_blob
         if normalized_json:
-            return normalized_json, preferred_format, yaml.safe_dump(
-                normalized_json, sort_keys=False
+            return (
+                normalized_json,
+                preferred_format,
+                yaml.safe_dump(normalized_json, sort_keys=False),
             )
         return {}, preferred_format, None
 
@@ -422,7 +426,9 @@ def update_detection_rule(
             if body.definition_yaml is not None
             else str(current.get("definition_yaml") or "").strip() or None
         ),
-        rule_format=(body.rule_format if body.rule_format is not None else current.get("rule_format")),
+        rule_format=(
+            body.rule_format if body.rule_format is not None else current.get("rule_format")
+        ),
     )
     rule_key = (
         body.rule_key.strip().lower()
@@ -486,7 +492,9 @@ def update_detection_rule(
                     else (current.get("mitre_technique") or None)
                 ),
                 "parent_rule_id": (
-                    int(body.parent_rule_id) if body.parent_rule_id else current.get("parent_rule_id")
+                    int(body.parent_rule_id)
+                    if body.parent_rule_id
+                    else current.get("parent_rule_id")
                 ),
                 "stage": (
                     _normalize_rule_stage(body.stage)
@@ -822,7 +830,10 @@ def mitre_coverage(
             for technique, count in sorted(techniques.items(), key=lambda item: (-item[1], item[0]))
         ],
         "top_detected_techniques": [
-            {"mitre_technique": str(item.get("technique") or ""), "detections": int(item.get("detections") or 0)}
+            {
+                "mitre_technique": str(item.get("technique") or ""),
+                "detections": int(item.get("detections") or 0),
+            }
             for item in top_detected
         ],
     }

@@ -292,7 +292,9 @@ def run_attack_surface_discovery(
             {
                 "requested_by": requested_by,
                 "source_job_id": source_job_id,
-                "metadata_json": json.dumps({"domains": domains or [], "cert_salt": cert_salt or ""}),
+                "metadata_json": json.dumps(
+                    {"domains": domains or [], "cert_salt": cert_salt or ""}
+                ),
             },
         )
         .mappings()
@@ -446,7 +448,7 @@ def run_attack_surface_discovery(
             )
 
         if 443 in ports or str(address).startswith("https://"):
-            fingerprint = hashlib.sha256(f"{host}|{cert_seed}".encode("utf-8")).hexdigest()
+            fingerprint = hashlib.sha256(f"{host}|{cert_seed}".encode()).hexdigest()
             now = datetime.now(UTC)
             db.execute(
                 text(
@@ -610,7 +612,11 @@ def run_attack_surface_discovery(
     for row in cert_rows:
         hostname = str(row.get("hostname") or "")
         fingerprint = str(row.get("fingerprint_sha256") or "")
-        if hostname and previous_certs.get(hostname) and previous_certs.get(hostname) != fingerprint:
+        if (
+            hostname
+            and previous_certs.get(hostname)
+            and previous_certs.get(hostname) != fingerprint
+        ):
             _insert_drift_event(
                 db,
                 run_id=run_id,
@@ -618,7 +624,10 @@ def run_attack_surface_discovery(
                 severity="high",
                 asset_key=str(row.get("asset_key") or "") or None,
                 hostname=hostname,
-                details={"previous_fingerprint": previous_certs.get(hostname), "fingerprint": fingerprint},
+                details={
+                    "previous_fingerprint": previous_certs.get(hostname),
+                    "fingerprint": fingerprint,
+                },
             )
 
     exposures: list[dict[str, Any]] = []
@@ -778,4 +787,3 @@ def run_attack_surface_discovery_job(job_id: int) -> None:
 def launch_attack_surface_discovery_job(job_id: int) -> None:
     thread = Thread(target=run_attack_surface_discovery_job, args=(int(job_id),), daemon=True)
     thread.start()
-

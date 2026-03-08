@@ -187,7 +187,9 @@ def evaluate_condition(condition: dict[str, Any], context: dict[str, Any]) -> bo
     return False
 
 
-def evaluate_conditions(conditions: list[dict[str, Any]], context: dict[str, Any]) -> dict[str, Any]:
+def evaluate_conditions(
+    conditions: list[dict[str, Any]], context: dict[str, Any]
+) -> dict[str, Any]:
     if not conditions:
         return {"matched": True, "matched_conditions": [], "failed_conditions": []}
     matched_conditions: list[dict[str, Any]] = []
@@ -234,7 +236,9 @@ def resolve_templates(value: Any, context: dict[str, Any]) -> Any:
     return _TEMPLATE_PATTERN.sub(_replace, value)
 
 
-def normalize_action(action: dict[str, Any], *, context: dict[str, Any], index: int) -> dict[str, Any]:
+def normalize_action(
+    action: dict[str, Any], *, context: dict[str, Any], index: int
+) -> dict[str, Any]:
     action_type = str(action.get("type") or "").strip().lower()
     params = resolve_templates(dict(action.get("params") or {}), context)
     risk_tier = action_risk_tier(action)

@@ -84,7 +84,14 @@ def _new_graph() -> dict[str, Any]:
     }
 
 
-def _upsert_node(nodes: dict[str, dict[str, Any]], *, node_id: str, node_type: str, label: str, metadata: dict[str, Any] | None = None) -> None:
+def _upsert_node(
+    nodes: dict[str, dict[str, Any]],
+    *,
+    node_id: str,
+    node_type: str,
+    label: str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
     current = nodes.get(node_id)
     if current:
         if metadata:
@@ -311,7 +318,9 @@ def _collect_asset_graph(
         )
 
 
-def build_incident_attack_graph(conn: Any, *, incident_id: int, lookback_hours: int = 72) -> dict[str, Any]:
+def build_incident_attack_graph(
+    conn: Any, *, incident_id: int, lookback_hours: int = 72
+) -> dict[str, Any]:
     incident = (
         conn.execute(
             text(
@@ -381,7 +390,9 @@ def build_incident_attack_graph(conn: Any, *, incident_id: int, lookback_hours: 
             alert_id = int(row.get("alert_id") or 0)
             if alert_id > 0:
                 alert_node_id = f"alert:{alert_id}"
-                _upsert_node(nodes, node_id=alert_node_id, node_type="alert", label=f"Alert {alert_id}")
+                _upsert_node(
+                    nodes, node_id=alert_node_id, node_type="alert", label=f"Alert {alert_id}"
+                )
                 _upsert_edge(
                     edges,
                     source=incident_node_id,
@@ -411,7 +422,9 @@ def build_incident_attack_graph(conn: Any, *, incident_id: int, lookback_hours: 
         "edges": list(edges.values()),
         "kill_chain": [
             {"phase": phase, "count": count}
-            for phase, count in sorted(kill_chain_counter.items(), key=lambda item: item[1], reverse=True)
+            for phase, count in sorted(
+                kill_chain_counter.items(), key=lambda item: item[1], reverse=True
+            )
         ],
         "summary": {
             "incident_id": int(incident_id),
@@ -423,7 +436,9 @@ def build_incident_attack_graph(conn: Any, *, incident_id: int, lookback_hours: 
     return graph
 
 
-def build_asset_attack_graph(conn: Any, *, asset_key: str, lookback_hours: int = 72) -> dict[str, Any]:
+def build_asset_attack_graph(
+    conn: Any, *, asset_key: str, lookback_hours: int = 72
+) -> dict[str, Any]:
     normalized = str(asset_key or "").strip()
     if not normalized:
         return _new_graph()
@@ -444,7 +459,9 @@ def build_asset_attack_graph(conn: Any, *, asset_key: str, lookback_hours: int =
         "edges": list(edges.values()),
         "kill_chain": [
             {"phase": phase, "count": count}
-            for phase, count in sorted(kill_chain_counter.items(), key=lambda item: item[1], reverse=True)
+            for phase, count in sorted(
+                kill_chain_counter.items(), key=lambda item: item[1], reverse=True
+            )
         ],
         "summary": {
             "asset_key": normalized,
@@ -453,4 +470,3 @@ def build_asset_attack_graph(conn: Any, *, asset_key: str, lookback_hours: int =
             "kill_chain_phases": len(kill_chain_counter),
         },
     }
-

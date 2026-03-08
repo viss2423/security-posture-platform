@@ -32,7 +32,9 @@ def _refresh_snapshot(db: Session) -> dict:
 def list_asset_risk(
     limit: int = Query(200, ge=1, le=2000),
     include_trend_days: int = Query(30, ge=1, le=180),
-    refresh: bool = Query(True, description="Recompute and persist a daily snapshot before returning"),
+    refresh: bool = Query(
+        True, description="Recompute and persist a daily snapshot before returning"
+    ),
     db: Session = Depends(get_db),
     user: str = Depends(require_auth),
 ):

@@ -2255,9 +2255,14 @@ def generate_alert_guidance(
             )
             stored_context = compact_context
             context_signature = _alert_context_signature(compact_context)
-            guidance_text, recommended_action, urgency, sections, used_fallback_sections, parse_mode = (
-                _finalize_guidance(raw_guidance)
-            )
+            (
+                guidance_text,
+                recommended_action,
+                urgency,
+                sections,
+                used_fallback_sections,
+                parse_mode,
+            ) = _finalize_guidance(raw_guidance)
         except AIClientError as retry_error:
             raise HTTPException(
                 status_code=503,

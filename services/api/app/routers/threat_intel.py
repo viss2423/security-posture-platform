@@ -213,7 +213,9 @@ def get_threat_intel_summary(
             "match_count": int(row.get("match_count") or 0),
             "indicators": list(row.get("indicators") or [])[:5],
             "max_confidence": float(row.get("max_confidence") or 0.0),
-            "campaign_tags": [str(item) for item in (row.get("campaign_tags") or []) if str(item or "").strip()],
+            "campaign_tags": [
+                str(item) for item in (row.get("campaign_tags") or []) if str(item or "").strip()
+            ],
         }
         for row in asset_rows
     ]
@@ -253,7 +255,8 @@ def get_threat_intel_summary(
             "indicator": row.get("indicator"),
             "indicator_type": row.get("indicator_type"),
             "confidence_score": float(row.get("confidence_score") or 0.0),
-            "confidence_label": row.get("confidence_label") or confidence_label(float(row.get("confidence_score") or 0.0)),
+            "confidence_label": row.get("confidence_label")
+            or confidence_label(float(row.get("confidence_score") or 0.0)),
             "campaign_tag": row.get("campaign_tag"),
             "last_match_count": int(row.get("last_match_count") or 0),
             "last_seen_at": _serialize_datetime(row.get("last_seen_at")),

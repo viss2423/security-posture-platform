@@ -29,13 +29,21 @@ def client():
 
 def _login(client: TestClient, username: str, password: str) -> tuple[int, dict]:
     response = client.post("/auth/login", data={"username": username, "password": password})
-    payload = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+    payload = (
+        response.json()
+        if response.headers.get("content-type", "").startswith("application/json")
+        else {}
+    )
     return response.status_code, payload
 
 
 def _refresh(client: TestClient, refresh_token: str) -> tuple[int, dict]:
     response = client.post("/auth/refresh", json={"refresh_token": refresh_token})
-    payload = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+    payload = (
+        response.json()
+        if response.headers.get("content-type", "").startswith("application/json")
+        else {}
+    )
     return response.status_code, payload
 
 

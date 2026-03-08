@@ -87,7 +87,11 @@ def build_incident_guardrail_bundle(context: dict[str, Any]) -> dict[str, Any]:
     alert_count_id = add_evidence("incident.alert_count", len(alerts))
     timeline_count_id = add_evidence("incident.timeline_count", len(timeline))
     asset_keys = sorted(
-        {str(item.get("asset_key") or "").strip() for item in alerts if str(item.get("asset_key") or "").strip()}
+        {
+            str(item.get("asset_key") or "").strip()
+            for item in alerts
+            if str(item.get("asset_key") or "").strip()
+        }
     )
     assets_id = add_evidence("incident.affected_assets", asset_keys)
 
@@ -270,7 +274,9 @@ def build_finding_guardrail_bundle(context: dict[str, Any]) -> dict[str, Any]:
         inference.append(
             {
                 "statement": "Exploit impact is likely meaningful and should be prioritized for remediation.",
-                "evidence": [eid for eid in [severity_id, asset_criticality_id, risk_score_id] if eid],
+                "evidence": [
+                    eid for eid in [severity_id, asset_criticality_id, risk_score_id] if eid
+                ],
             }
         )
     if criticality in {"critical", "high"}:
@@ -349,7 +355,9 @@ def build_alert_guardrail_bundle(context: dict[str, Any]) -> dict[str, Any]:
         "finding_summary.active_finding_count",
         finding_summary.get("active_finding_count"),
     )
-    top_risk_id = add_evidence("finding_summary.top_risk_score", finding_summary.get("top_risk_score"))
+    top_risk_id = add_evidence(
+        "finding_summary.top_risk_score", finding_summary.get("top_risk_score")
+    )
     unhealthy_events_id = add_evidence(
         "timeline_signals.unhealthy_events",
         timeline_signals.get("unhealthy_events"),
@@ -362,7 +370,9 @@ def build_alert_guardrail_bundle(context: dict[str, Any]) -> dict[str, Any]:
         "decision_signals.has_open_incident",
         decision_signals.get("has_open_incident"),
     )
-    response_bias_id = add_evidence("decision_signals.response_bias", decision_signals.get("response_bias"))
+    response_bias_id = add_evidence(
+        "decision_signals.response_bias", decision_signals.get("response_bias")
+    )
 
     facts: list[dict[str, Any]] = []
     facts.append(
@@ -409,14 +419,18 @@ def build_alert_guardrail_bundle(context: dict[str, Any]) -> dict[str, Any]:
         inference.append(
             {
                 "statement": "Service risk remains elevated while posture is degraded.",
-                "evidence": [eid for eid in [posture_id, posture_score_id, unhealthy_events_id] if eid],
+                "evidence": [
+                    eid for eid in [posture_id, posture_score_id, unhealthy_events_id] if eid
+                ],
             }
         )
     if suppression.get("active") or maintenance.get("active"):
         inference.append(
             {
                 "statement": "Alert noise control may be appropriate while maintenance/suppression is active.",
-                "evidence": [eid for eid in [maintenance_id, suppression_id, response_bias_id] if eid],
+                "evidence": [
+                    eid for eid in [maintenance_id, suppression_id, response_bias_id] if eid
+                ],
             }
         )
 
@@ -436,7 +450,9 @@ def build_alert_guardrail_bundle(context: dict[str, Any]) -> dict[str, Any]:
     recommendations.append(
         {
             "statement": "Track fresh telemetry signals to verify stabilization after response action.",
-            "evidence": [eid for eid in [unhealthy_events_id, timeout_events_id, environment_id] if eid],
+            "evidence": [
+                eid for eid in [unhealthy_events_id, timeout_events_id, environment_id] if eid
+            ],
         }
     )
 
@@ -452,13 +468,19 @@ def build_alert_guardrail_bundle(context: dict[str, Any]) -> dict[str, Any]:
 
 def build_policy_guardrail_bundle(context: dict[str, Any]) -> dict[str, Any]:
     evaluation = dict(context.get("evaluation") or {})
-    failed_rules = [dict(item) for item in (context.get("failed_rules") or []) if isinstance(item, dict)]
-    top_assets = [dict(item) for item in (context.get("top_assets") or []) if isinstance(item, dict)]
+    failed_rules = [
+        dict(item) for item in (context.get("failed_rules") or []) if isinstance(item, dict)
+    ]
+    top_assets = [
+        dict(item) for item in (context.get("top_assets") or []) if isinstance(item, dict)
+    ]
     violation_themes = [
         dict(item) for item in (context.get("violation_themes") or []) if isinstance(item, dict)
     ]
     remediation_priorities = [
-        str(item).strip() for item in (context.get("remediation_priorities") or []) if str(item).strip()
+        str(item).strip()
+        for item in (context.get("remediation_priorities") or [])
+        if str(item).strip()
     ]
     sample_violations = [
         dict(item) for item in (context.get("sample_violations") or []) if isinstance(item, dict)
@@ -483,16 +505,30 @@ def build_policy_guardrail_bundle(context: dict[str, Any]) -> dict[str, Any]:
         evaluation.get("failed_rules_count"),
     )
 
-    top_rule_names = [str(item.get("name") or "").strip() for item in failed_rules if str(item.get("name") or "").strip()][:3]
-    top_rule_types = [str(item.get("type") or "").strip() for item in failed_rules if str(item.get("type") or "").strip()][:3]
+    top_rule_names = [
+        str(item.get("name") or "").strip()
+        for item in failed_rules
+        if str(item.get("name") or "").strip()
+    ][:3]
+    top_rule_types = [
+        str(item.get("type") or "").strip()
+        for item in failed_rules
+        if str(item.get("type") or "").strip()
+    ][:3]
     top_rule_id = add_evidence("failed_rules.top_names", top_rule_names)
     top_rule_types_id = add_evidence("failed_rules.top_types", top_rule_types)
 
-    top_asset_keys = [str(item.get("asset_key") or "").strip() for item in top_assets if str(item.get("asset_key") or "").strip()][:5]
+    top_asset_keys = [
+        str(item.get("asset_key") or "").strip()
+        for item in top_assets
+        if str(item.get("asset_key") or "").strip()
+    ][:5]
     top_assets_id = add_evidence("top_assets.keys", top_asset_keys)
 
     top_theme_labels = [
-        str(item.get("label") or "").strip() for item in violation_themes if str(item.get("label") or "").strip()
+        str(item.get("label") or "").strip()
+        for item in violation_themes
+        if str(item.get("label") or "").strip()
     ][:4]
     top_themes_id = add_evidence("violation_themes.labels", top_theme_labels)
     remediation_id = add_evidence(

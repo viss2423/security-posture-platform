@@ -1346,7 +1346,11 @@ def posture_alert_send(
             down_assets=down_assets,
             incident_key=incident_key,
         )
-        payload = {"queued": True, "down_assets": down_assets, "message": "Alert queued for notifier."}
+        payload = {
+            "queued": True,
+            "down_assets": down_assets,
+            "message": "Alert queued for notifier.",
+        }
         log_audit(
             db,
             "posture_alert.send",

@@ -10,6 +10,8 @@ from sqlalchemy import text
 
 CRITICALITY_BASE = {"high": 24, "medium": 14, "low": 7}
 INCIDENT_SEVERITY_BASE = {"critical": 80, "high": 65, "medium": 45, "low": 25, "info": 12}
+
+
 def _risk_level(score: int) -> str:
     if score >= 85:
         return "critical"
@@ -114,9 +116,12 @@ def compute_asset_risk_rows(conn: Any, *, limit: int = 5000) -> list[dict[str, A
 
         driver_map = {
             "asset_criticality": float(CRITICALITY_BASE.get(criticality, 12)),
-            "finding_risk": min(35.0, top_finding_risk * 0.35 + active_findings * 3 + high_findings * 4),
+            "finding_risk": min(
+                35.0, top_finding_risk * 0.35 + active_findings * 3 + high_findings * 4
+            ),
             "alert_pressure": min(22.0, active_alerts * 2.5 + high_alerts * 5),
-            "internet_exposure": min(25.0, exposure_score * 0.25) + (8.0 if internet_exposed else 0.0),
+            "internet_exposure": min(25.0, exposure_score * 0.25)
+            + (8.0 if internet_exposed else 0.0),
             "anomaly_score": min(12.0, max(0.0, anomaly_score) * 2.2),
         }
         if active_findings == 0 and active_alerts == 0:
@@ -205,7 +210,9 @@ def compute_incident_risk_rows(conn: Any, *, limit: int = 300) -> list[dict[str,
             "linked_alert_chain": min(18.0, linked_alerts * 4.5),
             "linked_asset_context": min(14.0, linked_assets * 3.5),
             "asset_risk_context": min(16.0, mean_asset_score * 0.2),
-            "age_pressure": min(10.0, age_days * 1.5) if status not in {"resolved", "closed"} else -12.0,
+            "age_pressure": min(10.0, age_days * 1.5)
+            if status not in {"resolved", "closed"}
+            else -12.0,
         }
         if status in {"resolved", "closed"}:
             driver_map["resolved_reduction"] = -20.0

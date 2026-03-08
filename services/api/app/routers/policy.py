@@ -125,7 +125,11 @@ def create_bundle(
                 RETURNING id, name, status, created_at
                 """
             ),
-            {"name": body.name, "description": body.description or "", "definition": body.definition},
+            {
+                "name": body.name,
+                "description": body.description or "",
+                "definition": body.definition,
+            },
         )
         .mappings()
         .first()

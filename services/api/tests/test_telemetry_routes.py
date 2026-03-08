@@ -323,7 +323,8 @@ def test_telemetry_lineage_filters_and_summary_metrics(client, admin_headers):
     matched = next(
         item
         for item in events
-        if str(item.get("asset_key") or "") == asset_key and str(item.get("collector") or "") == collector
+        if str(item.get("asset_key") or "") == asset_key
+        and str(item.get("collector") or "") == collector
     )
     assert matched.get("raw_path") == raw_path
     assert int(matched.get("raw_offset") or 0) >= 1
@@ -532,7 +533,9 @@ def test_detection_rule_simulate_and_scheduled_execution(client, admin_headers):
     assert execute_body["job_type"] == "detection_rule_schedule"
     assert execute_body["status"] == "done"
 
-    runs_response = client.get(f"/detections/runs?rule_id={rule_id}&limit=10", headers=admin_headers)
+    runs_response = client.get(
+        f"/detections/runs?rule_id={rule_id}&limit=10", headers=admin_headers
+    )
     assert runs_response.status_code == 200, runs_response.text
     runs = runs_response.json().get("items") or []
     assert any(

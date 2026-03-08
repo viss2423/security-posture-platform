@@ -12,9 +12,7 @@ from pydantic import BaseModel, Field, field_validator
 class EventEnvelope(BaseModel):
     event_id: str = Field(default_factory=lambda: str(uuid4()))
     event_type: str
-    ts: str = Field(
-        default_factory=lambda: datetime.now(UTC).isoformat().replace("+00:00", "Z")
-    )
+    ts: str = Field(default_factory=lambda: datetime.now(UTC).isoformat().replace("+00:00", "Z"))
     org_id: str = "default"
     request_id: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
@@ -50,4 +48,3 @@ def build_event_envelope(
         request_id=(request_id or "").strip() or None,
         org_id=(org_id or "default").strip() or "default",
     )
-

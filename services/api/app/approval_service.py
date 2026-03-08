@@ -112,15 +112,19 @@ def decide_approval(
             RETURNING *
             """
         )
-    row = db.execute(
-        stmt,
-        {
-            "approval_id": int(approval_id),
-            "actor": actor,
-            "note": (note or "").strip() or None,
-            "now": now,
-        },
-    ).mappings().first()
+    row = (
+        db.execute(
+            stmt,
+            {
+                "approval_id": int(approval_id),
+                "actor": actor,
+                "note": (note or "").strip() or None,
+                "now": now,
+            },
+        )
+        .mappings()
+        .first()
+    )
     return _serialize(dict(row)) if row else None
 
 

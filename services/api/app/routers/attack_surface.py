@@ -56,9 +56,7 @@ def run_discovery(
     user: str = Depends(require_role(["admin", "analyst"])),
 ):
     normalized_domains = [
-        str(item or "").strip().lower()
-        for item in (body.domains or [])
-        if str(item or "").strip()
+        str(item or "").strip().lower() for item in (body.domains or []) if str(item or "").strip()
     ]
     result = run_attack_surface_discovery(
         db,
@@ -308,7 +306,8 @@ def list_discovered_certs(
     return {
         "run_id": target_run_id,
         "items": [
-            _serialize_times(dict(row), ["not_before", "not_after", "discovered_at"]) for row in rows
+            _serialize_times(dict(row), ["not_before", "not_after", "discovered_at"])
+            for row in rows
         ],
     }
 

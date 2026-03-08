@@ -29,6 +29,7 @@ else:
     def run_startup_migrations():
         return None
 
+
 pytestmark = pytest.mark.skipif(
     not POSTGRES_DSN,
     reason="POSTGRES_DSN not set; jobs execute endpoint tests require Postgres",

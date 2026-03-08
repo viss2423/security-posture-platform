@@ -190,11 +190,7 @@ def _serialize_decision(row: dict) -> dict:
 def _parse_csv_filter(raw: str | None) -> set[str] | None:
     if raw is None:
         return None
-    values = {
-        str(item).strip().lower()
-        for item in str(raw).split(",")
-        if str(item).strip()
-    }
+    values = {str(item).strip().lower() for item in str(raw).split(",") if str(item).strip()}
     return values or None
 
 
@@ -256,10 +252,9 @@ def _insert_incident_evidence(
 
 
 def _has_open_incident_for_asset(db: Session, asset_key: str) -> bool:
-    row = (
-        db.execute(
-            text(
-                """
+    row = db.execute(
+        text(
+            """
                 SELECT 1
                 FROM incident_alerts ia
                 JOIN incidents i ON i.id = ia.incident_id
@@ -267,11 +262,9 @@ def _has_open_incident_for_asset(db: Session, asset_key: str) -> bool:
                   AND i.status NOT IN ('resolved', 'closed')
                 LIMIT 1
                 """
-            ),
-            {"asset_key": asset_key},
-        )
-        .first()
-    )
+        ),
+        {"asset_key": asset_key},
+    ).first()
     return row is not None
 
 
@@ -565,56 +558,72 @@ def get_incident(
     incident["timeline"] = _incident_timeline_aggregated(db, incident_id)
     incident["linked_risk"] = _load_incident_linked_risk(db, incident_id)
 
-    evidence_rows = db.execute(
-        text(
-            """
+    evidence_rows = (
+        db.execute(
+            text(
+                """
             SELECT evidence_id, incident_id, evidence_type, ref_id, relation, summary, details, added_by, created_at
             FROM incident_evidence
             WHERE incident_id = :id
             ORDER BY created_at ASC, evidence_id ASC
             """
-        ),
-        {"id": incident_id},
-    ).mappings().all()
+            ),
+            {"id": incident_id},
+        )
+        .mappings()
+        .all()
+    )
     incident["evidence"] = [_serialize_evidence(dict(row)) for row in evidence_rows]
 
-    watcher_rows = db.execute(
-        text(
-            """
+    watcher_rows = (
+        db.execute(
+            text(
+                """
             SELECT incident_id, username, added_by, added_at
             FROM incident_watchers
             WHERE incident_id = :id
             ORDER BY added_at ASC, username ASC
             """
-        ),
-        {"id": incident_id},
-    ).mappings().all()
+            ),
+            {"id": incident_id},
+        )
+        .mappings()
+        .all()
+    )
     incident["watchers"] = [_serialize_watcher(dict(row)) for row in watcher_rows]
 
-    checklist_rows = db.execute(
-        text(
-            """
+    checklist_rows = (
+        db.execute(
+            text(
+                """
             SELECT item_id, incident_id, title, done, done_by, done_at, created_by, created_at, updated_at
             FROM incident_checklist_items
             WHERE incident_id = :id
             ORDER BY created_at ASC, item_id ASC
             """
-        ),
-        {"id": incident_id},
-    ).mappings().all()
+            ),
+            {"id": incident_id},
+        )
+        .mappings()
+        .all()
+    )
     incident["checklist"] = [_serialize_checklist_item(dict(row)) for row in checklist_rows]
 
-    decision_rows = db.execute(
-        text(
-            """
+    decision_rows = (
+        db.execute(
+            text(
+                """
             SELECT decision_id, incident_id, decision, rationale, decided_by, details, created_at
             FROM incident_decisions
             WHERE incident_id = :id
             ORDER BY created_at ASC, decision_id ASC
             """
-        ),
-        {"id": incident_id},
-    ).mappings().all()
+            ),
+            {"id": incident_id},
+        )
+        .mappings()
+        .all()
+    )
     incident["decisions"] = [_serialize_decision(dict(row)) for row in decision_rows]
 
     return incident
@@ -1118,7 +1127,9 @@ def list_incident_evidence(
     db: Session = Depends(get_db),
     _user: str = Depends(require_auth),
 ):
-    exists = db.execute(text("SELECT id FROM incidents WHERE id = :id"), {"id": incident_id}).scalar()
+    exists = db.execute(
+        text("SELECT id FROM incidents WHERE id = :id"), {"id": incident_id}
+    ).scalar()
     if not exists:
         raise HTTPException(status_code=404, detail="Incident not found")
     rows = (
@@ -1150,7 +1161,9 @@ def add_incident_evidence(
     evidence_type = str(body.evidence_type or "").strip().lower()
     if evidence_type not in valid_types:
         raise HTTPException(status_code=400, detail="Invalid evidence_type")
-    exists = db.execute(text("SELECT id FROM incidents WHERE id = :id"), {"id": incident_id}).scalar()
+    exists = db.execute(
+        text("SELECT id FROM incidents WHERE id = :id"), {"id": incident_id}
+    ).scalar()
     if not exists:
         raise HTTPException(status_code=404, detail="Incident not found")
     _insert_incident_evidence(
@@ -1208,15 +1221,20 @@ def add_incident_evidence(
 def get_incident_timeline(
     incident_id: int,
     source_type: str | None = Query(
-        None, description="Optional comma-separated source types (note, alert, finding, log, job, automation, response)"
+        None,
+        description="Optional comma-separated source types (note, alert, finding, log, job, automation, response)",
     ),
-    event_type: str | None = Query(None, description="Optional comma-separated timeline event types"),
+    event_type: str | None = Query(
+        None, description="Optional comma-separated timeline event types"
+    ),
     lookback_hours: int = Query(72, ge=1, le=720),
     limit: int = Query(500, ge=1, le=2000),
     db: Session = Depends(get_db),
     _user: str = Depends(require_auth),
 ):
-    exists = db.execute(text("SELECT id FROM incidents WHERE id = :id"), {"id": incident_id}).scalar()
+    exists = db.execute(
+        text("SELECT id FROM incidents WHERE id = :id"), {"id": incident_id}
+    ).scalar()
     if not exists:
         raise HTTPException(status_code=404, detail="Incident not found")
     source_types = _parse_csv_filter(source_type)
@@ -1272,7 +1290,9 @@ def add_incident_watcher(
     username = (body.username or "").strip()
     if not username:
         raise HTTPException(status_code=400, detail="username required")
-    exists = db.execute(text("SELECT id FROM incidents WHERE id = :id"), {"id": incident_id}).scalar()
+    exists = db.execute(
+        text("SELECT id FROM incidents WHERE id = :id"), {"id": incident_id}
+    ).scalar()
     if not exists:
         raise HTTPException(status_code=404, detail="Incident not found")
     db.execute(
@@ -1383,7 +1403,9 @@ def add_incident_checklist_item(
     title = (body.title or "").strip()
     if not title:
         raise HTTPException(status_code=400, detail="title required")
-    exists = db.execute(text("SELECT id FROM incidents WHERE id = :id"), {"id": incident_id}).scalar()
+    exists = db.execute(
+        text("SELECT id FROM incidents WHERE id = :id"), {"id": incident_id}
+    ).scalar()
     if not exists:
         raise HTTPException(status_code=404, detail="Incident not found")
     row = (
@@ -1420,7 +1442,9 @@ def update_incident_checklist_item(
     db: Session = Depends(get_db),
     user: str = Depends(require_role(["admin", "analyst"])),
 ):
-    exists = db.execute(text("SELECT id FROM incidents WHERE id = :id"), {"id": incident_id}).scalar()
+    exists = db.execute(
+        text("SELECT id FROM incidents WHERE id = :id"), {"id": incident_id}
+    ).scalar()
     if not exists:
         raise HTTPException(status_code=404, detail="Incident not found")
     row = (
@@ -1502,7 +1526,9 @@ def add_incident_decision(
     decision = (body.decision or "").strip()
     if not decision:
         raise HTTPException(status_code=400, detail="decision required")
-    exists = db.execute(text("SELECT id FROM incidents WHERE id = :id"), {"id": incident_id}).scalar()
+    exists = db.execute(
+        text("SELECT id FROM incidents WHERE id = :id"), {"id": incident_id}
+    ).scalar()
     if not exists:
         raise HTTPException(status_code=404, detail="Incident not found")
     row = (
@@ -1530,7 +1556,10 @@ def add_incident_decision(
         db,
         "incident.decision.add",
         user_name=user,
-        details={"incident_id": incident_id, "decision_id": int(row["decision_id"]) if row else None},
+        details={
+            "incident_id": incident_id,
+            "decision_id": int(row["decision_id"]) if row else None,
+        },
         request_id=request_id_ctx.get(None),
     )
     db.commit()
@@ -1660,10 +1689,14 @@ def update_incident_auto_rule(
     if not current:
         raise HTTPException(status_code=404, detail="Incident auto rule not found")
     severity_threshold = (
-        body.severity_threshold if body.severity_threshold is not None else current["severity_threshold"]
+        body.severity_threshold
+        if body.severity_threshold is not None
+        else current["severity_threshold"]
     )
     incident_severity = (
-        body.incident_severity if body.incident_severity is not None else current["incident_severity"]
+        body.incident_severity
+        if body.incident_severity is not None
+        else current["incident_severity"]
     )
     if severity_threshold not in VALID_SEVERITY:
         raise HTTPException(status_code=400, detail="Invalid severity_threshold")
@@ -1695,7 +1728,9 @@ def update_incident_auto_rule(
                 "description": (
                     body.description if body.description is not None else current["description"]
                 ),
-                "enabled": bool(body.enabled) if body.enabled is not None else bool(current["enabled"]),
+                "enabled": bool(body.enabled)
+                if body.enabled is not None
+                else bool(current["enabled"]),
                 "severity_threshold": severity_threshold,
                 "window_minutes": (
                     max(1, int(body.window_minutes))

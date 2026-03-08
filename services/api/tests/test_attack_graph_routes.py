@@ -142,4 +142,3 @@ def test_attack_graph_incident_and_query(client: TestClient, admin_headers: dict
     query_node_ids = {str(item.get("id") or "") for item in query_body.get("nodes") or []}
     assert f"asset:{asset_key}" in query_node_ids
     assert int(query_body.get("summary", {}).get("node_count") or 0) >= 1
-

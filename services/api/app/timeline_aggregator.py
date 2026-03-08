@@ -624,7 +624,9 @@ def build_incident_timeline(
                     "params_json": params_json,
                     "result_json": result_json,
                 },
-                "created_at": _as_iso(row.get("finished_at") or row.get("started_at") or row.get("created_at")),
+                "created_at": _as_iso(
+                    row.get("finished_at") or row.get("started_at") or row.get("created_at")
+                ),
                 "source_type": "automation",
                 "source_id": f"automation_run_action:{run_action_id}",
             }
@@ -672,7 +674,9 @@ def build_incident_timeline(
     if event_types:
         allowed_events = {str(item).strip().lower() for item in event_types if str(item).strip()}
         events = [
-            item for item in events if str(item.get("event_type") or "").strip().lower() in allowed_events
+            item
+            for item in events
+            if str(item.get("event_type") or "").strip().lower() in allowed_events
         ]
     if limit_total is not None:
         limited = max(1, min(int(limit_total), 5000))

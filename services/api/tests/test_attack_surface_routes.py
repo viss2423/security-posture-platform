@@ -112,9 +112,13 @@ def test_attack_surface_discovery_and_drift(client: TestClient, admin_headers: d
     assert int(first_body["summary"]["hosts_discovered"]) >= 2
     assert int(first_body["summary"]["services_discovered"]) >= 2
 
-    hosts = client.get(f"/attack-surface/discovery/hosts?run_id={run_one_id}", headers=admin_headers)
+    hosts = client.get(
+        f"/attack-surface/discovery/hosts?run_id={run_one_id}", headers=admin_headers
+    )
     assert hosts.status_code == 200, hosts.text
-    assert any(str(item.get("asset_key")) == source_asset for item in hosts.json().get("items") or [])
+    assert any(
+        str(item.get("asset_key")) == source_asset for item in hosts.json().get("items") or []
+    )
 
     services = client.get(
         f"/attack-surface/discovery/services?run_id={run_one_id}",
@@ -149,7 +153,9 @@ def test_attack_surface_discovery_and_drift(client: TestClient, admin_headers: d
         headers=admin_headers,
     )
     assert first_drift.status_code == 200, first_drift.text
-    first_drift_types = {str(item.get("event_type") or "") for item in first_drift.json().get("items") or []}
+    first_drift_types = {
+        str(item.get("event_type") or "") for item in first_drift.json().get("items") or []
+    }
     assert "new_host" in first_drift_types
 
     updated_asset = client.patch(
@@ -173,7 +179,9 @@ def test_attack_surface_discovery_and_drift(client: TestClient, admin_headers: d
         headers=admin_headers,
     )
     assert second_drift.status_code == 200, second_drift.text
-    second_drift_types = {str(item.get("event_type") or "") for item in second_drift.json().get("items") or []}
+    second_drift_types = {
+        str(item.get("event_type") or "") for item in second_drift.json().get("items") or []
+    }
     assert "new_port" in second_drift_types
     assert "new_subdomain" in second_drift_types
     assert "unexpected_cert_change" in second_drift_types

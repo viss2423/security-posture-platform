@@ -132,7 +132,9 @@ def compute_effective_alert_severity(
 
     bounded = max(0, min(int(round(score)), 100))
     effective = _severity_from_score(bounded)
-    top_drivers = sorted(drivers, key=lambda item: abs(int(item.get("delta") or 0)), reverse=True)[:3]
+    top_drivers = sorted(drivers, key=lambda item: abs(int(item.get("delta") or 0)), reverse=True)[
+        :3
+    ]
 
     return {
         "base_severity": normalized_base,
