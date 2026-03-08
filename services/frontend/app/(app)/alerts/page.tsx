@@ -3,14 +3,19 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
+  createAIFeedback,
+  createAISummaryVersion,
   generateAlertAIGuidance,
+  getAlertClusters,
   getAlertAIGuidance,
   getAlerts,
   postAlertAck,
   postAlertAssign,
   postAlertResolve,
   postAlertSuppress,
+  type AIFeedbackValue,
   type AIAlertGuidance,
+  type AlertCluster,
   type AlertItem,
   type AlertsResponse,
 } from '@/lib/api';
@@ -21,6 +26,8 @@ import { useAuth } from '@/contexts/AuthContext';
 
 type TabId = 'firing' | 'acked' | 'suppressed' | 'resolved';
 type ActionMode = 'ack' | 'suppress' | 'assign' | null;
+type GuardrailSectionKey = 'facts' | 'inference' | 'recommendations';
+type GuardrailItem = { statement: string; evidence: string[] };
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'firing', label: 'Firing' },
@@ -53,6 +60,76 @@ function badgeClass(value: string | null | undefined): string {
 
 function labelize(value: string | null | undefined): string {
   return (value || 'n/a').replaceAll('_', ' ');
+}
+
+function parseGuardrailItems(raw: unknown): GuardrailItem[] {
+  if (!Array.isArray(raw)) return [];
+  const out: GuardrailItem[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const statement = String((entry as Record<string, unknown>).statement || '').trim();
+    if (!statement) continue;
+    const evidenceRaw = (entry as Record<string, unknown>).evidence;
+    const evidence = Array.isArray(evidenceRaw)
+      ? evidenceRaw
+          .map((value) => String(value || '').trim().toUpperCase())
+          .filter((value) => value.length > 0)
+      : [];
+    out.push({ statement, evidence });
+  }
+  return out;
+}
+
+function parseAlertGuardrails(ai?: AIAlertGuidance | null): {
+  mode: string;
+  parseMode: string;
+  usedFallbackSections: boolean;
+  sections: Record<GuardrailSectionKey, GuardrailItem[]>;
+  evidenceMap: Record<string, string>;
+} | null {
+  if (!ai?.context_json || typeof ai.context_json !== 'object') return null;
+  const guardrails = (ai.context_json as Record<string, unknown>).guardrails;
+  if (!guardrails || typeof guardrails !== 'object') return null;
+
+  const guardrailObj = guardrails as Record<string, unknown>;
+  const mode = String(guardrailObj.mode || '').trim();
+  const parseMode = String(guardrailObj.parse_mode || '').trim();
+  const usedFallbackSections = Boolean(guardrailObj.used_fallback_sections);
+  const sectionsRaw = guardrailObj.sections;
+  const sectionsObj =
+    sectionsRaw && typeof sectionsRaw === 'object'
+      ? (sectionsRaw as Record<string, unknown>)
+      : {};
+  const sections: Record<GuardrailSectionKey, GuardrailItem[]> = {
+    facts: parseGuardrailItems(sectionsObj.facts),
+    inference: parseGuardrailItems(sectionsObj.inference),
+    recommendations: parseGuardrailItems(sectionsObj.recommendations),
+  };
+
+  if (
+    sections.facts.length === 0 &&
+    sections.inference.length === 0 &&
+    sections.recommendations.length === 0
+  ) {
+    return null;
+  }
+
+  const evidenceMap: Record<string, string> = {};
+  const catalog = guardrailObj.evidence_catalog;
+  if (Array.isArray(catalog)) {
+    for (const item of catalog) {
+      if (!item || typeof item !== 'object') continue;
+      const row = item as Record<string, unknown>;
+      const id = String(row.id || '').trim().toUpperCase();
+      if (!id) continue;
+      const kind = String(row.kind || '').trim();
+      const value = String(row.value ?? '').trim();
+      const label = kind && value ? `${kind}: ${value}` : kind || value || id;
+      evidenceMap[id] = label.slice(0, 140);
+    }
+  }
+
+  return { mode, parseMode, usedFallbackSections, sections, evidenceMap };
 }
 
 function formatLastSeen(item: AlertItem): string {
@@ -96,6 +173,8 @@ function AlertRow({
   const [guidanceLoading, setGuidanceLoading] = useState(false);
   const [guidanceGenerating, setGuidanceGenerating] = useState(false);
   const [guidanceMessage, setGuidanceMessage] = useState<string | null>(null);
+  const [savingVersion, setSavingVersion] = useState(false);
+  const [feedbackBusy, setFeedbackBusy] = useState<AIFeedbackValue | null>(null);
   const key = item.asset_key;
   const isBusy = loading === alertMutationKey(item);
   const canOpenAsset = !key.startsWith('event:');
@@ -154,6 +233,65 @@ function AlertRow({
     }
   };
 
+  const saveGuidanceVersion = async () => {
+    if (!guidance?.guidance_text) {
+      setGuidanceMessage('Generate AI guidance before saving a version.');
+      return;
+    }
+    setSavingVersion(true);
+    setGuidanceMessage(null);
+    try {
+      const created = await createAISummaryVersion('alert', key, {
+        content_text: guidance.guidance_text,
+        provider: guidance.provider,
+        model: guidance.model,
+        source_type: guidance.cached ? 'cached' : 'generated',
+        context_json: guidance.context_json || {},
+        evidence_json: {
+          generated_at: guidance.generated_at,
+          generated_by: guidance.generated_by || null,
+          recommended_action: guidance.recommended_action || null,
+          urgency: guidance.urgency || null,
+        },
+      });
+      setGuidanceMessage(`Saved version v${created.version_no}.`);
+    } catch (e) {
+      setGuidanceMessage(e instanceof Error ? e.message : 'Saving guidance version failed');
+    } finally {
+      setSavingVersion(false);
+    }
+  };
+
+  const submitGuidanceFeedback = async (feedback: AIFeedbackValue) => {
+    if (!guidance?.guidance_text) {
+      setGuidanceMessage('Generate AI guidance before submitting feedback.');
+      return;
+    }
+    setFeedbackBusy(feedback);
+    setGuidanceMessage(null);
+    try {
+      await createAIFeedback({
+        entity_type: 'alert',
+        entity_id: key,
+        feedback,
+        context_json: {
+          surface: 'alerts_page',
+          recommended_action: guidance.recommended_action || null,
+          urgency: guidance.urgency || null,
+        },
+      });
+      setGuidanceMessage(
+        feedback === 'up'
+          ? 'Feedback recorded: guidance was useful.'
+          : 'Feedback recorded: guidance needs improvement.'
+      );
+    } catch (e) {
+      setGuidanceMessage(e instanceof Error ? e.message : 'Saving guidance feedback failed');
+    } finally {
+      setFeedbackBusy(null);
+    }
+  };
+
   const keySignals = useMemo(() => {
     const values: string[] = [];
     if (item.reason) values.push(`Reason ${labelize(item.reason)}`);
@@ -168,6 +306,7 @@ function AlertRow({
     : item.suppression_rule_active
       ? `Suppression rule${item.suppression_reason ? `: ${item.suppression_reason}` : ''}`
       : null;
+  const guardrails = useMemo(() => parseAlertGuardrails(guidance), [guidance]);
 
   return (
     <li className="section-panel-tight">
@@ -200,6 +339,18 @@ function AlertRow({
             {item.severity && (
               <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium uppercase ${badgeClass(item.severity)}`}>
                 {item.severity}
+              </span>
+            )}
+            {item.effective_severity && item.effective_severity !== item.severity && (
+              <span
+                className={`rounded-full px-2 py-0.5 text-[11px] font-medium uppercase ${badgeClass(item.effective_severity)}`}
+                title={
+                  item.effective_severity_score != null
+                    ? `Effective severity score ${item.effective_severity_score}`
+                    : 'Effective severity'
+                }
+              >
+                Effective {labelize(item.effective_severity)}
               </span>
             )}
             {item.ai_recommended_action && (
@@ -462,6 +613,90 @@ function AlertRow({
               <p className="mt-3 text-xs text-[var(--muted)]">
                 Generated {formatDateTime(guidance.generated_at)} via {guidance.provider}/{guidance.model}
               </p>
+              {canMutate && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={saveGuidanceVersion}
+                    disabled={savingVersion || guidanceGenerating || feedbackBusy != null}
+                    className="btn-secondary text-xs"
+                  >
+                    {savingVersion ? 'Saving...' : 'Save version'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => submitGuidanceFeedback('up')}
+                    disabled={guidanceGenerating || savingVersion || feedbackBusy != null}
+                    className="btn-secondary text-xs"
+                  >
+                    {feedbackBusy === 'up' ? 'Saving...' : 'Thumbs up'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => submitGuidanceFeedback('down')}
+                    disabled={guidanceGenerating || savingVersion || feedbackBusy != null}
+                    className="btn-secondary text-xs"
+                  >
+                    {feedbackBusy === 'down' ? 'Saving...' : 'Thumbs down'}
+                  </button>
+                </div>
+              )}
+              {guardrails && (
+                <div className="mt-4 rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)]/40 p-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
+                      Evidence-backed breakdown
+                    </p>
+                    {guardrails.mode && <span className="stat-chip">Mode: {guardrails.mode}</span>}
+                    {guardrails.parseMode && (
+                      <span className="stat-chip">Parse: {guardrails.parseMode}</span>
+                    )}
+                    {guardrails.usedFallbackSections && (
+                      <span className="rounded-full border border-[var(--amber)]/30 bg-[var(--amber)]/15 px-2 py-0.5 text-[11px] text-[var(--amber)]">
+                        fallback sections used
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-3 grid gap-3 lg:grid-cols-3">
+                    {(['facts', 'inference', 'recommendations'] as GuardrailSectionKey[]).map(
+                      (key) => (
+                        <div
+                          key={key}
+                          className="rounded-lg border border-[var(--border)] bg-[var(--surface)]/70 p-3"
+                        >
+                          <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
+                            {labelize(key)}
+                          </p>
+                          {guardrails.sections[key].length > 0 ? (
+                            <ul className="mt-2 space-y-2">
+                              {guardrails.sections[key].map((entry, idx) => (
+                                <li key={`${key}-${idx}`} className="text-xs text-[var(--text)]">
+                                  <p>{entry.statement}</p>
+                                  {entry.evidence.length > 0 && (
+                                    <div className="mt-1 flex flex-wrap gap-1">
+                                      {entry.evidence.map((eid) => (
+                                        <span
+                                          key={`${key}-${idx}-${eid}`}
+                                          className="rounded-full border border-[var(--border)] px-2 py-0.5 font-mono text-[10px] text-[var(--muted)]"
+                                          title={guardrails.evidenceMap[eid] || eid}
+                                        >
+                                          {eid}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  )}
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p className="mt-2 text-xs text-[var(--muted)]">No entries</p>
+                          )}
+                        </div>
+                      )
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <p className="mt-3 text-sm text-[var(--muted)]">No AI guidance generated yet for this alert.</p>
@@ -488,14 +723,19 @@ function AlertRow({
 export default function AlertsPage() {
   const { canMutate } = useAuth();
   const [data, setData] = useState<AlertsResponse | null>(null);
+  const [clusters, setClusters] = useState<AlertCluster[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabId>('firing');
   const [loading, setLoading] = useState<string | null>(null);
 
   const load = useCallback(() => {
-    getAlerts()
-      .then((result) => {
+    Promise.all([
+      getAlerts(),
+      getAlertClusters({ by: 'asset', status: 'firing', limit: 8 }),
+    ])
+      .then(([result, clusterResult]) => {
         setData(result);
+        setClusters(clusterResult.items || []);
         setError(null);
       })
       .catch((e) => setError(e.message));
@@ -587,6 +827,38 @@ export default function AlertsPage() {
       </div>
 
       <section className="mb-12 animate-in">
+        {activeTab === 'firing' && clusters.length > 0 && (
+          <div className="mb-6 section-panel">
+            <h2 className="section-title">Firing clusters</h2>
+            <p className="mb-3 text-xs text-[var(--muted)]">
+              Grouped by asset to reduce duplicate triage work.
+            </p>
+            <ul className="space-y-2">
+              {clusters.map((cluster) => (
+                <li
+                  key={`${cluster.cluster_type}-${cluster.cluster_key}`}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-elevated)]/40 px-3 py-2"
+                >
+                  <span className="text-sm font-medium text-[var(--text)]">{cluster.cluster_key}</span>
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <span className="stat-chip">{cluster.alert_count} alerts</span>
+                    <span className="stat-chip">{cluster.event_count} events</span>
+                    {cluster.max_severity && (
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[11px] font-medium uppercase ${badgeClass(
+                          cluster.max_severity
+                        )}`}
+                      >
+                        {cluster.max_severity}
+                      </span>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         {list.length === 0 ? (
           <div className="section-panel py-12 text-center">
             <p className="text-sm text-[var(--muted)]">

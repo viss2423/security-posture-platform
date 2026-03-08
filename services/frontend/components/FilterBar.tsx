@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState, useTransition } from 'react';
-import { ChevronDown, Filter, RotateCcw } from 'lucide-react';
+import { ChevronDown, Filter, RotateCcw, SlidersHorizontal } from 'lucide-react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import type { PostureFilters } from '@/lib/api';
 import { parsePostureFilters, writePostureFilters } from '@/lib/postureFilters';
@@ -53,7 +53,7 @@ export default function FilterBar() {
     Boolean(currentFilters.owner) ||
     Boolean(currentFilters.status);
   const controlClass =
-    'w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 text-sm text-[var(--text)] transition placeholder:text-[var(--muted)] focus:border-[var(--green)] focus:outline-none focus:ring-2 focus:ring-[var(--green)]/25';
+    'w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 text-sm text-[var(--text)] transition placeholder:text-[var(--muted)] focus:border-cyan-300 focus:outline-none focus:ring-2 focus:ring-cyan-300/30';
   const activeFilters = [
     currentFilters.owner ? `Owner: ${currentFilters.owner}` : null,
     currentFilters.environment ? `Environment: ${currentFilters.environment}` : null,
@@ -93,16 +93,20 @@ export default function FilterBar() {
   };
 
   return (
-    <div className="sticky top-[4.85rem] z-30 mb-5 lg:top-4">
-      <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)]/94 px-3 py-3 shadow-lg shadow-black/15 backdrop-blur-xl sm:px-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="sticky top-[5rem] z-30 mb-6 lg:top-3">
+      <div className="relative overflow-hidden rounded-3xl border border-[var(--border)] bg-[linear-gradient(175deg,rgba(15,31,49,0.95),rgba(9,20,35,0.9))] px-3 py-3.5 shadow-[0_24px_40px_-30px_rgba(0,0,0,0.92)] backdrop-blur-xl sm:px-4 sm:py-4">
+        <div className="pointer-events-none absolute -left-12 top-6 h-28 w-28 rounded-full bg-cyan-300/14 blur-2xl" />
+        <div className="pointer-events-none absolute -right-12 top-0 h-28 w-28 rounded-full bg-emerald-300/10 blur-2xl" />
+        <div className="pointer-events-none absolute inset-x-10 top-0 h-px bg-gradient-to-r from-transparent via-cyan-300/70 to-transparent" />
+
+        <div className="relative flex flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={() => setExpanded((v) => !v)}
-              className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-white/[0.03] px-3 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-[var(--text-muted)] transition hover:border-[var(--green)]/20 hover:text-[var(--text)]"
+              className="inline-flex items-center gap-2 rounded-xl border border-cyan-300/35 bg-cyan-300/12 px-3 py-2.5 text-xs font-semibold uppercase tracking-[0.14em] text-cyan-100 transition hover:border-cyan-300/55"
             >
-              <Filter size={14} className="text-[var(--green)]" />
+              <Filter size={14} className="text-cyan-100" />
               Filters
               <ChevronDown
                 size={14}
@@ -110,6 +114,7 @@ export default function FilterBar() {
               />
             </button>
             <span className="stat-chip">
+              <SlidersHorizontal size={12} className="text-cyan-100" />
               {activeFilters.length === 0 ? 'No active filters' : `${activeFilters.length} active`}
             </span>
             {activeFilters.slice(0, 3).map((filter) => (
@@ -125,7 +130,7 @@ export default function FilterBar() {
                 type="button"
                 onClick={handleReset}
                 disabled={isPending}
-                className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-white/[0.03] px-3 py-2 text-sm text-[var(--text-muted)] transition hover:border-[var(--green)]/20 hover:text-[var(--text)]"
+                className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-white/[0.03] px-3 py-2 text-sm text-[var(--text-muted)] transition hover:border-cyan-300/35 hover:text-[var(--text)]"
               >
                 <RotateCcw size={14} />
                 Reset
@@ -134,7 +139,7 @@ export default function FilterBar() {
             <button
               type="button"
               onClick={() => setExpanded((v) => !v)}
-              className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-muted)] transition hover:border-[var(--green)]/20 hover:text-[var(--text)]"
+              className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 text-sm text-[var(--text-muted)] transition hover:border-cyan-300/35 hover:text-[var(--text)]"
             >
               {expanded ? 'Hide controls' : 'Edit filters'}
             </button>
@@ -142,7 +147,10 @@ export default function FilterBar() {
         </div>
 
         {expanded && (
-          <div className="mt-4 border-t border-[var(--border)] pt-4">
+          <div className="relative mt-4 border-t border-[var(--border)] pt-4">
+            <p className="mb-3 text-xs uppercase tracking-[0.14em] text-[var(--muted)]">
+              Scope posture metrics and list views across this workspace
+            </p>
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               <label className="space-y-1">
                 <span className="block text-xs font-semibold uppercase tracking-[0.1em] text-[var(--muted)]">Owner</span>

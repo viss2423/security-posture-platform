@@ -290,10 +290,46 @@ export default async function OverviewPage({ searchParams }: PageProps) {
 
   return (
     <main className="page-shell">
-      <p className="mb-5 text-sm text-[var(--muted)]">
-        Track posture movement, highest-risk entities, and recent anomalies from a
-        single operating view.
-      </p>
+      <section className="page-hero animate-in">
+        <div className="hero-grid">
+          <div>
+            <h1 className="hero-title">Security Operations Overview</h1>
+            <p className="hero-copy">
+              Unified posture, risk, and telemetry intelligence with direct paths into
+              triage and remediation workflows.
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Link href="/alerts" className="btn-secondary text-sm">
+                Open alerts
+              </Link>
+              <Link href="/findings" className="btn-secondary text-sm">
+                Open findings
+              </Link>
+              <Link href="/telemetry" className="btn-secondary text-sm">
+                Open telemetry
+              </Link>
+            </div>
+          </div>
+          <div className="hero-stat-grid">
+            <div className="hero-stat">
+              <p className="hero-stat-label">Visible findings</p>
+              <p className="hero-stat-value">{findings.length}</p>
+            </div>
+            <div className="hero-stat">
+              <p className="hero-stat-label">Anomalies queued</p>
+              <p className="hero-stat-value">{anomalies.length}</p>
+            </div>
+            <div className="hero-stat">
+              <p className="hero-stat-label">Trend range</p>
+              <p className="hero-stat-value">{trendRange.toUpperCase()}</p>
+            </div>
+            <div className="hero-stat">
+              <p className="hero-stat-label">Assets monitored</p>
+              <p className="hero-stat-value">{strip?.total_assets ?? 0}</p>
+            </div>
+          </div>
+        </div>
+      </section>
 
       {errors[0] && (
         <div className="mb-6 alert-error animate-in" role="alert">
@@ -311,8 +347,8 @@ export default async function OverviewPage({ searchParams }: PageProps) {
       )}
 
       {overview && strip && strip.total_assets > 0 && (
-        <>
-          <section className="mb-10">
+        <div className="view-stack">
+          <section className="section-panel animate-in">
             <h2 className="section-title">Executive summary</h2>
             <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
               <div className="metric-card neutral animate-in flex flex-col items-center justify-center">
@@ -387,7 +423,7 @@ export default async function OverviewPage({ searchParams }: PageProps) {
             </div>
           </section>
 
-          <section className="mb-10">
+          <section className="section-panel animate-in">
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <h2 className="section-title">Posture trend</h2>
               <div className="flex gap-2">
@@ -417,7 +453,7 @@ export default async function OverviewPage({ searchParams }: PageProps) {
           />
 
           {repositorySummary && (
-            <section className="mb-10">
+            <section className="section-panel animate-in">
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h2 className="section-title">Repository risk</h2>
@@ -648,7 +684,7 @@ export default async function OverviewPage({ searchParams }: PageProps) {
           )}
 
           {telemetrySummary && (
-            <section className="mb-10">
+            <section className="section-panel animate-in">
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h2 className="section-title">Telemetry operations</h2>
@@ -695,7 +731,7 @@ export default async function OverviewPage({ searchParams }: PageProps) {
           )}
 
           {threatIntelSummary && (
-            <section className="mb-10">
+            <section className="section-panel animate-in">
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h2 className="section-title">Threat intelligence</h2>
@@ -897,7 +933,7 @@ export default async function OverviewPage({ searchParams }: PageProps) {
             </section>
           )}
 
-          <section className="mb-10">
+          <section className="section-panel animate-in">
             <h2 className="section-title">Highest-risk entities</h2>
             <div className="grid gap-6 lg:grid-cols-2">
               <div className="card">
@@ -984,7 +1020,7 @@ export default async function OverviewPage({ searchParams }: PageProps) {
             </div>
           </section>
 
-          <section className="mb-10">
+          <section className="section-panel animate-in">
             <h2 className="section-title">Top drivers</h2>
             <div className="grid gap-6 lg:grid-cols-3">
               <div className="card animate-in">
@@ -1058,7 +1094,7 @@ export default async function OverviewPage({ searchParams }: PageProps) {
           </section>
 
           {strip.red > 0 && strip.down_assets?.length > 0 && (
-            <section className="animate-in">
+            <section className="section-panel animate-in">
               <h2 className="section-title">Down assets</h2>
               <div className="card" style={{ borderColor: 'var(--red-border-subtle)' }}>
                 <ul className="space-y-3">
@@ -1076,7 +1112,7 @@ export default async function OverviewPage({ searchParams }: PageProps) {
               </div>
             </section>
           )}
-        </>
+        </div>
       )}
 
       {!overview && (

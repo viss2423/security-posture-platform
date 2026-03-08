@@ -479,6 +479,8 @@ def run_cyberlab_auto_seed(*, force: bool = False) -> dict[str, Any]:
                 events=events,
                 default_asset_key=asset_key,
                 create_alerts=True,
+                collector=f"demo_seed.file.{source}",
+                raw_path=str(file_path),
             )
             telemetry_totals[source] = summary
         db.commit()
@@ -520,6 +522,8 @@ def run_cyberlab_auto_seed(*, force: bool = False) -> dict[str, Any]:
             events=custom_events,
             default_asset_key=asset_key,
             create_alerts=False,
+            collector="demo_seed.synthetic.custom",
+            raw_path="demo-seed://custom-events",
         )
         db.commit()
 

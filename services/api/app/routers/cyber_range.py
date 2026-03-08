@@ -11,7 +11,9 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.attack_lab import launch_attack_lab_job
+from app.audit import log_audit
 from app.db import get_db
+from app.request_context import request_id_ctx
 from app.routers.auth import require_auth, require_role
 
 router = APIRouter(prefix="/cyber-range", tags=["cyber-range"])
@@ -221,6 +223,20 @@ def launch_cyber_range_mission(
     if not row:
         raise HTTPException(status_code=500, detail="Failed to enqueue mission")
     job_id = int(row["job_id"])
+    log_audit(
+        db,
+        "cyber_range.launch",
+        user_name=user,
+        asset_key=str(mission.get("asset_key") or ""),
+        details={
+            "mission_id": mission_id,
+            "job_id": job_id,
+            "task_type": mission.get("task_type"),
+            "target": mission.get("target"),
+        },
+        request_id=request_id_ctx.get(None),
+    )
+    db.commit()
     launch_attack_lab_job(job_id)
     payload = _serialize_job_row(dict(row))
     return {"mission_id": mission_id, "job": payload}

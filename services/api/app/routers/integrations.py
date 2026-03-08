@@ -12,7 +12,9 @@ from fastapi.responses import PlainTextResponse, Response
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.audit import log_audit
 from app.db import get_db
+from app.request_context import request_id_ctx
 from app.settings import settings
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
@@ -130,6 +132,18 @@ async def slack_interactions(request: Request, db: Session = Depends(get_db)):
                         "Jira not configured or incident not found", status_code=200
                     )
                 issue_key, url = result
+                log_audit(
+                    db,
+                    "integration.slack.create_jira",
+                    user_name=str((payload.get("user") or {}).get("username") or "slack-user"),
+                    details={
+                        "incident_id": incident_id,
+                        "jira_issue_key": issue_key,
+                        "jira_issue_url": url,
+                    },
+                    request_id=request_id_ctx.get(None),
+                )
+                db.commit()
                 # Optionally update the message via response_url
                 response_url = payload.get("response_url")
                 if response_url:

@@ -12,7 +12,9 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.attack_lab import ATTACK_TASKS, launch_attack_lab_job
+from app.audit import log_audit
 from app.db import get_db
+from app.request_context import request_id_ctx
 from app.routers.auth import require_auth, require_role
 
 router = APIRouter(prefix="/attack-lab", tags=["attack-lab"])
@@ -99,6 +101,20 @@ def _enqueue_attack_lab_run(
     if not job_row:
         raise HTTPException(status_code=500, detail="Failed to enqueue attack-lab job")
     job_id = int(job_row["job_id"])
+    log_audit(
+        db,
+        "attack_lab.enqueue",
+        user_name=requested_by,
+        asset_key=normalized_asset_key,
+        details={
+            "job_id": job_id,
+            "task_type": task_type,
+            "target": target,
+            "asset_key": normalized_asset_key,
+        },
+        request_id=request_id_ctx.get(None),
+    )
+    db.commit()
     launch_attack_lab_job(job_id)
     out = dict(job_row)
     out["created_at"] = (

@@ -31,8 +31,26 @@ function parseApiErrorMessage(status: number, text: string, fallback: string): s
   return message;
 }
 
+async function tryRefreshSession(): Promise<boolean> {
+  try {
+    const res = await fetch(API + '/auth/session', {
+      method: 'PATCH',
+      cache: 'no-store',
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 async function downloadFromApi(url: string, filename: string): Promise<void> {
-  const res = await fetch(url, { cache: 'no-store' });
+  let res = await fetch(url, { cache: 'no-store' });
+  if (res.status === 401) {
+    const refreshed = await tryRefreshSession();
+    if (refreshed) {
+      res = await fetch(url, { cache: 'no-store' });
+    }
+  }
   if (res.status === 401) {
     redirectToLogin();
     throw new Error('Unauthorized');
@@ -58,11 +76,18 @@ export async function apiFetch<T>(path: string, options?: RequestInit): Promise<
     headers.set('Content-Type', 'application/json');
   }
 
-  const res = await fetch(API + path, {
+  const requestInit: RequestInit = {
     ...options,
     headers,
     cache: options?.cache ?? 'no-store',
-  });
+  };
+  let res = await fetch(API + path, requestInit);
+  if (res.status === 401 && path !== '/auth/session') {
+    const refreshed = await tryRefreshSession();
+    if (refreshed) {
+      res = await fetch(API + path, requestInit);
+    }
+  }
   if (res.status === 401) {
     redirectToLogin();
     throw new Error('Unauthorized');
@@ -629,6 +654,13 @@ export type AlertItem = {
   ai_recommended_action?: 'ack' | 'suppress' | 'assign' | 'escalate' | 'resolve' | 'monitor' | null;
   ai_urgency?: 'critical' | 'high' | 'medium' | 'low' | null;
   ai_generated_at?: string | null;
+  effective_severity?: 'critical' | 'high' | 'medium' | 'low' | 'info' | null;
+  effective_severity_score?: number | null;
+  effective_severity_top_drivers?: Array<{
+    code: string;
+    delta: number;
+    detail: string;
+  }>;
   ack_reason?: string | null;
   acked_by?: string | null;
   acked_at?: string | null;
@@ -647,6 +679,129 @@ export type AlertsResponse = {
 
 export async function getAlerts(): Promise<AlertsResponse> {
   return apiFetch<AlertsResponse>('/alerts');
+}
+
+export type AlertRelatedEvent = {
+  event_id: number;
+  source: string;
+  event_type: string;
+  asset_key?: string | null;
+  severity?: number | null;
+  src_ip?: string | null;
+  src_port?: number | null;
+  dst_ip?: string | null;
+  dst_port?: number | null;
+  domain?: string | null;
+  protocol?: string | null;
+  event_time?: string | null;
+  ti_match?: boolean;
+  ti_source?: string | null;
+  anomaly_score?: number | null;
+  payload_json?: Record<string, unknown>;
+};
+
+export type AlertEnrichment = {
+  alert_id: number;
+  alert_key?: string | null;
+  source?: string | null;
+  title?: string | null;
+  description?: string | null;
+  asset_key?: string | null;
+  severity?: string | null;
+  status?: string | null;
+  ti_match?: boolean;
+  ti_source?: string | null;
+  mitre_techniques?: string[];
+  event_count?: number;
+  first_seen_at?: string | null;
+  last_seen_at?: string | null;
+  asset_context?: Record<string, unknown>;
+  severity_analysis?: {
+    base_severity?: string;
+    effective_severity?: string;
+    effective_score?: number;
+    criticality?: string;
+    recurrence_count?: number;
+    drivers?: Array<{ code: string; delta: number; detail: string }>;
+    top_drivers?: Array<{ code: string; delta: number; detail: string }>;
+  };
+  recurrence?: {
+    dedupe_key?: string | null;
+    event_count?: number;
+    first_seen_at?: string | null;
+    last_seen_at?: string | null;
+    window_minutes?: number | null;
+    recurrence_per_hour?: number | null;
+    is_recurring?: boolean;
+  };
+  related_events?: AlertRelatedEvent[];
+  dedupe_group?: Array<{
+    alert_id: number;
+    status?: string;
+    severity?: string;
+    event_count?: number;
+    first_seen_at?: string | null;
+    last_seen_at?: string | null;
+  }>;
+  recommended_next_steps?: string[];
+  effective_severity?: string;
+  effective_severity_score?: number;
+};
+
+export type AlertCluster = {
+  cluster_key: string;
+  cluster_type: 'asset' | 'source_ip' | 'technique' | 'campaign' | string;
+  alert_count: number;
+  event_count: number;
+  first_seen_at?: string | null;
+  last_seen_at?: string | null;
+  max_severity?: string;
+  asset_keys: string[];
+  source_ips: string[];
+  techniques: string[];
+  campaigns: string[];
+  alert_ids: number[];
+};
+
+export async function getAlertEnrichment(
+  alertId: number,
+  params?: { lookback_hours?: number; related_limit?: number }
+): Promise<AlertEnrichment> {
+  const query = new URLSearchParams();
+  if (params?.lookback_hours != null) query.set('lookback_hours', String(params.lookback_hours));
+  if (params?.related_limit != null) query.set('related_limit', String(params.related_limit));
+  const suffix = query.toString();
+  return apiFetch<AlertEnrichment>(
+    `/alerts/${alertId}/enrichment${suffix ? `?${suffix}` : ''}`
+  );
+}
+
+export async function getAlertRelatedEvents(
+  alertId: number,
+  params?: { lookback_hours?: number; limit?: number }
+): Promise<{ alert_id: number; lookback_hours: number; items: AlertRelatedEvent[] }> {
+  const query = new URLSearchParams();
+  if (params?.lookback_hours != null) query.set('lookback_hours', String(params.lookback_hours));
+  if (params?.limit != null) query.set('limit', String(params.limit));
+  const suffix = query.toString();
+  return apiFetch<{ alert_id: number; lookback_hours: number; items: AlertRelatedEvent[] }>(
+    `/alerts/${alertId}/related-events${suffix ? `?${suffix}` : ''}`
+  );
+}
+
+export async function getAlertClusters(params?: {
+  by?: 'asset' | 'source_ip' | 'technique' | 'campaign';
+  status?: 'firing' | 'acked' | 'suppressed' | 'resolved';
+  limit?: number;
+}): Promise<{ cluster_by: string; status?: string | null; items: AlertCluster[] }> {
+  const query = new URLSearchParams();
+  if (params?.by) query.set('by', params.by);
+  if (params?.status) query.set('status', params.status);
+  if (params?.limit != null) query.set('limit', String(params.limit));
+  const suffix = query.toString();
+  return apiFetch<{ cluster_by: string; status?: string | null; items: AlertCluster[] }>(
+    `/alerts/clusters${suffix ? `?${suffix}` : ''}`
+  );
 }
 
 export type AlertActionTarget = {
@@ -688,6 +843,464 @@ export async function postAlertAssign(
   return apiFetch<{ ok: boolean }>('/alerts/assign', {
     method: 'POST',
     body: JSON.stringify({ ...target, assigned_to }),
+  });
+}
+
+export type AutomationPlaybook = {
+  playbook_id: number;
+  title: string;
+  description?: string | null;
+  trigger: string;
+  conditions_json: Array<Record<string, unknown>>;
+  actions_json: Array<Record<string, unknown>>;
+  approval_required: boolean;
+  rollback_steps_json: Array<Record<string, unknown>>;
+  enabled: boolean;
+  created_by?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type AutomationRunAction = {
+  run_action_id: number;
+  run_id: number;
+  action_index: number;
+  action_type: string;
+  risk_tier: 'low' | 'medium' | 'high' | string;
+  status:
+    | 'pending'
+    | 'pending_approval'
+    | 'approved'
+    | 'rejected'
+    | 'running'
+    | 'done'
+    | 'failed'
+    | 'rolled_back'
+    | string;
+  params_json: Record<string, unknown>;
+  result_json: Record<string, unknown>;
+  error?: string | null;
+  created_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+};
+
+export type AutomationRun = {
+  run_id: number;
+  playbook_id: number;
+  playbook_title?: string;
+  trigger_source: string;
+  trigger_payload_json: Record<string, unknown>;
+  matched: boolean;
+  status: 'running' | 'pending_approval' | 'done' | 'failed' | 'rejected' | string;
+  requested_by?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  error?: string | null;
+  summary_json: Record<string, unknown>;
+  actions?: AutomationRunAction[];
+};
+
+export type AutomationApproval = {
+  approval_id: number;
+  run_action_id: number;
+  required_role: 'analyst' | 'admin' | string;
+  risk_tier: 'medium' | 'high' | string;
+  status: 'pending' | 'approved' | 'rejected' | string;
+  requested_by?: string | null;
+  approved_by?: string | null;
+  rejected_by?: string | null;
+  reason?: string | null;
+  decision_note?: string | null;
+  created_at?: string | null;
+  decided_at?: string | null;
+  run_id?: number;
+  action_type?: string;
+  params_json?: Record<string, unknown>;
+};
+
+export type AutomationRollback = {
+  rollback_id: number;
+  run_action_id: number;
+  rollback_type: string;
+  rollback_payload_json: Record<string, unknown>;
+  status: 'pending' | 'executed' | 'failed' | string;
+  requested_by?: string | null;
+  executed_by?: string | null;
+  created_at?: string | null;
+  executed_at?: string | null;
+  error?: string | null;
+  run_id?: number;
+  action_type?: string;
+};
+
+export async function getAutomationPlaybooks(params?: {
+  include_disabled?: boolean;
+}): Promise<{ items: AutomationPlaybook[] }> {
+  const query = new URLSearchParams();
+  if (params?.include_disabled != null) {
+    query.set('include_disabled', params.include_disabled ? 'true' : 'false');
+  }
+  const suffix = query.toString();
+  return apiFetch(`/automation/playbooks${suffix ? `?${suffix}` : ''}`);
+}
+
+export async function createAutomationPlaybook(body: {
+  title: string;
+  description?: string | null;
+  trigger: string;
+  conditions?: Array<Record<string, unknown>>;
+  actions?: Array<Record<string, unknown>>;
+  approval_required?: boolean;
+  rollback_steps?: Array<Record<string, unknown>>;
+  enabled?: boolean;
+}): Promise<AutomationPlaybook> {
+  return apiFetch('/automation/playbooks', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function updateAutomationPlaybook(
+  playbook_id: number,
+  body: {
+    description?: string | null;
+    trigger?: string;
+    conditions?: Array<Record<string, unknown>>;
+    actions?: Array<Record<string, unknown>>;
+    approval_required?: boolean;
+    rollback_steps?: Array<Record<string, unknown>>;
+    enabled?: boolean;
+  }
+): Promise<AutomationPlaybook> {
+  return apiFetch(`/automation/playbooks/${playbook_id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function triggerAutomationRuns(body: {
+  trigger: string;
+  payload?: Record<string, unknown>;
+  playbook_ids?: number[];
+}): Promise<{ trigger: string; runs_created: number; items: AutomationRun[] }> {
+  return apiFetch('/automation/runs/trigger', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function getAutomationRuns(params?: {
+  status?: string;
+  limit?: number;
+}): Promise<{ items: AutomationRun[] }> {
+  const query = new URLSearchParams();
+  if (params?.status) query.set('status', params.status);
+  if (params?.limit != null) query.set('limit', String(params.limit));
+  const suffix = query.toString();
+  return apiFetch(`/automation/runs${suffix ? `?${suffix}` : ''}`);
+}
+
+export async function getAutomationRun(run_id: number): Promise<AutomationRun> {
+  return apiFetch(`/automation/runs/${run_id}`);
+}
+
+export async function getAutomationApprovals(params?: {
+  limit?: number;
+}): Promise<{ items: AutomationApproval[] }> {
+  const query = new URLSearchParams();
+  if (params?.limit != null) query.set('limit', String(params.limit));
+  const suffix = query.toString();
+  return apiFetch(`/automation/approvals${suffix ? `?${suffix}` : ''}`);
+}
+
+export async function approveAutomationApproval(
+  approval_id: number,
+  note?: string
+): Promise<{
+  approval: AutomationApproval;
+  execution: Record<string, unknown>;
+  run_status: string;
+}> {
+  return apiFetch(`/automation/approvals/${approval_id}/approve`, {
+    method: 'POST',
+    body: JSON.stringify({ note }),
+  });
+}
+
+export async function rejectAutomationApproval(
+  approval_id: number,
+  note?: string
+): Promise<{ approval: AutomationApproval; run_status: string }> {
+  return apiFetch(`/automation/approvals/${approval_id}/reject`, {
+    method: 'POST',
+    body: JSON.stringify({ note }),
+  });
+}
+
+export async function getAutomationRollbacks(params?: {
+  status?: string;
+  limit?: number;
+}): Promise<{ items: AutomationRollback[] }> {
+  const query = new URLSearchParams();
+  if (params?.status) query.set('status', params.status);
+  if (params?.limit != null) query.set('limit', String(params.limit));
+  const suffix = query.toString();
+  return apiFetch(`/automation/rollbacks${suffix ? `?${suffix}` : ''}`);
+}
+
+export async function executeAutomationRollback(
+  rollback_id: number
+): Promise<{ rollback: Record<string, unknown>; run_status: string }> {
+  return apiFetch(`/automation/rollbacks/${rollback_id}/execute`, {
+    method: 'POST',
+  });
+}
+
+export type AttackSurfaceDiscoveryRun = {
+  run_id: number;
+  status: 'running' | 'done' | 'failed' | string;
+  requested_by?: string | null;
+  source_job_id?: number | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  error?: string | null;
+  metadata_json?: Record<string, unknown>;
+  summary_json?: Record<string, unknown>;
+};
+
+export type AttackSurfaceHost = {
+  host_id: number;
+  run_id: number;
+  asset_key?: string | null;
+  hostname: string;
+  ip_address?: string | null;
+  internet_exposed: boolean;
+  source?: string | null;
+  discovered_at?: string | null;
+};
+
+export type AttackSurfaceService = {
+  service_id: number;
+  run_id: number;
+  host_id: number;
+  asset_key?: string | null;
+  hostname?: string | null;
+  port: number;
+  protocol?: string | null;
+  service_name?: string | null;
+  service_version?: string | null;
+  discovered_at?: string | null;
+};
+
+export type AttackSurfaceCertificate = {
+  cert_id: number;
+  run_id: number;
+  host_id: number;
+  asset_key?: string | null;
+  hostname?: string | null;
+  common_name?: string | null;
+  issuer?: string | null;
+  serial_number?: string | null;
+  fingerprint_sha256?: string | null;
+  not_before?: string | null;
+  not_after?: string | null;
+  discovered_at?: string | null;
+};
+
+export type AttackSurfaceExposure = {
+  asset_key: string;
+  asset_name?: string | null;
+  environment?: string | null;
+  criticality?: string | null;
+  run_id?: number | null;
+  internet_exposed: boolean;
+  open_port_count: number;
+  open_management_ports: string[];
+  service_risk: number;
+  exposure_score: number;
+  exposure_level: 'critical' | 'high' | 'medium' | 'low' | string;
+  details_json?: Record<string, unknown>;
+  updated_at?: string | null;
+};
+
+export type AttackSurfaceDriftEvent = {
+  event_id: number;
+  run_id: number;
+  event_type: 'new_host' | 'new_port' | 'new_subdomain' | 'unexpected_cert_change' | string;
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'info' | string;
+  asset_key?: string | null;
+  hostname?: string | null;
+  domain?: string | null;
+  port?: number | null;
+  details_json?: Record<string, unknown>;
+  created_at?: string | null;
+};
+
+export type AttackSurfaceRelationship = {
+  relationship_id: number;
+  source_asset_key: string;
+  target_asset_key: string;
+  relation_type: string;
+  confidence: number;
+  details_json?: Record<string, unknown>;
+  updated_by?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export async function runAttackSurfaceDiscovery(body?: {
+  domains?: string[];
+  cert_salt?: string;
+}): Promise<{
+  run_id: number;
+  status: string;
+  requested_by?: string;
+  source_job_id?: number | null;
+  summary: Record<string, unknown>;
+}> {
+  return apiFetch('/attack-surface/discovery/run', {
+    method: 'POST',
+    body: JSON.stringify(body ?? {}),
+  });
+}
+
+export async function getAttackSurfaceDiscoveryRuns(params?: {
+  status?: string;
+  limit?: number;
+}): Promise<{ items: AttackSurfaceDiscoveryRun[] }> {
+  const query = new URLSearchParams();
+  if (params?.status) query.set('status', params.status);
+  if (params?.limit != null) query.set('limit', String(params.limit));
+  const suffix = query.toString();
+  return apiFetch(`/attack-surface/discovery/runs${suffix ? `?${suffix}` : ''}`);
+}
+
+export async function getAttackSurfaceDiscoveryRun(
+  run_id: number
+): Promise<AttackSurfaceDiscoveryRun> {
+  return apiFetch(`/attack-surface/discovery/runs/${run_id}`);
+}
+
+export async function getAttackSurfaceHosts(params?: {
+  run_id?: number;
+  limit?: number;
+}): Promise<{ run_id: number | null; items: AttackSurfaceHost[] }> {
+  const query = new URLSearchParams();
+  if (params?.run_id != null) query.set('run_id', String(params.run_id));
+  if (params?.limit != null) query.set('limit', String(params.limit));
+  const suffix = query.toString();
+  return apiFetch(`/attack-surface/discovery/hosts${suffix ? `?${suffix}` : ''}`);
+}
+
+export async function getAttackSurfaceServices(params?: {
+  run_id?: number;
+  limit?: number;
+}): Promise<{ run_id: number | null; items: AttackSurfaceService[] }> {
+  const query = new URLSearchParams();
+  if (params?.run_id != null) query.set('run_id', String(params.run_id));
+  if (params?.limit != null) query.set('limit', String(params.limit));
+  const suffix = query.toString();
+  return apiFetch(`/attack-surface/discovery/services${suffix ? `?${suffix}` : ''}`);
+}
+
+export async function getAttackSurfaceCertificates(params?: {
+  run_id?: number;
+  limit?: number;
+}): Promise<{ run_id: number | null; items: AttackSurfaceCertificate[] }> {
+  const query = new URLSearchParams();
+  if (params?.run_id != null) query.set('run_id', String(params.run_id));
+  if (params?.limit != null) query.set('limit', String(params.limit));
+  const suffix = query.toString();
+  return apiFetch(`/attack-surface/discovery/certs${suffix ? `?${suffix}` : ''}`);
+}
+
+export async function getAttackSurfaceExposures(params?: {
+  limit?: number;
+}): Promise<{ items: AttackSurfaceExposure[] }> {
+  const query = new URLSearchParams();
+  if (params?.limit != null) query.set('limit', String(params.limit));
+  const suffix = query.toString();
+  return apiFetch(`/attack-surface/exposures${suffix ? `?${suffix}` : ''}`);
+}
+
+export async function getAttackSurfaceDrift(params?: {
+  run_id?: number;
+  event_type?: string;
+  limit?: number;
+}): Promise<{ items: AttackSurfaceDriftEvent[] }> {
+  const query = new URLSearchParams();
+  if (params?.run_id != null) query.set('run_id', String(params.run_id));
+  if (params?.event_type) query.set('event_type', params.event_type);
+  if (params?.limit != null) query.set('limit', String(params.limit));
+  const suffix = query.toString();
+  return apiFetch(`/attack-surface/drift${suffix ? `?${suffix}` : ''}`);
+}
+
+export async function getAttackSurfaceRelationships(params?: {
+  asset_key?: string;
+  limit?: number;
+}): Promise<{ items: AttackSurfaceRelationship[] }> {
+  const query = new URLSearchParams();
+  if (params?.asset_key) query.set('asset_key', params.asset_key);
+  if (params?.limit != null) query.set('limit', String(params.limit));
+  const suffix = query.toString();
+  return apiFetch(`/attack-surface/relationships${suffix ? `?${suffix}` : ''}`);
+}
+
+export async function upsertAttackSurfaceRelationship(body: {
+  source_asset_key: string;
+  target_asset_key: string;
+  relation_type: string;
+  confidence?: number;
+  details?: Record<string, unknown>;
+}): Promise<AttackSurfaceRelationship> {
+  return apiFetch('/attack-surface/relationships', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export type AttackGraphNode = {
+  id: string;
+  type: string;
+  label: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type AttackGraphEdge = {
+  id: string;
+  source: string;
+  target: string;
+  relation: string;
+  weight?: number;
+  first_seen?: string | null;
+  last_seen?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
+export type AttackGraph = {
+  nodes: AttackGraphNode[];
+  edges: AttackGraphEdge[];
+  kill_chain: Array<{ phase: string; count: number }>;
+  summary: Record<string, unknown>;
+};
+
+export async function getAttackGraphIncident(
+  incident_id: number,
+  lookback_hours: number = 72
+): Promise<AttackGraph> {
+  return apiFetch(`/attack-graph/incidents/${incident_id}?lookback_hours=${lookback_hours}`);
+}
+
+export async function queryAttackGraph(body: {
+  incident_id?: number;
+  asset_key?: string;
+  lookback_hours?: number;
+}): Promise<AttackGraph> {
+  return apiFetch('/attack-graph/query', {
+    method: 'POST',
+    body: JSON.stringify(body),
   });
 }
 
@@ -949,6 +1562,8 @@ export type ThreatIntelSourceSummary = {
   feed_url?: string | null;
   indicator_count: number;
   by_type: { ip: number; domain: number };
+  avg_confidence?: number;
+  max_source_priority?: number;
   last_seen_at?: string | null;
 };
 
@@ -959,13 +1574,53 @@ export type ThreatIntelMatchedAsset = {
   criticality?: string | null;
   match_count: number;
   indicators: string[];
+  max_confidence?: number;
+  campaign_tags?: string[];
 };
 
 export type ThreatIntelRecentIndicator = {
   source: string;
   indicator: string;
   indicator_type: 'ip' | 'domain';
+  confidence_score?: number;
+  confidence_label?: 'high' | 'medium' | 'low';
+  campaign_tag?: string | null;
+  last_match_count?: number;
   last_seen_at?: string | null;
+};
+
+export type ThreatIntelCampaign = {
+  campaign_id: number;
+  campaign_tag: string;
+  title: string;
+  description?: string | null;
+  confidence_weight: number;
+  source_priority: number;
+  confidence_label: 'high' | 'medium' | 'low';
+  is_active: boolean;
+  ioc_count: number;
+  matched_asset_count: number;
+  updated_at?: string | null;
+};
+
+export type ThreatIntelSighting = {
+  sighting_id: number;
+  ioc_id: number;
+  source: string;
+  indicator: string;
+  indicator_type: 'ip' | 'domain';
+  confidence_score: number;
+  confidence_label: 'high' | 'medium' | 'low';
+  campaign_tag?: string | null;
+  asset_key: string;
+  asset_name?: string | null;
+  match_field: string;
+  matched_value: string;
+  source_event_id?: number | null;
+  source_event_ref?: string | null;
+  source_tool?: string | null;
+  last_match_count?: number;
+  sighted_at: string;
 };
 
 export type ThreatIntelAssetMatch = {
@@ -987,13 +1642,17 @@ export type ThreatIntelAssetMatches = {
 
 export type ThreatIntelSummary = {
   total_indicators: number;
+  high_confidence_indicators?: number;
   source_count: number;
   total_asset_matches: number;
   matched_asset_count: number;
+  campaign_count?: number;
   last_refreshed_at?: string | null;
   sources: ThreatIntelSourceSummary[];
   matched_assets: ThreatIntelMatchedAsset[];
   recent_indicators: ThreatIntelRecentIndicator[];
+  top_sightings?: ThreatIntelSighting[];
+  campaigns?: ThreatIntelCampaign[];
   latest_jobs: JobItem[];
 };
 
@@ -1006,6 +1665,48 @@ export async function getThreatIntelAssetMatches(
 ): Promise<ThreatIntelAssetMatches> {
   return apiFetch<ThreatIntelAssetMatches>(
     `/threat-intel/assets/${encodeURIComponent(assetKey)}`
+  );
+}
+
+export async function getThreatIntelIOCs(params?: {
+  q?: string;
+  source?: string;
+  indicator_type?: 'ip' | 'domain';
+  campaign_tag?: string;
+  min_confidence?: number;
+  active_only?: boolean;
+  limit?: number;
+}): Promise<{ items: Array<Record<string, unknown>> }> {
+  const query = new URLSearchParams();
+  if (params?.q) query.set('q', params.q);
+  if (params?.source) query.set('source', params.source);
+  if (params?.indicator_type) query.set('indicator_type', params.indicator_type);
+  if (params?.campaign_tag) query.set('campaign_tag', params.campaign_tag);
+  if (params?.min_confidence != null) query.set('min_confidence', String(params.min_confidence));
+  if (params?.active_only != null) query.set('active_only', String(params.active_only));
+  if (params?.limit != null) query.set('limit', String(params.limit));
+  const suffix = query.toString();
+  return apiFetch<{ items: Array<Record<string, unknown>> }>(
+    `/threat-intel/iocs${suffix ? `?${suffix}` : ''}`
+  );
+}
+
+export async function getThreatIntelSightings(params?: {
+  asset_key?: string;
+  source?: string;
+  campaign_tag?: string;
+  since_hours?: number;
+  limit?: number;
+}): Promise<{ items: ThreatIntelSighting[] }> {
+  const query = new URLSearchParams();
+  if (params?.asset_key) query.set('asset_key', params.asset_key);
+  if (params?.source) query.set('source', params.source);
+  if (params?.campaign_tag) query.set('campaign_tag', params.campaign_tag);
+  if (params?.since_hours != null) query.set('since_hours', String(params.since_hours));
+  if (params?.limit != null) query.set('limit', String(params.limit));
+  const suffix = query.toString();
+  return apiFetch<{ items: ThreatIntelSighting[] }>(
+    `/threat-intel/sightings${suffix ? `?${suffix}` : ''}`
   );
 }
 
@@ -1110,9 +1811,16 @@ export type DetectionRule = {
   name: string;
   description?: string | null;
   source?: string | null;
-  rule_format: 'json' | 'sigma';
+  rule_key?: string | null;
+  version?: number | null;
+  mitre_tactic?: string | null;
+  mitre_technique?: string | null;
+  parent_rule_id?: number | null;
+  stage?: 'draft' | 'canary' | 'active' | string;
+  rule_format: 'json' | 'yaml' | 'sigma';
   severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
   enabled: boolean;
+  definition_yaml?: string | null;
   definition_json: Record<string, unknown>;
   created_by?: string | null;
   created_at?: string | null;
@@ -1129,6 +1837,16 @@ export type DetectionRun = {
   lookback_hours: number;
   status: 'running' | 'done' | 'failed';
   matches: number;
+  run_mode?: 'test' | 'simulate' | 'scheduled' | string;
+  trigger_source?: 'manual' | 'job' | 'scheduler' | string;
+  schedule_ref?: string | null;
+  create_alerts?: boolean;
+  snapshot_hash?: string | null;
+  snapshot_json?: Record<string, unknown>;
+  rule_version?: number | null;
+  rule_stage?: string | null;
+  window_start?: string | null;
+  window_end?: string | null;
   started_at?: string | null;
   finished_at?: string | null;
   error?: string | null;
@@ -1144,9 +1862,17 @@ export async function createDetectionRule(body: {
   name: string;
   description?: string | null;
   source?: string | null;
+  rule_key?: string | null;
+  version?: number;
+  mitre_tactic?: string | null;
+  mitre_technique?: string | null;
+  parent_rule_id?: number | null;
+  stage?: 'draft' | 'canary' | 'active';
+  rule_format?: 'json' | 'yaml' | 'sigma';
   severity?: string;
   enabled?: boolean;
-  definition_json: Record<string, unknown>;
+  definition_json?: Record<string, unknown>;
+  definition_yaml?: string | null;
 }): Promise<DetectionRule> {
   return apiFetch<DetectionRule>('/detections/rules', {
     method: 'POST',
@@ -1159,15 +1885,27 @@ export async function updateDetectionRule(
   body: {
     description?: string | null;
     source?: string | null;
+    rule_key?: string | null;
+    version?: number | null;
+    mitre_tactic?: string | null;
+    mitre_technique?: string | null;
+    parent_rule_id?: number | null;
+    stage?: 'draft' | 'canary' | 'active' | null;
+    rule_format?: 'json' | 'yaml' | 'sigma' | null;
     severity?: string | null;
     enabled?: boolean | null;
     definition_json?: Record<string, unknown>;
+    definition_yaml?: string | null;
   }
 ): Promise<DetectionRule> {
   return apiFetch<DetectionRule>(`/detections/rules/${ruleId}`, {
     method: 'PATCH',
     body: JSON.stringify(body),
   });
+}
+
+export async function cloneDetectionRule(ruleId: number): Promise<DetectionRule> {
+  return apiFetch<DetectionRule>(`/detections/rules/${ruleId}/clone`, { method: 'POST' });
 }
 
 export async function testDetectionRule(
@@ -1188,6 +1926,30 @@ export async function testDetectionRule(
   });
 }
 
+export async function simulateDetectionRule(
+  ruleId: number,
+  body?: { lookback_hours?: number }
+): Promise<{
+  rule_id: number;
+  run_id?: number | null;
+  lookback_hours: number;
+  run_mode: 'simulate' | string;
+  trigger_source?: string;
+  schedule_ref?: string | null;
+  create_alerts?: boolean;
+  candidate_events: number;
+  matches: number;
+  snapshot_hash?: string | null;
+  snapshot_json?: Record<string, unknown>;
+  sample_matches: TelemetryEvent[];
+  generated_alert?: AlertItem | null;
+}> {
+  return apiFetch(`/detections/rules/${ruleId}/simulate`, {
+    method: 'POST',
+    body: JSON.stringify(body ?? {}),
+  });
+}
+
 export async function getDetectionRuns(params?: {
   rule_id?: number;
   limit?: number;
@@ -1197,6 +1959,28 @@ export async function getDetectionRuns(params?: {
   if (params?.limit != null) query.set('limit', String(params.limit));
   const suffix = query.toString();
   return apiFetch<{ items: DetectionRun[] }>(`/detections/runs${suffix ? `?${suffix}` : ''}`);
+}
+
+export type DetectionMitreCoverage = {
+  lookback_days: number;
+  totals: {
+    enabled_rules: number;
+    mapped_rules: number;
+    mapping_coverage_pct: number;
+    covered_tactics: number;
+    covered_techniques: number;
+  };
+  tactics: Array<{ mitre_tactic: string; rule_count: number }>;
+  techniques: Array<{ mitre_technique: string; rule_count: number }>;
+  top_detected_techniques: Array<{ mitre_technique: string; detections: number }>;
+};
+
+export async function getDetectionMitreCoverage(
+  lookbackDays: number = 30
+): Promise<DetectionMitreCoverage> {
+  return apiFetch<DetectionMitreCoverage>(
+    `/detections/coverage/mitre?lookback_days=${Math.max(1, Math.min(365, lookbackDays))}`
+  );
 }
 
 export type AttackLabTask = {
@@ -1624,12 +2408,51 @@ export type IncidentAlertLink = {
 };
 
 export type IncidentTimelineEntry = {
-  id: number;
+  id: number | string;
   incident_id: number;
-  event_type: 'note' | 'state_change' | 'alert_added' | 'resolution';
+  event_type:
+    | 'note'
+    | 'state_change'
+    | 'alert_added'
+    | 'resolution'
+    | 'checklist_added'
+    | 'checklist_done'
+    | 'decision'
+    | 'evidence_linked'
+    | 'alert_activity'
+    | 'finding_activity'
+    | 'telemetry_event'
+    | 'job_activity'
+    | 'job_linked'
+    | 'automation_action'
+    | 'response_rollback';
   author: string | null;
   body: string | null;
   details: Record<string, unknown>;
+  created_at: string;
+  source_type?:
+    | 'note'
+    | 'checklist'
+    | 'decision'
+    | 'evidence'
+    | 'alert'
+    | 'finding'
+    | 'log'
+    | 'job'
+    | 'automation'
+    | 'response'
+    | string;
+};
+
+export type IncidentEvidenceItem = {
+  evidence_id: number;
+  incident_id: number;
+  evidence_type: 'alert' | 'finding' | 'asset' | 'job' | 'ticket' | 'note' | 'event' | 'other';
+  ref_id: string;
+  relation: string;
+  summary?: string | null;
+  details: Record<string, unknown>;
+  added_by?: string | null;
   created_at: string;
 };
 
@@ -1637,6 +2460,10 @@ export type Incident = IncidentListItem & {
   metadata?: Record<string, unknown>;
   alerts: IncidentAlertLink[];
   timeline: IncidentTimelineEntry[];
+  evidence?: IncidentEvidenceItem[];
+  watchers?: IncidentWatcherItem[];
+  checklist?: IncidentChecklistItem[];
+  decisions?: IncidentDecisionItem[];
   linked_risk?: {
     asset_count: number;
     finding_count: number;
@@ -1707,6 +2534,207 @@ export async function unlinkIncidentAlert(id: number, asset_key: string): Promis
   return apiFetch(`/incidents/${id}/alerts?asset_key=${encodeURIComponent(asset_key)}`, { method: 'DELETE' });
 }
 
+export type IncidentWatcherItem = {
+  incident_id: number;
+  username: string;
+  added_by?: string | null;
+  added_at: string;
+};
+
+export type IncidentChecklistItem = {
+  item_id: number;
+  incident_id: number;
+  title: string;
+  done: boolean;
+  done_by?: string | null;
+  done_at?: string | null;
+  created_by?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type IncidentDecisionItem = {
+  decision_id: number;
+  incident_id: number;
+  decision: string;
+  rationale?: string | null;
+  decided_by?: string | null;
+  details: Record<string, unknown>;
+  created_at: string;
+};
+
+export async function getIncidentTimeline(
+  id: number,
+  params?: {
+    source_type?: string;
+    event_type?: string;
+    lookback_hours?: number;
+    limit?: number;
+  }
+): Promise<{ items: IncidentTimelineEntry[] }> {
+  const query = new URLSearchParams();
+  if (params?.source_type) query.set('source_type', params.source_type);
+  if (params?.event_type) query.set('event_type', params.event_type);
+  if (params?.lookback_hours != null) query.set('lookback_hours', String(params.lookback_hours));
+  if (params?.limit != null) query.set('limit', String(params.limit));
+  const suffix = query.toString();
+  return apiFetch(`/incidents/${id}/timeline${suffix ? `?${suffix}` : ''}`);
+}
+
+export async function getIncidentWatchers(id: number): Promise<{ items: IncidentWatcherItem[] }> {
+  return apiFetch(`/incidents/${id}/watchers`);
+}
+
+export async function addIncidentWatcher(
+  id: number,
+  username: string
+): Promise<IncidentWatcherItem> {
+  return apiFetch(`/incidents/${id}/watchers`, {
+    method: 'POST',
+    body: JSON.stringify({ username }),
+  });
+}
+
+export async function removeIncidentWatcher(
+  id: number,
+  username: string
+): Promise<{ ok: boolean }> {
+  return apiFetch(`/incidents/${id}/watchers?username=${encodeURIComponent(username)}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function getIncidentChecklist(
+  id: number
+): Promise<{ items: IncidentChecklistItem[] }> {
+  return apiFetch(`/incidents/${id}/checklist`);
+}
+
+export async function addIncidentChecklistItem(
+  id: number,
+  title: string
+): Promise<IncidentChecklistItem> {
+  return apiFetch(`/incidents/${id}/checklist`, {
+    method: 'POST',
+    body: JSON.stringify({ title }),
+  });
+}
+
+export async function updateIncidentChecklistItem(
+  id: number,
+  item_id: number,
+  done: boolean
+): Promise<IncidentChecklistItem> {
+  return apiFetch(`/incidents/${id}/checklist/${item_id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ done }),
+  });
+}
+
+export async function getIncidentDecisions(
+  id: number
+): Promise<{ items: IncidentDecisionItem[] }> {
+  return apiFetch(`/incidents/${id}/decisions`);
+}
+
+export async function addIncidentDecision(
+  id: number,
+  body: { decision: string; rationale?: string | null; details?: Record<string, unknown> }
+): Promise<IncidentDecisionItem> {
+  return apiFetch(`/incidents/${id}/decisions`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function getIncidentEvidence(id: number): Promise<{ items: IncidentEvidenceItem[] }> {
+  return apiFetch(`/incidents/${id}/evidence`);
+}
+
+export async function addIncidentEvidence(
+  id: number,
+  body: {
+    evidence_type: IncidentEvidenceItem['evidence_type'];
+    ref_id: string;
+    relation?: string;
+    summary?: string | null;
+    details?: Record<string, unknown>;
+  }
+): Promise<IncidentEvidenceItem> {
+  return apiFetch(`/incidents/${id}/evidence`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export type IncidentAutoRule = {
+  auto_rule_id: number;
+  name: string;
+  description?: string | null;
+  enabled: boolean;
+  severity_threshold: IncidentSeverity;
+  window_minutes: number;
+  min_alerts: number;
+  require_distinct_sources: boolean;
+  incident_severity: IncidentSeverity;
+  created_by?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export async function listIncidentAutoRules(): Promise<{ items: IncidentAutoRule[] }> {
+  return apiFetch('/incidents/auto-rules/list');
+}
+
+export async function createIncidentAutoRule(body: {
+  name: string;
+  description?: string | null;
+  enabled?: boolean;
+  severity_threshold?: IncidentSeverity;
+  window_minutes?: number;
+  min_alerts?: number;
+  require_distinct_sources?: boolean;
+  incident_severity?: IncidentSeverity;
+}): Promise<IncidentAutoRule> {
+  return apiFetch('/incidents/auto-rules/create', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function updateIncidentAutoRule(
+  autoRuleId: number,
+  body: {
+    description?: string | null;
+    enabled?: boolean;
+    severity_threshold?: IncidentSeverity;
+    window_minutes?: number;
+    min_alerts?: number;
+    require_distinct_sources?: boolean;
+    incident_severity?: IncidentSeverity;
+  }
+): Promise<IncidentAutoRule> {
+  return apiFetch(`/incidents/auto-rules/${autoRuleId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function runIncidentAutoRules(): Promise<{
+  rules_evaluated: number;
+  incidents_created: number;
+  incident_ids: number[];
+  triggered: Array<{
+    auto_rule_id: number;
+    incident_id: number;
+    asset_key: string;
+    alert_ids: number[];
+    source_count: number;
+  }>;
+}> {
+  return apiFetch('/incidents/auto-rules/run', { method: 'POST' });
+}
+
 export type CreateJiraResponse = { issue_key: string; url: string; message?: string };
 
 export async function createIncidentJiraTicket(
@@ -1743,6 +2771,130 @@ export async function generateIncidentAISummary(
     method: 'POST',
     body: JSON.stringify({ force }),
   });
+}
+
+export type AISummaryEntityType =
+  | 'incident'
+  | 'policy_evaluation'
+  | 'alert'
+  | 'job'
+  | 'asset'
+  | 'finding';
+
+export type AISummaryVersion = {
+  version_id: number;
+  entity_type: AISummaryEntityType;
+  entity_key: string;
+  version_no: number;
+  content_text: string;
+  provider?: string | null;
+  model?: string | null;
+  generated_by?: string | null;
+  source_type?: string | null;
+  context_json?: Record<string, unknown>;
+  evidence_json?: Record<string, unknown>;
+  created_at: string;
+};
+
+export type AISummaryVersionCompare = {
+  entity_type: AISummaryEntityType;
+  entity_key: string;
+  from_version: number;
+  to_version: number;
+  word_delta: number;
+  before_excerpt: string;
+  after_excerpt: string;
+};
+
+export type AIFeedbackValue = 'up' | 'down';
+
+export type AIFeedbackItem = {
+  feedback_id: number;
+  entity_type: AISummaryEntityType;
+  entity_key: string;
+  version_id?: number | null;
+  feedback: AIFeedbackValue;
+  comment?: string | null;
+  context_json?: Record<string, unknown>;
+  created_by?: string | null;
+  created_at: string;
+};
+
+export async function listAISummaryVersions(
+  entityType: AISummaryEntityType,
+  entityId: string | number,
+  limit: number = 50
+): Promise<{ items: AISummaryVersion[] }> {
+  return apiFetch<{ items: AISummaryVersion[] }>(
+    `/ai/summaries/${encodeURIComponent(entityType)}/${encodeURIComponent(String(entityId))}/versions?limit=${limit}`
+  );
+}
+
+export async function createAISummaryVersion(
+  entityType: AISummaryEntityType,
+  entityId: string | number,
+  body: {
+    content_text?: string | null;
+    provider?: string | null;
+    model?: string | null;
+    source_type?: string;
+    context_json?: Record<string, unknown>;
+    evidence_json?: Record<string, unknown>;
+  }
+): Promise<AISummaryVersion> {
+  return apiFetch<AISummaryVersion>(
+    `/ai/summaries/${encodeURIComponent(entityType)}/${encodeURIComponent(String(entityId))}/versions`,
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }
+  );
+}
+
+export async function compareAISummaryVersions(
+  entityType: AISummaryEntityType,
+  entityId: string | number,
+  fromVersion: number,
+  toVersion: number
+): Promise<AISummaryVersionCompare> {
+  const params = new URLSearchParams({
+    from_version: String(fromVersion),
+    to_version: String(toVersion),
+  });
+  return apiFetch<AISummaryVersionCompare>(
+    `/ai/summaries/${encodeURIComponent(entityType)}/${encodeURIComponent(String(entityId))}/versions/compare?${params.toString()}`
+  );
+}
+
+export async function createAIFeedback(body: {
+  entity_type: AISummaryEntityType;
+  entity_id: string | number;
+  version_id?: number | null;
+  feedback: AIFeedbackValue;
+  comment?: string | null;
+  context_json?: Record<string, unknown>;
+}): Promise<AIFeedbackItem> {
+  return apiFetch<AIFeedbackItem>('/ai/feedback', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function listAIFeedback(params?: {
+  entity_type?: AISummaryEntityType;
+  entity_id?: string | number;
+  limit?: number;
+}): Promise<{ items: AIFeedbackItem[] }> {
+  const query = new URLSearchParams();
+  if (params?.entity_type) query.set('entity_type', params.entity_type);
+  if (params?.entity_id != null) query.set('entity_id', String(params.entity_id));
+  if (params?.limit != null) query.set('limit', String(params.limit));
+  const suffix = query.toString();
+  return apiFetch<{ items: AIFeedbackItem[] }>(`/ai/feedback${suffix ? `?${suffix}` : ''}`);
+}
+
+export async function getAIFeedback(feedbackId: number): Promise<AIFeedbackItem> {
+  return apiFetch<AIFeedbackItem>(`/ai/feedback/${feedbackId}`);
 }
 
 export type AIPolicyEvaluationSummary = {

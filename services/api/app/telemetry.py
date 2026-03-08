@@ -1,4 +1,4 @@
-"""Telemetry ingestion and anomaly job helpers for Suricata, Zeek, auditd, and Cowrie."""
+"""Telemetry ingestion and anomaly job helpers for Suricata, Zeek, auditd, auth log, and Cowrie."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import ipaddress
 import json
 import logging
 import math
-import threading
+import re
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -20,11 +20,12 @@ from sqlalchemy.orm import Session
 
 from .alerts_v2 import normalize_alert_severity, upsert_security_alert
 from .db import SessionLocal
+from .queue import publish_scan_job
 from .settings import settings
 
 logger = logging.getLogger("secplat.telemetry")
 
-SUPPORTED_TELEMETRY_SOURCES = {"suricata", "zeek", "auditd", "cowrie", "custom"}
+SUPPORTED_TELEMETRY_SOURCES = {"suricata", "zeek", "auditd", "authlog", "cowrie", "custom"}
 
 MITRE_BY_SOURCE_EVENT: dict[tuple[str, str], list[str]] = {
     ("suricata", "alert"): ["TA0001", "TA0002", "TA0011"],
@@ -33,9 +34,208 @@ MITRE_BY_SOURCE_EVENT: dict[tuple[str, str], list[str]] = {
     ("zeek", "conn"): ["TA0008"],
     ("auditd", "execve"): ["TA0004"],
     ("auditd", "user_cmd"): ["TA0004"],
+    ("authlog", "ssh_auth_failed"): ["TA0006"],
+    ("authlog", "ssh_auth_success"): ["TA0001"],
+    ("authlog", "sudo_command"): ["TA0004"],
+    ("authlog", "su_session"): ["TA0004"],
+    ("authlog", "cron_command"): ["TA0003"],
+    ("authlog", "process_event"): ["TA0002"],
     ("cowrie", "cowrie.login.failed"): ["TA0006"],
     ("cowrie", "cowrie.command.input"): ["TA0002", "TA0008"],
 }
+
+AUTHLOG_LINE_RE = re.compile(
+    r"^(?P<month>[A-Z][a-z]{2})\s+(?P<day>\d{1,2})\s+(?P<clock>\d{2}:\d{2}:\d{2})\s+"
+    r"(?P<host>\S+)\s+(?P<process>[^\s:\[]+)(?:\[(?P<pid>\d+)\])?:\s+(?P<message>.*)$"
+)
+AUTHLOG_SSH_SUCCESS_RE = re.compile(
+    r"Accepted\s+\w+\s+for\s+(?P<username>[^\s]+)\s+from\s+(?P<src_ip>[^\s]+)\s+port\s+(?P<src_port>\d+)",
+    re.IGNORECASE,
+)
+AUTHLOG_SSH_FAILED_RE = re.compile(
+    r"Failed\s+\w+\s+for(?:\s+invalid user)?\s+(?P<username>[^\s]+)\s+from\s+(?P<src_ip>[^\s]+)\s+port\s+(?P<src_port>\d+)",
+    re.IGNORECASE,
+)
+AUTHLOG_SSH_INVALID_USER_RE = re.compile(
+    r"Invalid user\s+(?P<username>[^\s]+)\s+from\s+(?P<src_ip>[^\s]+)",
+    re.IGNORECASE,
+)
+AUTHLOG_SUDO_COMMAND_RE = re.compile(
+    r"^(?P<username>[^:]+)\s*:\s+.*COMMAND=(?P<command>.+)$",
+    re.IGNORECASE,
+)
+AUTHLOG_SU_SESSION_RE = re.compile(
+    r"session opened for user\s+(?P<target>[^\s]+)\s+by\s+(?P<actor>[^\s(]+)",
+    re.IGNORECASE,
+)
+AUTHLOG_CRON_COMMAND_RE = re.compile(r"CMD\s+\((?P<command>.+)\)", re.IGNORECASE)
+
+
+def _authlog_timestamp(month: str, day: str, clock: str) -> datetime | None:
+    year = datetime.now(UTC).year
+    try:
+        parsed = datetime.strptime(f"{year} {month} {int(day):02d} {clock}", "%Y %b %d %H:%M:%S")
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=UTC)
+
+
+def _classify_authlog_event(process: str, message: str) -> dict[str, Any]:
+    process_name = str(process or "").strip()
+    message_text = str(message or "").strip()
+    process_lower = process_name.lower()
+
+    out: dict[str, Any] = {
+        "event_type": "process_event",
+        "title": f"{process_name or 'system'} process event",
+        "description": message_text or None,
+        "severity": "low",
+        "protocol": "syslog",
+        "src_ip": None,
+        "src_port": None,
+        "username": None,
+        "command": None,
+    }
+
+    if "sshd" in process_lower:
+        success = AUTHLOG_SSH_SUCCESS_RE.search(message_text)
+        if success:
+            out.update(
+                {
+                    "event_type": "ssh_auth_success",
+                    "title": "SSH authentication success",
+                    "severity": "medium",
+                    "protocol": "ssh",
+                    "src_ip": success.group("src_ip"),
+                    "src_port": success.group("src_port"),
+                    "username": success.group("username"),
+                }
+            )
+            return out
+
+        failed = AUTHLOG_SSH_FAILED_RE.search(message_text)
+        if failed:
+            out.update(
+                {
+                    "event_type": "ssh_auth_failed",
+                    "title": "SSH authentication failed",
+                    "severity": "high",
+                    "protocol": "ssh",
+                    "src_ip": failed.group("src_ip"),
+                    "src_port": failed.group("src_port"),
+                    "username": failed.group("username"),
+                }
+            )
+            return out
+
+        invalid_user = AUTHLOG_SSH_INVALID_USER_RE.search(message_text)
+        if invalid_user:
+            out.update(
+                {
+                    "event_type": "ssh_auth_failed",
+                    "title": "SSH invalid user attempt",
+                    "severity": "high",
+                    "protocol": "ssh",
+                    "src_ip": invalid_user.group("src_ip"),
+                    "username": invalid_user.group("username"),
+                }
+            )
+            return out
+
+    if process_lower == "sudo":
+        sudo_command = AUTHLOG_SUDO_COMMAND_RE.search(message_text)
+        out.update(
+            {
+                "event_type": "sudo_command",
+                "title": "Sudo command execution",
+                "severity": "high",
+                "protocol": "sudo",
+            }
+        )
+        if sudo_command:
+            out["username"] = sudo_command.group("username").strip()
+            out["command"] = sudo_command.group("command").strip()
+        return out
+
+    if process_lower.startswith("su"):
+        su_session = AUTHLOG_SU_SESSION_RE.search(message_text)
+        out.update(
+            {
+                "event_type": "su_session",
+                "title": "User switch session",
+                "severity": "high",
+                "protocol": "su",
+            }
+        )
+        if su_session:
+            out["username"] = su_session.group("actor").strip()
+            out["command"] = f"target_user={su_session.group('target').strip()}"
+        return out
+
+    if process_lower in {"cron", "crond"} or "cmd (" in message_text.lower():
+        cron_command = AUTHLOG_CRON_COMMAND_RE.search(message_text)
+        out.update(
+            {
+                "event_type": "cron_command",
+                "title": "Cron command execution",
+                "severity": "medium",
+                "protocol": "cron",
+            }
+        )
+        if cron_command:
+            out["command"] = cron_command.group("command").strip()
+        return out
+
+    if any(word in message_text.lower() for word in ("failed", "error", "denied")):
+        out["severity"] = "medium"
+    return out
+
+
+def _parse_authlog_line(line: str) -> dict[str, Any] | None:
+    raw_line = str(line or "").strip()
+    if not raw_line:
+        return None
+    match = AUTHLOG_LINE_RE.match(raw_line)
+    if not match:
+        return None
+
+    month = match.group("month")
+    day = match.group("day")
+    clock = match.group("clock")
+    host = (match.group("host") or "").strip()
+    process = (match.group("process") or "").strip()
+    pid = match.group("pid")
+    message = (match.group("message") or "").strip()
+    event_time = _authlog_timestamp(month, day, clock)
+    classified = _classify_authlog_event(process, message)
+
+    src_ip = _parse_ip(classified.get("src_ip"))
+    src_port = _parse_port(classified.get("src_port"))
+    username = str(classified.get("username") or "").strip() or None
+    command = str(classified.get("command") or "").strip() or None
+    event_type = str(classified.get("event_type") or "process_event").strip().lower()
+    description = str(classified.get("description") or message).strip() or None
+
+    dedupe_key = f"{event_type}:{host}:{process}:{src_ip or 'na'}:{username or 'na'}:{command or description or 'na'}"
+
+    return {
+        "timestamp": _iso_z(event_time) if event_time else None,
+        "event_type": event_type,
+        "title": classified.get("title"),
+        "description": description,
+        "severity": classified.get("severity"),
+        "protocol": classified.get("protocol"),
+        "src_ip": src_ip,
+        "src_port": src_port,
+        "host": host or None,
+        "process": process or None,
+        "pid": int(pid) if pid and pid.isdigit() else None,
+        "username": username,
+        "command": command,
+        "message": message,
+        "dedupe_key": dedupe_key,
+        "raw_line": raw_line,
+    }
 
 
 def _parse_dt(value: Any) -> datetime | None:
@@ -84,6 +284,33 @@ def _iso_z(value: datetime | None) -> str | None:
     if value.tzinfo is None:
         value = value.replace(tzinfo=UTC)
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _parse_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _lag_stats(values: list[float]) -> dict[str, float | None]:
+    if not values:
+        return {
+            "ingest_lag_seconds_avg": None,
+            "ingest_lag_seconds_p95": None,
+            "ingest_lag_seconds_max": None,
+        }
+    ordered = sorted(values)
+    p95_index = max(0, min(len(ordered) - 1, math.ceil(len(ordered) * 0.95) - 1))
+    return {
+        "ingest_lag_seconds_avg": round(sum(ordered) / len(ordered), 3),
+        "ingest_lag_seconds_p95": round(float(ordered[p95_index]), 3),
+        "ingest_lag_seconds_max": round(float(ordered[-1]), 3),
+    }
 
 
 def _parse_ip(value: Any) -> str | None:
@@ -308,6 +535,38 @@ def _normalize_auditd_event(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _normalize_authlog_event(raw: dict[str, Any]) -> dict[str, Any]:
+    event_type = str(raw.get("event_type") or "process_event").strip().lower()
+    src_ip = _parse_ip(raw.get("src_ip"))
+    src_port = _parse_port(raw.get("src_port"))
+    process = str(raw.get("process") or "").strip()
+    host = str(raw.get("host") or "").strip()
+    title = str(raw.get("title") or "").strip() or "Linux auth log event"
+    description = str(raw.get("description") or raw.get("message") or "").strip() or None
+    severity = normalize_alert_severity(raw.get("severity") or "medium")
+    return {
+        "event_type": event_type,
+        "title": title,
+        "description": description,
+        "severity_text": severity,
+        "severity_numeric": None,
+        "src_ip": src_ip,
+        "src_port": src_port,
+        "dst_ip": None,
+        "dst_port": None,
+        "domain": _parse_domain(host),
+        "url": None,
+        "protocol": str(raw.get("protocol") or "").strip().lower() or "syslog",
+        "event_time": _parse_dt(raw.get("timestamp") or raw.get("@timestamp")),
+        "dedupe_key": str(
+            raw.get("dedupe_key")
+            or f"{event_type}:{host}:{process}:{src_ip}:{src_port}:{raw.get('username')}"
+        ),
+        "mitre_techniques": MITRE_BY_SOURCE_EVENT.get(("authlog", event_type), ["TA0002"]),
+        "raw": raw,
+    }
+
+
 def _normalize_cowrie_event(raw: dict[str, Any]) -> dict[str, Any]:
     event_type = str(raw.get("eventid") or raw.get("event_type") or "cowrie.event").strip().lower()
     src_ip = _parse_ip(raw.get("src_ip"))
@@ -347,6 +606,8 @@ def normalize_telemetry_event(source: str, raw: dict[str, Any]) -> dict[str, Any
         return _normalize_zeek_event(raw)
     if normalized_source == "auditd":
         return _normalize_auditd_event(raw)
+    if normalized_source == "authlog":
+        return _normalize_authlog_event(raw)
     if normalized_source == "cowrie":
         return _normalize_cowrie_event(raw)
     return {
@@ -376,6 +637,11 @@ def _insert_event(
     asset_id: int | None,
     asset_key: str | None,
     normalized: dict[str, Any],
+    collector: str | None,
+    ingest_job_id: int | None,
+    raw_offset: int | None,
+    raw_path: str | None,
+    ingest_lag_seconds: float | None,
     ti_match: bool,
     ti_source: str | None,
 ) -> int:
@@ -384,14 +650,14 @@ def _insert_event(
             text(
                 """
                 INSERT INTO security_events(
-                  source, event_type, asset_id, asset_key, severity,
+                  source, event_type, asset_id, asset_key, collector, ingest_job_id, raw_offset, raw_path, severity,
                   src_ip, src_port, dst_ip, dst_port, domain, url, protocol, event_time,
-                  ti_match, ti_source, mitre_techniques, payload_json
+                  ingest_lag_seconds, ti_match, ti_source, mitre_techniques, payload_json
                 )
                 VALUES (
-                  :source, :event_type, :asset_id, :asset_key, :severity,
+                  :source, :event_type, :asset_id, :asset_key, :collector, :ingest_job_id, :raw_offset, :raw_path, :severity,
                   :src_ip, :src_port, :dst_ip, :dst_port, :domain, :url, :protocol, :event_time,
-                  :ti_match, :ti_source, CAST(:mitre_techniques AS jsonb), CAST(:payload_json AS jsonb)
+                  :ingest_lag_seconds, :ti_match, :ti_source, CAST(:mitre_techniques AS jsonb), CAST(:payload_json AS jsonb)
                 )
                 RETURNING event_id
                 """
@@ -401,6 +667,10 @@ def _insert_event(
                 "event_type": normalized.get("event_type") or "event",
                 "asset_id": asset_id,
                 "asset_key": asset_key,
+                "collector": collector,
+                "ingest_job_id": ingest_job_id,
+                "raw_offset": raw_offset,
+                "raw_path": raw_path,
                 "severity": normalized.get("severity_numeric"),
                 "src_ip": normalized.get("src_ip"),
                 "src_port": normalized.get("src_port"),
@@ -410,6 +680,7 @@ def _insert_event(
                 "url": normalized.get("url"),
                 "protocol": normalized.get("protocol"),
                 "event_time": normalized.get("event_time") or datetime.now(UTC),
+                "ingest_lag_seconds": ingest_lag_seconds,
                 "ti_match": ti_match,
                 "ti_source": ti_source,
                 "mitre_techniques": json.dumps(normalized.get("mitre_techniques") or []),
@@ -438,6 +709,11 @@ def _build_opensearch_doc(
     source: str,
     asset_key: str | None,
     normalized: dict[str, Any],
+    collector: str | None,
+    ingest_job_id: int | None,
+    raw_offset: int | None,
+    raw_path: str | None,
+    ingest_lag_seconds: float | None,
     ti_match: bool,
     ti_source: str | None,
 ) -> dict[str, Any]:
@@ -450,6 +726,10 @@ def _build_opensearch_doc(
         "source": source,
         "event_type": str(normalized.get("event_type") or "event"),
         "asset_key": asset_key,
+        "collector": collector,
+        "ingest_job_id": ingest_job_id,
+        "raw_offset": raw_offset,
+        "raw_path": raw_path,
         "title": normalized.get("title"),
         "description": normalized.get("description"),
         "severity_text": normalize_alert_severity(normalized.get("severity_text")),
@@ -463,6 +743,7 @@ def _build_opensearch_doc(
         "protocol": normalized.get("protocol"),
         "dedupe_key": normalized.get("dedupe_key"),
         "mitre_techniques": normalized.get("mitre_techniques") or [],
+        "ingest_lag_seconds": ingest_lag_seconds,
         "ti_match": bool(ti_match),
         "ti_source": ti_source,
         "signature": str(alert.get("signature") or "").strip() or None,
@@ -475,6 +756,12 @@ def _build_opensearch_doc(
     elif source == "auditd":
         doc["audit_command"] = raw.get("exe") or raw.get("comm") or raw.get("cmd")
         doc["audit_user"] = raw.get("auid")
+    elif source == "authlog":
+        doc["authlog_host"] = raw.get("host")
+        doc["authlog_process"] = raw.get("process")
+        doc["authlog_pid"] = raw.get("pid")
+        doc["authlog_user"] = raw.get("username")
+        doc["authlog_command"] = raw.get("command")
     elif source == "cowrie":
         doc["cowrie_session"] = raw.get("session")
         doc["cowrie_username"] = raw.get("username")
@@ -534,19 +821,41 @@ def ingest_telemetry_events(
     events: list[dict[str, Any]],
     default_asset_key: str | None = None,
     create_alerts: bool = True,
+    collector: str | None = None,
+    ingest_job_id: int | None = None,
+    raw_path: str | None = None,
 ) -> dict[str, Any]:
     normalized_source = (source or "custom").strip().lower()
     if normalized_source not in SUPPORTED_TELEMETRY_SOURCES:
         raise ValueError(f"unsupported_telemetry_source:{normalized_source}")
+    normalized_collector = (
+        str(collector or f"ingest.{normalized_source}").strip() or f"ingest.{normalized_source}"
+    )
+    normalized_ingest_job_id = _parse_int(ingest_job_id)
+    normalized_raw_path = str(raw_path or "").strip() or None
     inserted_events = 0
     created_or_updated_alerts = 0
     ti_matches = 0
+    traceable_events = 0
     sources_counter: dict[str, int] = defaultdict(int)
+    lag_seconds_values: list[float] = []
     mirror_docs: list[dict[str, Any]] = []
-    for raw in events[: max(1, int(settings.TELEMETRY_IMPORT_MAX_EVENTS))]:
+    for idx, raw in enumerate(events[: max(1, int(settings.TELEMETRY_IMPORT_MAX_EVENTS))], start=1):
         if not isinstance(raw, dict):
             continue
         normalized = normalize_telemetry_event(normalized_source, raw)
+        event_time = _parse_dt(normalized.get("event_time")) or datetime.now(UTC)
+        normalized["event_time"] = event_time
+        ingest_lag_seconds = max(0.0, (datetime.now(UTC) - event_time).total_seconds())
+        lag_seconds_values.append(ingest_lag_seconds)
+        event_collector = str(raw.get("collector") or normalized_collector).strip() or normalized_collector
+        event_ingest_job_id = _parse_int(raw.get("ingest_job_id"))
+        if event_ingest_job_id is None:
+            event_ingest_job_id = normalized_ingest_job_id
+        event_raw_offset = _parse_int(raw.get("raw_offset"))
+        if event_raw_offset is None:
+            event_raw_offset = idx
+        event_raw_path = str(raw.get("raw_path") or "").strip() or normalized_raw_path
         resolved_asset_id, resolved_asset_key = _resolve_asset(
             db,
             asset_key=(
@@ -572,6 +881,11 @@ def ingest_telemetry_events(
             asset_id=resolved_asset_id,
             asset_key=resolved_asset_key,
             normalized=normalized,
+            collector=event_collector,
+            ingest_job_id=event_ingest_job_id,
+            raw_offset=event_raw_offset,
+            raw_path=event_raw_path,
+            ingest_lag_seconds=ingest_lag_seconds,
             ti_match=ti_match,
             ti_source=ti_source,
         )
@@ -581,17 +895,24 @@ def ingest_telemetry_events(
                 source=normalized_source,
                 asset_key=resolved_asset_key,
                 normalized=normalized,
+                collector=event_collector,
+                ingest_job_id=event_ingest_job_id,
+                raw_offset=event_raw_offset,
+                raw_path=event_raw_path,
+                ingest_lag_seconds=ingest_lag_seconds,
                 ti_match=ti_match,
                 ti_source=ti_source,
             )
         )
         inserted_events += 1
+        if event_collector and (event_ingest_job_id is not None or event_raw_path or event_raw_offset):
+            traceable_events += 1
 
         severity_text = normalize_alert_severity(normalized.get("severity_text"))
         create_alert = create_alerts and (
             severity_text in {"critical", "high"}
             or bool(ti_match)
-            or normalized_source in {"cowrie", "auditd"}
+            or normalized_source in {"cowrie", "auditd", "authlog"}
         )
         if create_alert:
             dedupe_key = str(normalized.get("dedupe_key") or normalized.get("title"))
@@ -620,12 +941,22 @@ def ingest_telemetry_events(
             )
             created_or_updated_alerts += 1
     _mirror_events_to_opensearch(normalized_source, mirror_docs)
+    lag_summary = _lag_stats(lag_seconds_values)
+    traceability_coverage_pct = (
+        round((traceable_events / inserted_events) * 100.0, 2) if inserted_events else 0.0
+    )
     return {
         "source": normalized_source,
+        "collector": normalized_collector,
+        "ingest_job_id": normalized_ingest_job_id,
+        "raw_path": normalized_raw_path,
         "processed_events": inserted_events,
         "alert_updates": created_or_updated_alerts,
         "ti_matches": ti_matches,
         "ti_sources": dict(sources_counter),
+        "traceable_events": traceable_events,
+        "traceability_coverage_pct": traceability_coverage_pct,
+        **lag_summary,
     }
 
 
@@ -635,10 +966,11 @@ def _read_events_from_file(path: str) -> list[dict[str, Any]]:
         raise ValueError("telemetry_file_not_found")
     if not file_path.is_file():
         raise ValueError("telemetry_path_not_file")
+    raw_path = str(file_path)
     if file_path.suffix.lower() in {".json", ".jsonl", ".log"}:
         events: list[dict[str, Any]] = []
         with file_path.open("r", encoding="utf-8", errors="ignore") as handle:
-            for line in handle:
+            for line_no, line in enumerate(handle, start=1):
                 raw = line.strip()
                 if not raw or raw.startswith("#"):
                     continue
@@ -647,14 +979,43 @@ def _read_events_from_file(path: str) -> list[dict[str, Any]]:
                 except json.JSONDecodeError:
                     continue
                 if isinstance(parsed, dict):
+                    parsed.setdefault("raw_offset", line_no)
+                    parsed.setdefault("raw_path", raw_path)
                     events.append(parsed)
         return events
     if file_path.suffix.lower() in {".csv", ".tsv"}:
         delimiter = "\t" if file_path.suffix.lower() == ".tsv" else ","
         with file_path.open("r", encoding="utf-8", errors="ignore", newline="") as handle:
             reader = csv.DictReader(handle, delimiter=delimiter)
-            return [dict(row) for row in reader]
+            events: list[dict[str, Any]] = []
+            for row_no, row in enumerate(reader, start=2):
+                item = dict(row)
+                item.setdefault("raw_offset", row_no)
+                item.setdefault("raw_path", raw_path)
+                events.append(item)
+            return events
     raise ValueError("telemetry_file_unsupported")
+
+
+def _read_authlog_events_from_file(path: str) -> list[dict[str, Any]]:
+    file_path = Path(path)
+    if not file_path.exists():
+        raise ValueError("telemetry_file_not_found")
+    if not file_path.is_file():
+        raise ValueError("telemetry_path_not_file")
+    raw_path = str(file_path)
+    events: list[dict[str, Any]] = []
+    with file_path.open("r", encoding="utf-8", errors="ignore") as handle:
+        for line_no, line in enumerate(handle, start=1):
+            raw = line.strip()
+            if not raw or raw.startswith("#"):
+                continue
+            parsed = _parse_authlog_line(raw)
+            if parsed:
+                parsed.setdefault("raw_offset", line_no)
+                parsed.setdefault("raw_path", raw_path)
+                events.append(parsed)
+    return events
 
 
 def _append_job_log(db: Session, job_id: int, message: str) -> None:
@@ -730,13 +1091,17 @@ def run_telemetry_import_job(job_id: int) -> None:
                 "suricata": settings.TELEMETRY_SURICATA_LOG_PATH,
                 "zeek": settings.TELEMETRY_ZEEK_LOG_PATH,
                 "auditd": settings.TELEMETRY_AUDITD_LOG_PATH,
+                "authlog": settings.TELEMETRY_AUTH_LOG_PATH,
                 "cowrie": settings.TELEMETRY_COWRIE_LOG_PATH,
             }
             path = source_path_map.get(source, "")
         if not path:
             raise ValueError("telemetry_file_path_required")
         _append_job_log(db, job_id, f"Telemetry import started source={source} path={path}")
-        events = _read_events_from_file(path)
+        if source == "authlog":
+            events = _read_authlog_events_from_file(path)
+        else:
+            events = _read_events_from_file(path)
         _append_job_log(db, job_id, f"Loaded {len(events)} candidate rows from file")
         last_seen_row = (
             db.execute(
@@ -780,6 +1145,9 @@ def run_telemetry_import_job(job_id: int) -> None:
             events=events,
             default_asset_key=default_asset_key,
             create_alerts=create_alerts,
+            collector=f"jobs.telemetry_import.{source}",
+            ingest_job_id=job_id,
+            raw_path=path,
         )
         _append_job_log(
             db,
@@ -798,13 +1166,37 @@ def run_telemetry_import_job(job_id: int) -> None:
 
 
 def launch_telemetry_import_job(job_id: int) -> None:
-    thread = threading.Thread(
-        target=run_telemetry_import_job,
-        args=(job_id,),
-        name=f"telemetry-import-job-{job_id}",
-        daemon=True,
+    db = SessionLocal()
+    try:
+        row = (
+            db.execute(
+                text(
+                    """
+                    SELECT target_asset_id, requested_by
+                    FROM scan_jobs
+                    WHERE job_id = :job_id
+                    """
+                ),
+                {"job_id": job_id},
+            )
+            .mappings()
+            .first()
+        )
+        if not row:
+            logger.warning("telemetry_import_enqueue_missing_job job_id=%s", job_id)
+            return
+        requested_by = str((row or {}).get("requested_by") or "system")
+        target_asset_id = (row or {}).get("target_asset_id")
+    finally:
+        db.close()
+    published = publish_scan_job(
+        int(job_id),
+        "telemetry_import",
+        int(target_asset_id) if target_asset_id is not None else None,
+        requested_by,
     )
-    thread.start()
+    if not published:
+        logger.warning("telemetry_import_enqueue_failed job_id=%s", job_id)
 
 
 def _hour_bucket(value: datetime) -> datetime:
@@ -955,13 +1347,37 @@ def run_network_anomaly_job(job_id: int) -> None:
 
 
 def launch_network_anomaly_job(job_id: int) -> None:
-    thread = threading.Thread(
-        target=run_network_anomaly_job,
-        args=(job_id,),
-        name=f"network-anomaly-job-{job_id}",
-        daemon=True,
+    db = SessionLocal()
+    try:
+        row = (
+            db.execute(
+                text(
+                    """
+                    SELECT target_asset_id, requested_by
+                    FROM scan_jobs
+                    WHERE job_id = :job_id
+                    """
+                ),
+                {"job_id": job_id},
+            )
+            .mappings()
+            .first()
+        )
+        if not row:
+            logger.warning("network_anomaly_enqueue_missing_job job_id=%s", job_id)
+            return
+        requested_by = str((row or {}).get("requested_by") or "system")
+        target_asset_id = (row or {}).get("target_asset_id")
+    finally:
+        db.close()
+    published = publish_scan_job(
+        int(job_id),
+        "network_anomaly_score",
+        int(target_asset_id) if target_asset_id is not None else None,
+        requested_by,
     )
-    thread.start()
+    if not published:
+        logger.warning("network_anomaly_enqueue_failed job_id=%s", job_id)
 
 
 def enqueue_network_anomaly_job(
@@ -1016,7 +1432,7 @@ def enqueue_telemetry_import_job(
     skip_if_running: bool = True,
 ) -> int | None:
     normalized_source = (source or "").strip().lower()
-    if normalized_source not in {"suricata", "zeek", "auditd", "cowrie", "custom"}:
+    if normalized_source not in {"suricata", "zeek", "auditd", "authlog", "cowrie", "custom"}:
         raise ValueError("telemetry_source_invalid")
     resolved_path = str(file_path or "").strip()
     if not resolved_path and normalized_source != "custom":
@@ -1024,6 +1440,7 @@ def enqueue_telemetry_import_job(
             "suricata": settings.TELEMETRY_SURICATA_LOG_PATH,
             "zeek": settings.TELEMETRY_ZEEK_LOG_PATH,
             "auditd": settings.TELEMETRY_AUDITD_LOG_PATH,
+            "authlog": settings.TELEMETRY_AUTH_LOG_PATH,
             "cowrie": settings.TELEMETRY_COWRIE_LOG_PATH,
         }
         resolved_path = str(source_path_map.get(normalized_source) or "").strip()
@@ -1152,6 +1569,23 @@ def build_keepalive_events(source: str, *, now: datetime | None = None) -> list[
                 "serial": f"keepalive-auditd-{minute_bucket}",
             }
         ]
+    if normalized_source == "authlog":
+        return [
+            {
+                "timestamp": timestamp,
+                "event_type": "ssh_auth_failed",
+                "title": "SSH authentication failed",
+                "description": "Failed password for root from 203.0.113.75 port 42111 ssh2",
+                "severity": "high",
+                "protocol": "ssh",
+                "src_ip": "203.0.113.75",
+                "src_port": 42111,
+                "host": "secplat-lab",
+                "process": "sshd",
+                "username": "root",
+                "dedupe_key": f"keepalive-authlog-{minute_bucket}",
+            }
+        ]
     if normalized_source == "cowrie":
         return [
             {
@@ -1191,7 +1625,7 @@ def ensure_recent_telemetry_activity(
     selected_sources = [
         s
         for s in [(item or "").strip().lower() for item in (sources or [])]
-        if s in {"suricata", "zeek", "auditd", "cowrie", "custom"}
+        if s in {"suricata", "zeek", "auditd", "authlog", "cowrie", "custom"}
     ]
     if not selected_sources:
         selected_sources = ["suricata", "zeek", "auditd", "cowrie"]
@@ -1239,6 +1673,8 @@ def ensure_recent_telemetry_activity(
                 events=events,
                 default_asset_key=effective_asset_key,
                 create_alerts=create_alerts,
+                collector=f"keepalive.{source}",
+                raw_path=f"keepalive://{source}",
             )
             injected = int(summary.get("processed_events") or 0)
             if injected > 0:

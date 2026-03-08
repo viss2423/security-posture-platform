@@ -77,58 +77,114 @@ export default function IncidentsPage() {
     }
   };
 
+  const totalIncidents = data?.total ?? 0;
+  const criticalIncidents =
+    data?.items.filter((item) => item.severity === 'critical' || item.severity === 'high')
+      .length ?? 0;
+  const activeIncidents =
+    data?.items.filter((item) => item.status !== 'resolved' && item.status !== 'closed').length ??
+    0;
+  const incidentAlerts = data?.items.reduce((sum, item) => sum + (item.alert_count ?? 0), 0) ?? 0;
+
   return (
-    <main className="mx-auto max-w-6xl px-4 py-10 sm:px-6 lg:px-8">
-      <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="page-title mb-0">Incidents</h1>
-        <div className="flex flex-wrap items-center gap-3">
-          <select
-            className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            aria-label="Filter by status"
-          >
-            <option value="">All statuses</option>
-            {STATUS_OPTIONS.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-          <select
-            className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
-            value={severityFilter}
-            onChange={(e) => setSeverityFilter(e.target.value)}
-            aria-label="Filter by severity"
-          >
-            <option value="">All severities</option>
-            {SEVERITY_OPTIONS.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-          {canMutate && (
-            <button type="button" onClick={() => setShowCreate(true)} className="btn-primary">
-              New incident
-            </button>
-          )}
+    <main className="page-shell view-stack">
+      <section className="page-hero animate-in">
+        <div className="hero-grid">
+          <div>
+            <h1 className="hero-title">Incident Response Console</h1>
+            <p className="hero-copy">
+              Coordinate triage, containment, and resolution with status-driven queue controls and
+              direct drill-down into incident records.
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Link href="/alerts" className="btn-secondary text-sm">
+                Open alerts
+              </Link>
+              <Link href="/findings" className="btn-secondary text-sm">
+                Open findings
+              </Link>
+              {canMutate && (
+                <button
+                  type="button"
+                  onClick={() => setShowCreate(true)}
+                  className="btn-primary text-sm"
+                >
+                  New incident
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="hero-stat-grid">
+            <div className="hero-stat">
+              <p className="hero-stat-label">Total incidents</p>
+              <p className="hero-stat-value">{totalIncidents}</p>
+            </div>
+            <div className="hero-stat">
+              <p className="hero-stat-label">Active incidents</p>
+              <p className="hero-stat-value">{activeIncidents}</p>
+            </div>
+            <div className="hero-stat">
+              <p className="hero-stat-label">High/Critical</p>
+              <p className="hero-stat-value">{criticalIncidents}</p>
+            </div>
+            <div className="hero-stat">
+              <p className="hero-stat-label">Linked alerts</p>
+              <p className="hero-stat-value">{incidentAlerts}</p>
+            </div>
+          </div>
         </div>
-      </div>
+      </section>
+
+      <section className="section-panel animate-in">
+        <div className="section-head">
+          <div>
+            <p className="section-title mb-2">Queue filters</p>
+            <p className="section-head-copy">Narrow to the active triage slice.</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <select
+              className="input py-2.5 text-sm"
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              aria-label="Filter by status"
+            >
+              <option value="">All statuses</option>
+              {STATUS_OPTIONS.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+            <select
+              className="input py-2.5 text-sm"
+              value={severityFilter}
+              onChange={(e) => setSeverityFilter(e.target.value)}
+              aria-label="Filter by severity"
+            >
+              <option value="">All severities</option>
+              {SEVERITY_OPTIONS.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+      </section>
 
       {error && (
-        <div className="mb-6 alert-error animate-in" role="alert">
+        <div className="alert-error animate-in" role="alert">
           {friendlyApiMessage(error)}
           <ApiDownHint />
         </div>
       )}
 
       {canMutate && showCreate && (
-        <div className="card mb-6 animate-in">
+        <section className="section-panel animate-in">
           <h2 className="section-title mb-3">Create incident</h2>
           {createError && <p className="mb-2 text-sm text-[var(--red)]">{createError}</p>}
           <div className="flex flex-wrap items-end gap-3">
-            <div className="min-w-[200px] flex-1">
+            <div className="min-w-[220px] flex-1">
               <label className="mb-1 block text-xs font-medium text-[var(--muted)]">Title</label>
               <input
                 type="text"
@@ -139,7 +195,9 @@ export default function IncidentsPage() {
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs font-medium text-[var(--muted)]">Severity</label>
+              <label className="mb-1 block text-xs font-medium text-[var(--muted)]">
+                Severity
+              </label>
               <select
                 value={createSeverity}
                 onChange={(e) => setCreateSeverity(e.target.value as IncidentSeverity)}
@@ -152,37 +210,64 @@ export default function IncidentsPage() {
                 ))}
               </select>
             </div>
-            <button type="button" onClick={handleCreate} disabled={createLoading} className="btn-primary">
-              {createLoading ? 'Creating…' : 'Create'}
+            <button
+              type="button"
+              onClick={handleCreate}
+              disabled={createLoading}
+              className="btn-primary"
+            >
+              {createLoading ? 'Creating...' : 'Create'}
             </button>
-            <button type="button" onClick={() => { setShowCreate(false); setCreateError(null); }} className="btn-secondary">
+            <button
+              type="button"
+              onClick={() => {
+                setShowCreate(false);
+                setCreateError(null);
+              }}
+              className="btn-secondary"
+            >
               Cancel
             </button>
           </div>
-        </div>
+        </section>
       )}
 
       {data && data.items.length === 0 && (
-        <div className="card animate-in py-12 text-center">
+        <section className="section-panel animate-in py-12 text-center">
           <p className="text-[var(--muted)]">
-            No incidents yet. Create one from &quot;New incident&quot; or link alerts from the Alerts page.
+            No incidents yet. Create one from &quot;New incident&quot; or link alerts from the
+            Alerts page.
           </p>
-        </div>
+        </section>
       )}
 
       {data && data.items.length > 0 && (
-        <div className="card p-0 animate-in overflow-hidden">
+        <section className="section-panel animate-in overflow-hidden p-0">
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-sm">
               <thead>
                 <tr className="border-b border-[var(--border)] bg-[var(--surface-elevated)]">
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">Title</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">Severity</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">Status</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">Assigned</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">Alerts</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">SLA due</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">Created</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">
+                    Title
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">
+                    Severity
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">
+                    Status
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">
+                    Assigned
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">
+                    Alerts
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">
+                    SLA due
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">
+                    Created
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -202,35 +287,40 @@ export default function IncidentsPage() {
                     <td className="px-4 py-3">
                       <span
                         className="inline-block rounded px-2 py-0.5 text-xs font-medium capitalize"
-                        style={{ backgroundColor: `${severityColor(inc.severity)}20`, color: severityColor(inc.severity) }}
+                        style={{
+                          backgroundColor: `${severityColor(inc.severity)}20`,
+                          color: severityColor(inc.severity),
+                        }}
                       >
                         {inc.severity}
                       </span>
                     </td>
                     <td className="px-4 py-3 capitalize">{inc.status}</td>
-                    <td className="px-4 py-3 text-[var(--muted)]">{inc.assigned_to ?? '–'}</td>
+                    <td className="px-4 py-3 text-[var(--muted)]">{inc.assigned_to ?? '-'}</td>
                     <td className="px-4 py-3">{inc.alert_count ?? 0}</td>
-                    <td className="px-4 py-3 text-[var(--muted)] tabular-nums">
-                      {inc.sla_due_at ? formatDateTime(inc.sla_due_at) : '–'}
+                    <td className="px-4 py-3 tabular-nums text-[var(--muted)]">
+                      {inc.sla_due_at ? formatDateTime(inc.sla_due_at) : '-'}
                     </td>
-                    <td className="px-4 py-3 text-[var(--muted)] tabular-nums">{formatDateTime(inc.created_at)}</td>
+                    <td className="px-4 py-3 tabular-nums text-[var(--muted)]">
+                      {formatDateTime(inc.created_at)}
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
           {data.total > data.items.length && (
-            <p className="px-4 py-2 text-xs text-[var(--muted)] border-t border-[var(--border)]">
+            <p className="border-t border-[var(--border)] px-4 py-2 text-xs text-[var(--muted)]">
               Showing {data.items.length} of {data.total} incidents
             </p>
           )}
-        </div>
+        </section>
       )}
 
       {!data && !error && (
-        <div className="card animate-in py-12 text-center">
-          <p className="text-[var(--muted)]">Loading incidents…</p>
-        </div>
+        <section className="section-panel animate-in py-12 text-center">
+          <p className="text-[var(--muted)]">Loading incidents...</p>
+        </section>
       )}
     </main>
   );

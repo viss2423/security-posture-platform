@@ -1,12 +1,12 @@
-"""Phase 1: Publish scan jobs to Redis stream. No-op when REDIS_URL is not set."""
+"""Queue publishers with canonical event envelope validation."""
 
 import json
 import logging
-from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
 from app.request_context import request_id_ctx
+from app.schemas.events import EventEnvelope, build_event_envelope
 from app.settings import settings
 
 logger = logging.getLogger("secplat.queue")
@@ -42,6 +42,36 @@ def _resolve_trace_id(trace_id: str | None = None) -> str:
     return str(uuid4())
 
 
+def _as_stream_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    return json.dumps(value)
+
+
+def _stream_message(
+    *,
+    envelope: EventEnvelope,
+    include_payload_fields: bool = False,
+) -> dict[str, str]:
+    msg: dict[str, str] = {
+        "event_id": envelope.event_id,
+        "event_type": envelope.event_type,
+        "ts": envelope.ts,
+        "org_id": envelope.org_id,
+        "request_id": envelope.request_id or "",
+        "trace_id": envelope.request_id or "",
+        "payload": json.dumps(envelope.payload),
+    }
+    if include_payload_fields:
+        for key, value in envelope.payload.items():
+            msg[str(key)] = _as_stream_value(value)
+    return msg
+
+
 def publish_scan_job(
     job_id: int,
     job_type: str,
@@ -54,13 +84,19 @@ def publish_scan_job(
     if not r:
         return False
     try:
-        msg = {
-            "job_id": str(job_id),
-            "job_type": job_type,
-            "target_asset_id": str(target_asset_id) if target_asset_id is not None else "",
-            "requested_by": requested_by,
-            "trace_id": _resolve_trace_id(trace_id),
+        request_id = _resolve_trace_id(trace_id)
+        payload = {
+            "job_id": int(job_id),
+            "job_type": str(job_type),
+            "target_asset_id": target_asset_id,
+            "requested_by": str(requested_by or ""),
         }
+        envelope = build_event_envelope(
+            event_type="scan.requested",
+            payload=payload,
+            request_id=request_id,
+        )
+        msg = _stream_message(envelope=envelope, include_payload_fields=True)
         r.xadd(STREAM_SCAN, msg, maxlen=100_000)
         logger.info("published job_id=%s to stream=%s", job_id, STREAM_SCAN)
         return True
@@ -77,11 +113,17 @@ def publish_notify(down_assets: list[str], trace_id: str | None = None) -> bool:
     if not r:
         return False
     try:
-        msg = {
+        request_id = _resolve_trace_id(trace_id)
+        payload = {
             "type": "down_assets",
-            "down_assets": json.dumps(down_assets),
-            "trace_id": _resolve_trace_id(trace_id),
+            "down_assets": list(down_assets),
         }
+        envelope = build_event_envelope(
+            event_type="notify.requested",
+            payload=payload,
+            request_id=request_id,
+        )
+        msg = _stream_message(envelope=envelope, include_payload_fields=True)
         r.xadd(STREAM_NOTIFY, msg, maxlen=10_000)
         logger.info("published notify to stream=%s down_assets=%s", STREAM_NOTIFY, down_assets)
         return True
@@ -105,21 +147,26 @@ def publish_correlation_event(
     if not r:
         return False
     try:
-        msg = {
-            "event_type": event_type,
-            "ts": datetime.now(UTC).isoformat(),
-            "trace_id": _resolve_trace_id(trace_id),
+        request_id = _resolve_trace_id(trace_id)
+        payload: dict[str, Any] = {
+            "event_type": str(event_type),
         }
         if asset_key:
-            msg["asset_key"] = asset_key
+            payload["asset_key"] = asset_key
         if finding_key:
-            msg["finding_key"] = finding_key
+            payload["finding_key"] = finding_key
         if severity:
-            msg["severity"] = severity
+            payload["severity"] = severity
         if down_assets:
-            msg["down_assets"] = json.dumps(down_assets)
+            payload["down_assets"] = list(down_assets)
         if incident_key:
-            msg["incident_key"] = incident_key
+            payload["incident_key"] = incident_key
+        envelope = build_event_envelope(
+            event_type=str(event_type),
+            payload=payload,
+            request_id=request_id,
+        )
+        msg = _stream_message(envelope=envelope, include_payload_fields=True)
         r.xadd(STREAM_CORRELATION, msg, maxlen=50_000)
         logger.info("published correlation event_type=%s stream=%s", event_type, STREAM_CORRELATION)
         return True

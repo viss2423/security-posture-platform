@@ -8,8 +8,10 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.audit import log_audit
 from app.db import get_db
 from app.policy_eval import evaluate_rules, parse_bundle_yaml
+from app.request_context import request_id_ctx
 from app.routers.auth import decode_token_payload, require_auth, require_role, security
 from app.routers.posture import _get_filtered_posture_list
 
@@ -107,28 +109,41 @@ def get_bundle(
 def create_bundle(
     body: BundleCreate,
     db: Session = Depends(get_db),
-    _user: str = Depends(require_role(["admin", "analyst"])),
+    user: str = Depends(require_role(["admin", "analyst"])),
 ):
     """Create a new policy bundle (draft). Definition must be valid YAML with 'rules' list."""
     try:
         parse_bundle_yaml(body.definition)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    db.execute(
-        text("""
-            INSERT INTO policy_bundles (name, description, definition, status, updated_at)
-            VALUES (:name, :description, :definition, 'draft', NOW())
-        """),
-        {"name": body.name, "description": body.description or "", "definition": body.definition},
-    )
-    db.commit()
     row = (
         db.execute(
-            text("SELECT id, name, status, created_at FROM policy_bundles ORDER BY id DESC LIMIT 1")
+            text(
+                """
+                INSERT INTO policy_bundles (name, description, definition, status, updated_at)
+                VALUES (:name, :description, :definition, 'draft', NOW())
+                RETURNING id, name, status, created_at
+                """
+            ),
+            {"name": body.name, "description": body.description or "", "definition": body.definition},
         )
         .mappings()
         .first()
     )
+    if not row:
+        raise HTTPException(status_code=500, detail="Failed to create policy bundle")
+    log_audit(
+        db,
+        "policy_bundle.create",
+        user_name=user,
+        details={
+            "bundle_id": int(row["id"]),
+            "name": row["name"],
+            "status": row["status"],
+        },
+        request_id=request_id_ctx.get(None),
+    )
+    db.commit()
     return {
         "id": row["id"],
         "name": row["name"],
@@ -142,7 +157,7 @@ def update_bundle(
     bundle_id: int,
     body: BundleUpdate,
     db: Session = Depends(get_db),
-    _user: str = Depends(require_role(["admin", "analyst"])),
+    user: str = Depends(require_role(["admin", "analyst"])),
 ):
     """Update a draft bundle. Approved bundles cannot be edited."""
     row = (
@@ -173,6 +188,18 @@ def update_bundle(
         return get_bundle(bundle_id, db=db)
     updates.append("updated_at = NOW()")
     db.execute(text(f"UPDATE policy_bundles SET {', '.join(updates)} WHERE id = :id"), params)
+    log_audit(
+        db,
+        "policy_bundle.update",
+        user_name=user,
+        details={
+            "bundle_id": bundle_id,
+            "updated_fields": sorted(
+                [field for field in ("name", "description", "definition") if field in params]
+            ),
+        },
+        request_id=request_id_ctx.get(None),
+    )
     db.commit()
     return get_bundle(bundle_id, db=db)
 
@@ -181,7 +208,7 @@ def update_bundle(
 def approve_bundle(
     bundle_id: int,
     db: Session = Depends(get_db),
-    _user: str = Depends(require_role(["admin"])),
+    user: str = Depends(require_role(["admin"])),
 ):
     """Mark bundle as approved. Only admins."""
     row = (
@@ -195,7 +222,14 @@ def approve_bundle(
         text(
             "UPDATE policy_bundles SET status = 'approved', approved_at = NOW(), approved_by = :by WHERE id = :id"
         ),
-        {"id": bundle_id, "by": _user},
+        {"id": bundle_id, "by": user},
+    )
+    log_audit(
+        db,
+        "policy_bundle.approve",
+        user_name=user,
+        details={"bundle_id": bundle_id},
+        request_id=request_id_ctx.get(None),
     )
     db.commit()
     return {"ok": True, "status": "approved"}
@@ -205,7 +239,7 @@ def approve_bundle(
 def evaluate_bundle(
     bundle_id: int,
     db: Session = Depends(get_db),
-    _user: str = Depends(require_auth),
+    user: str = Depends(require_auth),
 ):
     """Run bundle rules, persist evaluation with evidence, and return the payload."""
     row = (
@@ -297,7 +331,7 @@ def evaluate_bundle(
         """),
             {
                 "bundle_id": bundle_id,
-                "evaluated_by": _user,
+                "evaluated_by": user,
                 "bundle_approved_by": row.get("approved_by"),
                 "score": result.get("score"),
                 "violations_count": len(result.get("violations") or []),
@@ -306,6 +340,20 @@ def evaluate_bundle(
         )
         .mappings()
         .first()
+    )
+    if not ins:
+        raise HTTPException(status_code=500, detail="Failed to persist policy evaluation")
+    log_audit(
+        db,
+        "policy_bundle.evaluate",
+        user_name=user,
+        details={
+            "bundle_id": bundle_id,
+            "evaluation_id": int(ins["id"]),
+            "score": result.get("score"),
+            "violations_count": len(result.get("violations") or []),
+        },
+        request_id=request_id_ctx.get(None),
     )
     db.commit()
     return {
@@ -430,13 +478,21 @@ def get_bundle_evaluation(
 def delete_bundle(
     bundle_id: int,
     db: Session = Depends(get_db),
-    _user: str = Depends(require_role(["admin"])),
+    user: str = Depends(require_role(["admin"])),
 ):
     """Delete a bundle. Only admins. Draft only (or allow approved with confirmation — we allow any)."""
     r = db.execute(
         text("DELETE FROM policy_bundles WHERE id = :id RETURNING id"), {"id": bundle_id}
     )
-    db.commit()
-    if not r.fetchone():
+    deleted = r.fetchone()
+    if not deleted:
         raise HTTPException(status_code=404, detail="Bundle not found")
+    log_audit(
+        db,
+        "policy_bundle.delete",
+        user_name=user,
+        details={"bundle_id": bundle_id},
+        request_id=request_id_ctx.get(None),
+    )
+    db.commit()
     return {"ok": True}

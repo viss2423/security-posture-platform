@@ -15,8 +15,10 @@ from fastapi.responses import PlainTextResponse, Response
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.audit import log_audit
 from app.db import get_db
 from app.queue import publish_correlation_event, publish_notify
+from app.request_context import request_id_ctx
 from app.routers.auth import require_auth, require_role
 from app.schemas.posture import (
     AssetDetailResponse,
@@ -664,7 +666,7 @@ def reports_summary(
 def reports_snapshot(
     period: str = Query("24h", description="24h or 7d"),
     db: Session = Depends(get_db),
-    _user: str = Depends(require_role(["admin", "analyst"])),
+    user: str = Depends(require_role(["admin", "analyst"])),
 ):
     """Save current report summary as a snapshot in DB. Returns stored row with id and created_at."""
     report = _build_report_summary(period)
@@ -687,6 +689,19 @@ def reports_snapshot(
         "top_incidents": json.dumps(report.top_incidents),
     }
     row = db.execute(q, params).mappings().first()
+    if row:
+        log_audit(
+            db,
+            "posture_report.snapshot",
+            user_name=user,
+            details={
+                "snapshot_id": int(row["id"]),
+                "period": period,
+                "total_assets": row.get("total_assets"),
+                "red": row.get("red"),
+            },
+            request_id=request_id_ctx.get(None),
+        )
     db.commit()
     return dict(row)
 
@@ -1291,7 +1306,7 @@ def posture_summary(
 @router.post("/alert/send")
 def posture_alert_send(
     db: Session = Depends(get_db),
-    _user: str = Depends(require_auth),
+    user: str = Depends(require_auth),
 ):
     """
     Check current posture; if any assets are down, send notification.
@@ -1302,11 +1317,20 @@ def posture_alert_send(
     down_assets = _get_down_assets()
     down_assets = [a for a in down_assets if not is_asset_suppressed(db, a)]
     if not down_assets:
-        return {
+        payload = {
             "sent": False,
             "down_assets": [],
             "message": "No down assets; no notification sent.",
         }
+        log_audit(
+            db,
+            "posture_alert.send",
+            user_name=user,
+            details=payload,
+            request_id=request_id_ctx.get(None),
+        )
+        db.commit()
+        return payload
     normalized_assets = ",".join(sorted({a.strip() for a in down_assets if a and a.strip()}))
     bucket = datetime.now(UTC).strftime("%Y%m%d%H")
     digest = (
@@ -1322,7 +1346,16 @@ def posture_alert_send(
             down_assets=down_assets,
             incident_key=incident_key,
         )
-        return {"queued": True, "down_assets": down_assets, "message": "Alert queued for notifier."}
+        payload = {"queued": True, "down_assets": down_assets, "message": "Alert queued for notifier."}
+        log_audit(
+            db,
+            "posture_alert.send",
+            user_name=user,
+            details=payload,
+            request_id=request_id_ctx.get(None),
+        )
+        db.commit()
+        return payload
 
     publish_correlation_event(
         "alert.triggered",
@@ -1340,17 +1373,35 @@ def posture_alert_send(
     if not (
         getattr(settings, "SLACK_WEBHOOK_URL", None) or getattr(settings, "WHATSAPP_ALERT_TO", None)
     ):
-        return {
+        payload = {
             "sent": False,
             "down_assets": down_assets,
             "message": "No alert channel configured (set SLACK_WEBHOOK_URL and/or TWILIO_* + WHATSAPP_ALERT_TO).",
         }
-    return {
+        log_audit(
+            db,
+            "posture_alert.send",
+            user_name=user,
+            details=payload,
+            request_id=request_id_ctx.get(None),
+        )
+        db.commit()
+        return payload
+    payload = {
         "sent": any_ok,
         "down_assets": down_assets,
         "channels": channels,
         "message": f"Notification {'sent' if any_ok else 'failed'} to {', '.join(channels) or 'none'} for {len(down_assets)} down asset(s).",
     }
+    log_audit(
+        db,
+        "posture_alert.send",
+        user_name=user,
+        details=payload,
+        request_id=request_id_ctx.get(None),
+    )
+    db.commit()
+    return payload
 
 
 @router.get("/{asset_key}/detail", response_model=AssetDetailResponse)

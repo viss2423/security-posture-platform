@@ -330,58 +330,89 @@ export default function MlRiskPage() {
   };
 
   return (
-    <main className="page-shell max-w-7xl">
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <p className="max-w-3xl text-sm text-[var(--muted)]">
-          Train, calibrate, and audit the live risk classifier without leaving the product
-          workspace.
-        </p>
-        <div className="flex flex-wrap gap-2">
-          <Link href="/findings" className="btn-secondary text-sm">
-            Back to findings
-          </Link>
-          {canMutate && (
-            <button
-              type="button"
-              onClick={handleBootstrap}
-              disabled={busy !== null}
-              className="btn-secondary text-sm"
-            >
-              {busy === 'bootstrap' ? 'Bootstrapping...' : 'Bootstrap labels'}
-            </button>
-          )}
-          {canMutate && (
-            <button
-              type="button"
-              onClick={handleSnapshot}
-              disabled={busy !== null}
-              className="btn-secondary text-sm"
-            >
-              {busy === 'snapshot' ? 'Saving snapshot...' : 'Save snapshot'}
-            </button>
-          )}
-          {isAdmin && (
-            <button
-              type="button"
-              onClick={handleTrain}
-              disabled={busy !== null}
-              className="btn-primary text-sm"
-            >
-              {busy === 'train' ? 'Training...' : 'Train model'}
-            </button>
-          )}
+    <main className="page-shell view-stack">
+      <section className="page-hero animate-in">
+        <div className="hero-grid">
+          <div>
+            <h1 className="hero-title">ML Risk Operations Lab</h1>
+            <p className="hero-copy">
+              Train, calibrate, and continuously validate the live classifier with drift tracking,
+              threshold controls, and analyst feedback loops.
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Link href="/findings" className="btn-secondary text-sm">
+                Back to findings
+              </Link>
+              {canMutate && (
+                <button
+                  type="button"
+                  onClick={handleBootstrap}
+                  disabled={busy !== null}
+                  className="btn-secondary text-sm"
+                >
+                  {busy === 'bootstrap' ? 'Bootstrapping...' : 'Bootstrap labels'}
+                </button>
+              )}
+              {canMutate && (
+                <button
+                  type="button"
+                  onClick={handleSnapshot}
+                  disabled={busy !== null}
+                  className="btn-secondary text-sm"
+                >
+                  {busy === 'snapshot' ? 'Saving snapshot...' : 'Save snapshot'}
+                </button>
+              )}
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={handleTrain}
+                  disabled={busy !== null}
+                  className="btn-primary text-sm"
+                >
+                  {busy === 'train' ? 'Training...' : 'Train model'}
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="hero-stat-grid">
+            <div className="hero-stat">
+              <p className="hero-stat-label">Scoring mode</p>
+              <p className="hero-stat-value">
+                {status?.current_scoring_mode === 'ml' ? 'ML' : 'Heuristic'}
+              </p>
+            </div>
+            <div className="hero-stat">
+              <p className="hero-stat-label">Active threshold</p>
+              <p className="hero-stat-value">{formatThreshold(activeThreshold)}</p>
+            </div>
+            <div className="hero-stat">
+              <p className="hero-stat-label">Precision</p>
+              <p className="hero-stat-value">
+                {formatPct(evaluation?.labeled_evaluation.precision)}
+              </p>
+            </div>
+            <div className="hero-stat">
+              <p className="hero-stat-label">Drift PSI</p>
+              <p className="hero-stat-value">
+                {evaluation?.drift.score_distribution_psi != null
+                  ? Number(evaluation.drift.score_distribution_psi).toFixed(3)
+                  : '-'}
+              </p>
+            </div>
+          </div>
         </div>
-      </div>
+      </section>
 
       {error && (
-        <div className="mb-6 alert-error animate-in" role="alert">
+        <div className="alert-error animate-in" role="alert">
           {friendlyApiMessage(error)}
           <ApiDownHint />
         </div>
       )}
 
       {message && (
-        <div className="mb-6 rounded-xl border border-[var(--green)]/30 bg-[var(--green)]/10 px-4 py-3 text-sm text-[var(--text)]">
+        <div className="rounded-xl border border-[var(--green)]/30 bg-[var(--green)]/10 px-4 py-3 text-sm text-[var(--text)]">
           {message}
         </div>
       )}
@@ -393,7 +424,7 @@ export default function MlRiskPage() {
       ) : (
         <>
           {status && (
-            <section className="section-panel mb-8 animate-in">
+            <section className="section-panel animate-in">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
                   <h2 className="section-title mb-2">Live model status</h2>
@@ -452,7 +483,7 @@ export default function MlRiskPage() {
           )}
           {status && evaluation && (
             <>
-              <section className="mb-8 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+              <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
                 <MetricCard
                   label="Labeled rows"
                   value={evaluation.labeled_evaluation.rows}
@@ -486,7 +517,7 @@ export default function MlRiskPage() {
               </section>
 
               {(dependencyRisk || dependencyRiskError) && (
-                <section className="mb-8 grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+                <section className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
                   <div className="section-panel-tight">
                     <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                       <div>
@@ -614,7 +645,7 @@ export default function MlRiskPage() {
                 </section>
               )}
 
-              <section className="mb-8 grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+              <section className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
                 <div className="section-panel-tight">
                   <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                     <div>
@@ -789,7 +820,7 @@ export default function MlRiskPage() {
                   </div>
                 </details>
               </section>
-              <details className="section-panel mb-8 disclosure">
+              <details className="section-panel disclosure">
                 <summary className="cursor-pointer list-none">
                   <h2 className="section-title mb-0">Performance breakdown</h2>
                 </summary>
@@ -885,7 +916,7 @@ export default function MlRiskPage() {
                 </div>
               </details>
 
-              <details className="section-panel mb-8 disclosure">
+              <details className="section-panel disclosure">
                 <summary className="cursor-pointer list-none">
                   <h2 className="section-title mb-0">Drift and population shifts</h2>
                 </summary>
@@ -949,7 +980,7 @@ export default function MlRiskPage() {
                 </div>
               </details>
 
-              <details className="section-panel mb-8 animate-in disclosure">
+              <details className="section-panel animate-in disclosure">
                 <summary className="cursor-pointer list-none">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>

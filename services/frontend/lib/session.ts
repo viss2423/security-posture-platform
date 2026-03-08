@@ -5,7 +5,9 @@ import type { Me } from '@/lib/api';
 import { serverApiFetch, type ServerApiOptions } from '@/lib/serverApi';
 
 export const SESSION_COOKIE_NAME = 'secplat_access_token';
+export const REFRESH_SESSION_COOKIE_NAME = 'secplat_refresh_token';
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24;
+const REFRESH_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 
 export type SessionUser = Me & {
   canMutate: boolean;
@@ -19,6 +21,16 @@ export function sessionCookieOptions() {
     secure: process.env.NODE_ENV === 'production',
     path: '/',
     maxAge: SESSION_MAX_AGE_SECONDS,
+  };
+}
+
+export function refreshSessionCookieOptions() {
+  return {
+    httpOnly: true,
+    sameSite: 'lax' as const,
+    secure: process.env.NODE_ENV === 'production',
+    path: '/',
+    maxAge: REFRESH_SESSION_MAX_AGE_SECONDS,
   };
 }
 

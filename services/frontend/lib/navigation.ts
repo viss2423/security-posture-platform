@@ -2,9 +2,12 @@ export type NavIconKey =
   | 'activity'
   | 'dashboard'
   | 'assets'
+  | 'surface'
+  | 'graph'
   | 'intel'
   | 'telemetry'
   | 'detections'
+  | 'automation'
   | 'attack'
   | 'range'
   | 'findings'
@@ -59,6 +62,12 @@ export const NAV_GROUPS: NavGroup[] = [
         description: 'Asset inventory, status and ownership.',
       },
       {
+        href: '/attack-surface',
+        label: 'Attack Surface',
+        icon: 'surface',
+        description: 'Discovery runs, exposure scoring, drift, and service relationships.',
+      },
+      {
         href: '/threat-intel',
         label: 'Threat Intel',
         icon: 'intel',
@@ -77,11 +86,23 @@ export const NAV_GROUPS: NavGroup[] = [
         description: 'Rule editor and detection test runs.',
       },
       {
+        href: '/automation',
+        label: 'Automation',
+        icon: 'automation',
+        description: 'Playbook runs, approvals, and rollback execution state.',
+      },
+      {
         href: '/attack-lab',
         label: 'Attack Lab',
         icon: 'attack',
         description: 'Controlled attack simulations for purple-team exercises.',
         adminOnly: true,
+      },
+      {
+        href: '/attack-graph',
+        label: 'Attack Graph',
+        icon: 'graph',
+        description: 'Incident-centric graph view for attacker path reconstruction.',
       },
       {
         href: '/cyber-range',

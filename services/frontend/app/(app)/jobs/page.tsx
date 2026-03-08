@@ -1,13 +1,16 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  createAIFeedback,
+  createAISummaryVersion,
   createJob,
   generateJobAITriage,
   getJob,
   getJobAITriage,
   getJobs,
   retryJob,
+  type AIFeedbackValue,
   type AIJobTriage,
   type JobDetail,
   type JobItem,
@@ -88,6 +91,8 @@ export default function JobsPage() {
   const [triageLoading, setTriageLoading] = useState(false);
   const [triageGenerating, setTriageGenerating] = useState(false);
   const [triageMessage, setTriageMessage] = useState<string | null>(null);
+  const [savingTriageVersion, setSavingTriageVersion] = useState(false);
+  const [triageFeedbackBusy, setTriageFeedbackBusy] = useState<AIFeedbackValue | null>(null);
 
   const load = useCallback(() => {
     getJobs(statusFilter || undefined)
@@ -247,6 +252,59 @@ export default function JobsPage() {
     }
   };
 
+  const handleSaveTriageVersion = async () => {
+    if (!detail || !aiTriage?.triage_text) {
+      setTriageMessage('Generate AI triage before saving a version.');
+      return;
+    }
+    setSavingTriageVersion(true);
+    setTriageMessage(null);
+    try {
+      const created = await createAISummaryVersion('job', detail.job_id, {
+        content_text: aiTriage.triage_text,
+        provider: aiTriage.provider,
+        model: aiTriage.model,
+        source_type: aiTriage.cached ? 'cached' : 'generated',
+        context_json: aiTriage.context_json || {},
+        evidence_json: {
+          generated_at: aiTriage.generated_at,
+          generated_by: aiTriage.generated_by || null,
+        },
+      });
+      setTriageMessage(`Saved version v${created.version_no}.`);
+    } catch (e) {
+      setTriageMessage(e instanceof Error ? e.message : 'Saving triage version failed');
+    } finally {
+      setSavingTriageVersion(false);
+    }
+  };
+
+  const handleTriageFeedback = async (feedback: AIFeedbackValue) => {
+    if (!detail || !aiTriage?.triage_text) {
+      setTriageMessage('Generate AI triage before submitting feedback.');
+      return;
+    }
+    setTriageFeedbackBusy(feedback);
+    setTriageMessage(null);
+    try {
+      await createAIFeedback({
+        entity_type: 'job',
+        entity_id: detail.job_id,
+        feedback,
+        context_json: { surface: 'jobs_page' },
+      });
+      setTriageMessage(
+        feedback === 'up'
+          ? 'Feedback recorded: triage was useful.'
+          : 'Feedback recorded: triage needs improvement.'
+      );
+    } catch (e) {
+      setTriageMessage(e instanceof Error ? e.message : 'Saving triage feedback failed');
+    } finally {
+      setTriageFeedbackBusy(null);
+    }
+  };
+
   const statusBadge = (status: string) => {
     const classes =
       status === 'done'
@@ -259,14 +317,62 @@ export default function JobsPage() {
     return <span className={`rounded-full px-2 py-0.5 text-xs font-medium uppercase ${classes}`}>{status}</span>;
   };
 
+  const statusCounts = useMemo(() => {
+    const counts = { queued: 0, running: 0, done: 0, failed: 0 };
+    for (const job of data?.items ?? []) {
+      if (job.status in counts) {
+        counts[job.status as keyof typeof counts] += 1;
+      }
+    }
+    return counts;
+  }, [data]);
+
+  const activeJobs = statusCounts.queued + statusCounts.running;
+  const terminalJobs = statusCounts.done + statusCounts.failed;
+  const successRate = terminalJobs > 0 ? Math.round((statusCounts.done / terminalJobs) * 100) : null;
+
   return (
-    <main className="page-shell">
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <p className="max-w-2xl text-sm text-[var(--text-muted)]">
-          Queue operations, inspect failed runs, and use AI triage without reading raw worker logs
-          first.
-        </p>
+    <main className="page-shell space-y-6">
+      <section className="page-hero">
+        <div className="hero-grid">
+          <div>
+            <span className="stat-chip-strong">Jobs Command Center</span>
+            <h1 className="hero-title mt-3">Security Workload Orchestration</h1>
+            <p className="hero-copy">
+              Queue operations, inspect failed runs, and use AI triage without reading raw worker
+              logs first.
+            </p>
+          </div>
+          <div className="hero-stat-grid">
+            <div className="hero-stat">
+              <p className="hero-stat-label">Active</p>
+              <p className="hero-stat-value">{activeJobs}</p>
+              <p className="mt-1 text-xs text-[var(--text-muted)]">Queued + running</p>
+            </div>
+            <div className="hero-stat">
+              <p className="hero-stat-label">Failed</p>
+              <p className="hero-stat-value">{statusCounts.failed}</p>
+              <p className="mt-1 text-xs text-[var(--text-muted)]">Needs triage</p>
+            </div>
+            <div className="hero-stat">
+              <p className="hero-stat-label">Completed</p>
+              <p className="hero-stat-value">{statusCounts.done}</p>
+              <p className="mt-1 text-xs text-[var(--text-muted)]">Successful runs</p>
+            </div>
+            <div className="hero-stat">
+              <p className="hero-stat-label">Success Rate</p>
+              <p className="hero-stat-value">{successRate != null ? `${successRate}%` : '--'}</p>
+              <p className="mt-1 text-xs text-[var(--text-muted)]">Done vs failed</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div className="flex flex-wrap items-center justify-between gap-3">
         {data && <span className="stat-chip-strong">{data.items.length} jobs in view</span>}
+        <span className="stat-chip">
+          Running {statusCounts.running} • Queued {statusCounts.queued} • Failed {statusCounts.failed}
+        </span>
       </div>
 
       {error && (
@@ -459,6 +565,29 @@ export default function JobsPage() {
 
         <section className="section-panel">
           <h2 className="section-title">Filters</h2>
+          <div className="mb-3 flex flex-wrap gap-2">
+            {[
+              { key: '', label: 'All', count: data?.items.length ?? 0 },
+              { key: 'queued', label: 'Queued', count: statusCounts.queued },
+              { key: 'running', label: 'Running', count: statusCounts.running },
+              { key: 'done', label: 'Done', count: statusCounts.done },
+              { key: 'failed', label: 'Failed', count: statusCounts.failed },
+            ].map((item) => (
+              <button
+                key={item.label}
+                type="button"
+                onClick={() => setStatusFilter(item.key)}
+                className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition ${
+                  statusFilter === item.key
+                    ? 'border-cyan-300/35 bg-cyan-300/14 text-cyan-100'
+                    : 'border-[var(--border)] bg-[var(--surface-elevated)] text-[var(--text-muted)] hover:border-cyan-300/30 hover:text-[var(--text)]'
+                }`}
+              >
+                {item.label}
+                <span className="rounded-full bg-black/25 px-1.5 py-0.5 text-[10px]">{item.count}</span>
+              </button>
+            ))}
+          </div>
           <label className="text-sm text-[var(--muted)]">
             Status
             <select
@@ -487,6 +616,13 @@ export default function JobsPage() {
         />
       ) : (
         <section className="section-panel">
+          <div className="section-head">
+            <div>
+              <h2 className="text-lg font-semibold text-[var(--text)]">Queue Stream</h2>
+              <p className="section-head-copy">Select a row to inspect execution detail and AI triage.</p>
+            </div>
+            <span className="stat-chip">{data?.items.length ?? 0} records</span>
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -689,6 +825,34 @@ export default function JobsPage() {
                 <p className="mt-3 text-xs text-[var(--muted)]">
                   Generated {formatDateTime(aiTriage.generated_at)} via {aiTriage.provider}/{aiTriage.model}
                 </p>
+                {canMutate && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={handleSaveTriageVersion}
+                      disabled={savingTriageVersion || triageGenerating || triageFeedbackBusy != null}
+                      className="btn-secondary text-xs"
+                    >
+                      {savingTriageVersion ? 'Saving...' : 'Save version'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleTriageFeedback('up')}
+                      disabled={triageGenerating || savingTriageVersion || triageFeedbackBusy != null}
+                      className="btn-secondary text-xs"
+                    >
+                      {triageFeedbackBusy === 'up' ? 'Saving...' : 'Thumbs up'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleTriageFeedback('down')}
+                      disabled={triageGenerating || savingTriageVersion || triageFeedbackBusy != null}
+                      className="btn-secondary text-xs"
+                    >
+                      {triageFeedbackBusy === 'down' ? 'Saving...' : 'Thumbs down'}
+                    </button>
+                  </div>
+                )}
               </>
             ) : (
               <p className="text-sm text-[var(--muted)]">No AI triage generated yet for this job.</p>

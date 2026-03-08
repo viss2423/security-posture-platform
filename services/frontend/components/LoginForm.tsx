@@ -43,7 +43,11 @@ export default function LoginForm({ oidcEnabled }: LoginFormProps) {
     const params = Object.fromEntries(new URLSearchParams(hash));
     if (params.access_token) {
       setSyncingToken(true);
-      createSession({ access_token: params.access_token })
+      const payload: Record<string, string> = { access_token: params.access_token };
+      if (params.refresh_token) {
+        payload.refresh_token = params.refresh_token;
+      }
+      createSession(payload)
         .then(() => {
           window.history.replaceState(null, '', '/login');
           router.replace('/overview');

@@ -7,13 +7,13 @@ import json
 import logging
 import os
 import subprocess
-import threading
 from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import text
 
 from .db import SessionLocal
+from .queue import publish_scan_job
 from .risk_scoring import recompute_finding_risk
 from .routers.findings import FindingUpsertBody, upsert_finding_record
 from .settings import settings
@@ -833,10 +833,34 @@ def run_repository_scan_job(job_id: int) -> None:
 
 
 def launch_repository_scan_job(job_id: int) -> None:
-    thread = threading.Thread(
-        target=run_repository_scan_job,
-        args=(job_id,),
-        daemon=True,
-        name=f"repository-scan-{job_id}",
+    db = SessionLocal()
+    try:
+        row = (
+            db.execute(
+                text(
+                    """
+                    SELECT target_asset_id, requested_by
+                    FROM scan_jobs
+                    WHERE job_id = :job_id
+                    """
+                ),
+                {"job_id": job_id},
+            )
+            .mappings()
+            .first()
+        )
+        if not row:
+            logger.warning("repository_scan_enqueue_missing_job job_id=%s", job_id)
+            return
+        requested_by = str((row or {}).get("requested_by") or "system")
+        target_asset_id = (row or {}).get("target_asset_id")
+    finally:
+        db.close()
+    published = publish_scan_job(
+        int(job_id),
+        "repository_scan",
+        int(target_asset_id) if target_asset_id is not None else None,
+        requested_by,
     )
-    thread.start()
+    if not published:
+        logger.warning("repository_scan_enqueue_failed job_id=%s", job_id)

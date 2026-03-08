@@ -1,3 +1,4 @@
+from .events import EventEnvelope, build_event_envelope
 from .posture import (
     AssetDetailResponse,
     AssetState,
@@ -9,9 +10,11 @@ from .posture import (
 
 __all__ = [
     "AssetState",
+    "EventEnvelope",
     "AssetDetailResponse",
     "DataCompleteness",
     "PostureSummary",
     "CriticalityLevel",
     "AssetStatusLevel",
+    "build_event_envelope",
 ]

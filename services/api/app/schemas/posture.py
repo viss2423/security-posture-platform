@@ -8,7 +8,7 @@ Canonical asset state schema. This is the single source of truth for:
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 AssetStatusLevel = Literal["green", "amber", "red"]
 CriticalityLevel = Literal["high", "medium", "low"]
@@ -67,8 +67,8 @@ class AssetState(BaseModel):
         """Alias for asset_id so frontend/consumers can keep using asset_key."""
         return self.asset_id
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "asset_id": "juice-shop",
                 "status": "green",
@@ -82,6 +82,7 @@ class AssetState(BaseModel):
                 "staleness_seconds": 0,
             }
         }
+    )
 
 
 class DataCompleteness(BaseModel):
@@ -139,8 +140,8 @@ class PostureSummary(BaseModel):
         default_factory=list, description="asset_ids currently red (down)"
     )
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "green": 4,
                 "amber": 0,
@@ -149,6 +150,7 @@ class PostureSummary(BaseModel):
                 "down_assets": [],
             }
         }
+    )
 
 
 def raw_to_asset_state(raw: dict) -> AssetState:

@@ -16,7 +16,9 @@ from app.alerts_v2 import (
     serialize_security_alert,
     transition_security_alert,
 )
+from app.audit import log_audit
 from app.db import get_db
+from app.request_context import request_id_ctx
 from app.routers.auth import get_current_role, require_auth, require_role
 from app.telemetry import SUPPORTED_TELEMETRY_SOURCES, ingest_telemetry_events
 
@@ -50,6 +52,15 @@ def _serialize_event(row: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _as_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return round(float(value), 3)
+    except (TypeError, ValueError):
+        return None
+
+
 @router.get("/summary")
 def telemetry_summary(
     db: Session = Depends(get_db),
@@ -65,6 +76,13 @@ def telemetry_summary(
                   COUNT(*) AS event_count,
                   COUNT(*) FILTER (WHERE ti_match = TRUE) AS ti_matches,
                   COUNT(DISTINCT asset_key) FILTER (WHERE asset_key IS NOT NULL) AS asset_count,
+                  COUNT(*) FILTER (WHERE collector IS NOT NULL) AS collector_tagged_events,
+                  COUNT(*) FILTER (
+                    WHERE collector IS NOT NULL
+                      AND (ingest_job_id IS NOT NULL OR raw_path IS NOT NULL OR raw_offset IS NOT NULL)
+                  ) AS traceable_events,
+                  AVG(ingest_lag_seconds) AS ingest_lag_seconds_avg,
+                  MAX(ingest_lag_seconds) AS ingest_lag_seconds_max,
                   MAX(event_time) AS last_event_at
                 FROM security_events
                 GROUP BY source
@@ -126,8 +144,29 @@ def telemetry_summary(
                 SELECT
                   COUNT(*) AS total_events,
                   COUNT(*) FILTER (WHERE ti_match = TRUE) AS total_ti_matches,
-                  COUNT(DISTINCT asset_key) FILTER (WHERE asset_key IS NOT NULL) AS active_assets
+                  COUNT(DISTINCT asset_key) FILTER (WHERE asset_key IS NOT NULL) AS active_assets,
+                  COUNT(*) FILTER (
+                    WHERE collector IS NOT NULL
+                      AND (ingest_job_id IS NOT NULL OR raw_path IS NOT NULL OR raw_offset IS NOT NULL)
+                  ) AS traceable_events,
+                  AVG(ingest_lag_seconds) AS ingest_lag_seconds_avg,
+                  MAX(ingest_lag_seconds) AS ingest_lag_seconds_max
                 FROM security_events
+                """
+            )
+        )
+        .mappings()
+        .first()
+        or {}
+    )
+    lag_p95_row = (
+        db.execute(
+            text(
+                """
+                SELECT
+                  percentile_cont(0.95) WITHIN GROUP (ORDER BY ingest_lag_seconds) AS ingest_lag_seconds_p95
+                FROM security_events
+                WHERE ingest_lag_seconds IS NOT NULL
                 """
             )
         )
@@ -145,12 +184,23 @@ def telemetry_summary(
         if status in by_source_status[source]:
             by_source_status[source][status] = int(item.get("count") or 0)
 
+    total_events = int(totals.get("total_events") or 0)
+    total_traceable = int(totals.get("traceable_events") or 0)
+    traceability_coverage_pct = (
+        round((total_traceable / total_events) * 100.0, 2) if total_events else 0.0
+    )
+
     return {
         "totals": {
-            "events": int(totals.get("total_events") or 0),
+            "events": total_events,
             "ti_matches": int(totals.get("total_ti_matches") or 0),
             "assets": int(totals.get("active_assets") or 0),
             "sources": len(source_rows),
+            "traceable_events": total_traceable,
+            "traceability_coverage_pct": traceability_coverage_pct,
+            "ingest_lag_seconds_avg": _as_float(totals.get("ingest_lag_seconds_avg")),
+            "ingest_lag_seconds_p95": _as_float(lag_p95_row.get("ingest_lag_seconds_p95")),
+            "ingest_lag_seconds_max": _as_float(totals.get("ingest_lag_seconds_max")),
         },
         "sources": [
             {
@@ -158,6 +208,19 @@ def telemetry_summary(
                 "event_count": int(item.get("event_count") or 0),
                 "ti_matches": int(item.get("ti_matches") or 0),
                 "asset_count": int(item.get("asset_count") or 0),
+                "collector_tagged_events": int(item.get("collector_tagged_events") or 0),
+                "traceable_events": int(item.get("traceable_events") or 0),
+                "traceability_coverage_pct": round(
+                    (
+                        (int(item.get("traceable_events") or 0) / int(item.get("event_count") or 1))
+                        * 100.0
+                    ),
+                    2,
+                )
+                if int(item.get("event_count") or 0)
+                else 0.0,
+                "ingest_lag_seconds_avg": _as_float(item.get("ingest_lag_seconds_avg")),
+                "ingest_lag_seconds_max": _as_float(item.get("ingest_lag_seconds_max")),
                 "last_event_at": item.get("last_event_at").isoformat()
                 if hasattr(item.get("last_event_at"), "isoformat")
                 else item.get("last_event_at"),
@@ -182,6 +245,9 @@ def telemetry_summary(
 def list_telemetry_events(
     source: str | None = Query(None),
     asset_key: str | None = Query(None),
+    collector: str | None = Query(None),
+    ingest_job_id: int | None = Query(None, ge=1),
+    raw_path: str | None = Query(None),
     ti_match: bool | None = Query(None),
     limit: int = Query(100, ge=1, le=1000),
     db: Session = Depends(get_db),
@@ -201,6 +267,15 @@ def list_telemetry_events(
     if asset_key:
         clauses.append("asset_key = :asset_key")
         params["asset_key"] = asset_key.strip()
+    if collector:
+        clauses.append("collector = :collector")
+        params["collector"] = collector.strip()
+    if ingest_job_id is not None:
+        clauses.append("ingest_job_id = :ingest_job_id")
+        params["ingest_job_id"] = int(ingest_job_id)
+    if raw_path:
+        clauses.append("raw_path = :raw_path")
+        params["raw_path"] = raw_path.strip()
     if ti_match is not None:
         clauses.append("ti_match = :ti_match")
         params["ti_match"] = bool(ti_match)
@@ -274,13 +349,16 @@ class TelemetryIngestBody(BaseModel):
     events: list[dict[str, Any]] = Field(default_factory=list)
     asset_key: str | None = None
     create_alerts: bool = True
+    collector: str | None = None
+    ingest_job_id: int | None = None
+    raw_path: str | None = None
 
 
 @router.post("/ingest")
 def ingest_telemetry(
     body: TelemetryIngestBody,
     db: Session = Depends(get_db),
-    _user: str = Depends(require_role(["admin", "analyst"])),
+    user: str = Depends(require_role(["admin", "analyst"])),
 ):
     source = body.source.strip().lower()
     if source not in SUPPORTED_TELEMETRY_SOURCES:
@@ -293,6 +371,27 @@ def ingest_telemetry(
         events=body.events,
         default_asset_key=body.asset_key,
         create_alerts=body.create_alerts,
+        collector=body.collector or f"api.telemetry.ingest.{source}",
+        ingest_job_id=body.ingest_job_id,
+        raw_path=body.raw_path,
+    )
+    log_audit(
+        db,
+        "telemetry.ingest",
+        user_name=user,
+        asset_key=body.asset_key,
+        details={
+            "source": source,
+            "event_count": len(body.events),
+            "create_alerts": bool(body.create_alerts),
+            "collector": body.collector or f"api.telemetry.ingest.{source}",
+            "ingest_job_id": body.ingest_job_id,
+            "raw_path": body.raw_path,
+            "processed_events": int(summary.get("processed_events") or 0),
+            "alert_updates": int(summary.get("alert_updates") or 0),
+            "ti_matches": int(summary.get("ti_matches") or 0),
+        },
+        request_id=request_id_ctx.get(None),
     )
     db.commit()
     return {"ok": True, **summary}
@@ -374,6 +473,14 @@ def ack_event_alert(
     )
     if not row:
         raise HTTPException(status_code=404, detail="Alert not found")
+    log_audit(
+        db,
+        "security_alert.ack",
+        user_name=user,
+        asset_key=row.get("asset_key"),
+        details={"alert_id": int(body.alert_id), "reason": body.reason or ""},
+        request_id=request_id_ctx.get(None),
+    )
     db.commit()
     return {"ok": True, "item": row}
 
@@ -382,7 +489,7 @@ def ack_event_alert(
 def suppress_event_alert(
     body: AlertTransitionBody,
     db: Session = Depends(get_db),
-    _user: str = Depends(require_role(["admin", "analyst"])),
+    user: str = Depends(require_role(["admin", "analyst"])),
 ):
     if not body.until_iso:
         raise HTTPException(status_code=400, detail="until_iso required")
@@ -399,6 +506,18 @@ def suppress_event_alert(
     )
     if not row:
         raise HTTPException(status_code=404, detail="Alert not found")
+    log_audit(
+        db,
+        "security_alert.suppress",
+        user_name=user,
+        asset_key=row.get("asset_key"),
+        details={
+            "alert_id": int(body.alert_id),
+            "reason": body.reason or "",
+            "until_iso": body.until_iso,
+        },
+        request_id=request_id_ctx.get(None),
+    )
     db.commit()
     return {"ok": True, "item": row}
 
@@ -417,6 +536,14 @@ def resolve_event_alert(
     )
     if not row:
         raise HTTPException(status_code=404, detail="Alert not found")
+    log_audit(
+        db,
+        "security_alert.resolve",
+        user_name=user,
+        asset_key=row.get("asset_key"),
+        details={"alert_id": int(body.alert_id)},
+        request_id=request_id_ctx.get(None),
+    )
     db.commit()
     return {"ok": True, "item": row}
 
@@ -425,7 +552,7 @@ def resolve_event_alert(
 def assign_event_alert(
     body: AlertTransitionBody,
     db: Session = Depends(get_db),
-    _user: str = Depends(require_role(["admin", "analyst"])),
+    user: str = Depends(require_role(["admin", "analyst"])),
 ):
     row = transition_security_alert(
         db,
@@ -435,5 +562,13 @@ def assign_event_alert(
     )
     if not row:
         raise HTTPException(status_code=404, detail="Alert not found")
+    log_audit(
+        db,
+        "security_alert.assign",
+        user_name=user,
+        asset_key=row.get("asset_key"),
+        details={"alert_id": int(body.alert_id), "assigned_to": body.assigned_to or ""},
+        request_id=request_id_ctx.get(None),
+    )
     db.commit()
     return {"ok": True, "item": row}

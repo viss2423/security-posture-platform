@@ -99,6 +99,19 @@ export default function AssetsPageClient({ items }: AssetsPageClientProps) {
     return list;
   }, [deferredSearch, items, sortDir, sortKey]);
 
+  const unhealthyCount = useMemo(
+    () => items.filter((asset) => (asset.status || '').toLowerCase() !== 'up').length,
+    [items]
+  );
+  const lowPostureCount = useMemo(
+    () =>
+      items.filter((asset) => {
+        const score = asset.posture_score != null ? Number(asset.posture_score) : Number.NaN;
+        return !Number.isNaN(score) && score < 50;
+      }).length,
+    [items]
+  );
+
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
       setSortDir((current) => (current === 'asc' ? 'desc' : 'asc'));
@@ -146,29 +159,49 @@ export default function AssetsPageClient({ items }: AssetsPageClientProps) {
   };
 
   return (
-    <main className="page-shell overflow-visible">
-      <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="text-sm text-[var(--muted)]">
-          {items.length > 0
-            ? `${items.length} assets in the current workspace view.`
-            : 'Asset inventory, posture status, and ownership in one list.'}
-        </div>
-        {items.length > 0 && (
-          <div className="w-full sm:w-72">
-            <label htmlFor="asset-search" className="sr-only">
-              Search assets
-            </label>
-            <input
-              id="asset-search"
-              type="search"
-              placeholder="Search by asset, name, status, env..."
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              className="input py-2.5 text-sm"
-            />
+    <main className="page-shell view-stack overflow-visible">
+      <section className="page-hero animate-in">
+        <div className="hero-grid">
+          <div>
+            <h1 className="hero-title">Asset Inventory Command View</h1>
+            <p className="hero-copy">
+              Full asset visibility with posture, ownership, and direct scan actions in a single
+              workspace table.
+            </p>
+            <div className="mt-4 max-w-sm">
+              <label htmlFor="asset-search" className="sr-only">
+                Search assets
+              </label>
+              <input
+                id="asset-search"
+                type="search"
+                placeholder="Search by asset, name, status, env..."
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                className="input py-2.5 text-sm"
+              />
+            </div>
           </div>
-        )}
-      </div>
+          <div className="hero-stat-grid">
+            <div className="hero-stat">
+              <p className="hero-stat-label">Total assets</p>
+              <p className="hero-stat-value">{items.length}</p>
+            </div>
+            <div className="hero-stat">
+              <p className="hero-stat-label">Visible after filter</p>
+              <p className="hero-stat-value">{filteredAndSorted.length}</p>
+            </div>
+            <div className="hero-stat">
+              <p className="hero-stat-label">Status not up</p>
+              <p className="hero-stat-value">{unhealthyCount}</p>
+            </div>
+            <div className="hero-stat">
+              <p className="hero-stat-label">Score below 50</p>
+              <p className="hero-stat-value">{lowPostureCount}</p>
+            </div>
+          </div>
+        </div>
+      </section>
 
       {scanNotice && (
         <div className="mb-4 rounded-xl border border-[var(--green)]/30 bg-[var(--green)]/10 px-4 py-3 text-sm text-[var(--text)]">
@@ -182,7 +215,7 @@ export default function AssetsPageClient({ items }: AssetsPageClientProps) {
       )}
 
       {items.length > 0 && filteredAndSorted.length > 0 && (
-        <div className="card animate-in overflow-hidden rounded-2xl p-0">
+        <section className="section-panel animate-in overflow-hidden rounded-2xl p-0">
           <div className="overflow-x-auto rounded-b-2xl" style={{ minWidth: 0 }}>
             <div role="table" className="assets-grid-table" style={{ minWidth: 980, gridTemplateColumns: `${gridCols} 120px` }}>
               <div role="row" className="assets-grid-header">
@@ -277,7 +310,7 @@ export default function AssetsPageClient({ items }: AssetsPageClientProps) {
               Showing {filteredAndSorted.length} of {items.length} assets
             </p>
           )}
-        </div>
+        </section>
       )}
 
       {items.length > 0 && filteredAndSorted.length === 0 && (

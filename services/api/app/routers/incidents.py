@@ -15,11 +15,13 @@ from app.db import get_db
 from app.request_context import request_id_ctx
 from app.routers.auth import require_auth, require_role
 from app.settings import settings
+from app.timeline_aggregator import build_incident_timeline
 
 router = APIRouter(prefix="/incidents", tags=["incidents"])
 
 VALID_STATUS = ("new", "triaged", "contained", "resolved", "closed")
 VALID_SEVERITY = ("critical", "high", "medium", "low", "info")
+SEVERITY_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 
 
 def _coerce_json_value(value, *, default):
@@ -36,6 +38,12 @@ def _coerce_json_value(value, *, default):
         if isinstance(parsed, type(default)):
             return parsed
     return default
+
+
+def _severity_meets_threshold(value: str | None, threshold: str | None) -> bool:
+    lhs = SEVERITY_RANK.get(str(value or "medium").strip().lower(), SEVERITY_RANK["medium"])
+    rhs = SEVERITY_RANK.get(str(threshold or "high").strip().lower(), SEVERITY_RANK["high"])
+    return lhs >= rhs
 
 
 def _serialize_incident(row: dict) -> dict:
@@ -147,6 +155,341 @@ def _load_incident_linked_risk(db: Session, incident_id: int, *, limit: int = 5)
     }
 
 
+def _serialize_evidence(row: dict) -> dict:
+    out = dict(row)
+    if hasattr(out.get("created_at"), "isoformat"):
+        out["created_at"] = out["created_at"].isoformat()
+    out["details"] = _coerce_json_value(out.get("details"), default={})
+    return out
+
+
+def _serialize_watcher(row: dict) -> dict:
+    out = dict(row)
+    if hasattr(out.get("added_at"), "isoformat"):
+        out["added_at"] = out["added_at"].isoformat()
+    return out
+
+
+def _serialize_checklist_item(row: dict) -> dict:
+    out = dict(row)
+    for key in ("done_at", "created_at", "updated_at"):
+        value = out.get(key)
+        if hasattr(value, "isoformat"):
+            out[key] = value.isoformat()
+    return out
+
+
+def _serialize_decision(row: dict) -> dict:
+    out = dict(row)
+    if hasattr(out.get("created_at"), "isoformat"):
+        out["created_at"] = out["created_at"].isoformat()
+    out["details"] = _coerce_json_value(out.get("details"), default={})
+    return out
+
+
+def _parse_csv_filter(raw: str | None) -> set[str] | None:
+    if raw is None:
+        return None
+    values = {
+        str(item).strip().lower()
+        for item in str(raw).split(",")
+        if str(item).strip()
+    }
+    return values or None
+
+
+def _incident_timeline_aggregated(
+    db: Session,
+    incident_id: int,
+    *,
+    lookback_hours: int = 72,
+    source_limit: int = 140,
+    source_types: set[str] | None = None,
+    event_types: set[str] | None = None,
+    limit_total: int | None = None,
+) -> list[dict]:
+    return build_incident_timeline(
+        db,
+        incident_id=int(incident_id),
+        lookback_hours=lookback_hours,
+        source_limit=source_limit,
+        source_types=source_types,
+        event_types=event_types,
+        limit_total=limit_total,
+    )
+
+
+def _insert_incident_evidence(
+    db: Session,
+    *,
+    incident_id: int,
+    evidence_type: str,
+    ref_id: str,
+    relation: str = "linked",
+    summary: str | None = None,
+    details: dict | None = None,
+    added_by: str | None = None,
+) -> None:
+    db.execute(
+        text(
+            """
+            INSERT INTO incident_evidence (
+              incident_id, evidence_type, ref_id, relation, summary, details, added_by
+            )
+            VALUES (
+              :incident_id, :evidence_type, :ref_id, :relation, :summary,
+              CAST(:details AS jsonb), :added_by
+            )
+            ON CONFLICT (incident_id, evidence_type, ref_id, relation) DO NOTHING
+            """
+        ),
+        {
+            "incident_id": int(incident_id),
+            "evidence_type": evidence_type,
+            "ref_id": str(ref_id),
+            "relation": str(relation or "linked"),
+            "summary": summary,
+            "details": json.dumps(details or {}),
+            "added_by": added_by,
+        },
+    )
+
+
+def _has_open_incident_for_asset(db: Session, asset_key: str) -> bool:
+    row = (
+        db.execute(
+            text(
+                """
+                SELECT 1
+                FROM incident_alerts ia
+                JOIN incidents i ON i.id = ia.incident_id
+                WHERE ia.asset_key = :asset_key
+                  AND i.status NOT IN ('resolved', 'closed')
+                LIMIT 1
+                """
+            ),
+            {"asset_key": asset_key},
+        )
+        .first()
+    )
+    return row is not None
+
+
+def _run_incident_auto_rules(db: Session, *, user: str) -> dict:
+    rules = (
+        db.execute(
+            text(
+                """
+                SELECT
+                  auto_rule_id,
+                  name,
+                  description,
+                  enabled,
+                  severity_threshold,
+                  window_minutes,
+                  min_alerts,
+                  require_distinct_sources,
+                  incident_severity
+                FROM incident_auto_rules
+                WHERE enabled = TRUE
+                ORDER BY auto_rule_id ASC
+                """
+            )
+        )
+        .mappings()
+        .all()
+    )
+    triggered: list[dict] = []
+    created_incident_ids: list[int] = []
+    for rule in rules:
+        window_minutes = max(1, int(rule.get("window_minutes") or 15))
+        min_alerts = max(1, int(rule.get("min_alerts") or 2))
+        threshold = str(rule.get("severity_threshold") or "high").strip().lower()
+        rows = (
+            db.execute(
+                text(
+                    """
+                    SELECT
+                      asset_key,
+                      COUNT(*) AS alert_count,
+                      COUNT(DISTINCT source) AS source_count,
+                      ARRAY_AGG(alert_id ORDER BY last_seen_at DESC) AS alert_ids,
+                      ARRAY_AGG(source ORDER BY last_seen_at DESC) AS sources
+                    FROM security_alerts
+                    WHERE status IN ('firing', 'acked')
+                      AND asset_key IS NOT NULL
+                      AND asset_key <> ''
+                      AND last_seen_at >= NOW() - (:window_minutes * INTERVAL '1 minute')
+                    GROUP BY asset_key
+                    """
+                ),
+                {"window_minutes": window_minutes},
+            )
+            .mappings()
+            .all()
+        )
+        for row in rows:
+            asset_key = str(row.get("asset_key") or "").strip()
+            if not asset_key:
+                continue
+            alert_ids = [int(alert_id) for alert_id in (row.get("alert_ids") or []) if alert_id]
+            if len(alert_ids) < min_alerts:
+                continue
+            source_count = int(row.get("source_count") or 0)
+            if bool(rule.get("require_distinct_sources")) and source_count < 2:
+                continue
+            matching_alerts: list[dict] = []
+            for alert_id in alert_ids:
+                alert_match = (
+                    db.execute(
+                        text(
+                            """
+                            SELECT alert_id, severity
+                            FROM security_alerts
+                            WHERE alert_id = :alert_id
+                            """
+                        ),
+                        {"alert_id": alert_id},
+                    )
+                    .mappings()
+                    .first()
+                )
+                if alert_match:
+                    matching_alerts.append(dict(alert_match))
+            if not matching_alerts:
+                continue
+            if not any(
+                _severity_meets_threshold(alert.get("severity"), threshold)
+                for alert in matching_alerts
+            ):
+                continue
+            if _has_open_incident_for_asset(db, asset_key):
+                continue
+
+            incident_title = (
+                f"Auto incident: {asset_key} ({len(alert_ids)} alerts in {window_minutes}m)"
+            )
+            incident_row = (
+                db.execute(
+                    text(
+                        """
+                        INSERT INTO incidents (
+                          title, severity, status, assigned_to, updated_at, metadata
+                        )
+                        VALUES (
+                          :title, :severity, 'new', NULL, NOW(), CAST(:metadata AS jsonb)
+                        )
+                        RETURNING id
+                        """
+                    ),
+                    {
+                        "title": incident_title,
+                        "severity": str(rule.get("incident_severity") or "high").strip().lower(),
+                        "metadata": json.dumps(
+                            {
+                                "auto_rule_id": int(rule.get("auto_rule_id")),
+                                "auto_rule_name": rule.get("name"),
+                                "window_minutes": window_minutes,
+                                "min_alerts": min_alerts,
+                            }
+                        ),
+                    },
+                )
+                .mappings()
+                .first()
+            )
+            if not incident_row:
+                continue
+            incident_id = int(incident_row["id"])
+            created_incident_ids.append(incident_id)
+
+            for alert_id in alert_ids:
+                alert_asset_row = (
+                    db.execute(
+                        text(
+                            """
+                            SELECT asset_key
+                            FROM security_alerts
+                            WHERE alert_id = :alert_id
+                            """
+                        ),
+                        {"alert_id": alert_id},
+                    )
+                    .mappings()
+                    .first()
+                )
+                derived_asset_key = str(alert_asset_row.get("asset_key") or asset_key)
+                db.execute(
+                    text(
+                        """
+                        INSERT INTO incident_alerts (incident_id, asset_key, alert_id, added_by)
+                        VALUES (:incident_id, :asset_key, :alert_id, :added_by)
+                        ON CONFLICT (incident_id, asset_key) DO NOTHING
+                        """
+                    ),
+                    {
+                        "incident_id": incident_id,
+                        "asset_key": derived_asset_key,
+                        "alert_id": alert_id,
+                        "added_by": user,
+                    },
+                )
+                _insert_incident_evidence(
+                    db,
+                    incident_id=incident_id,
+                    evidence_type="alert",
+                    ref_id=str(alert_id),
+                    relation="triggered_by",
+                    summary="Auto-linked alert evidence",
+                    details={"auto_rule_id": int(rule.get("auto_rule_id"))},
+                    added_by=user,
+                )
+            _insert_incident_evidence(
+                db,
+                incident_id=incident_id,
+                evidence_type="asset",
+                ref_id=asset_key,
+                relation="impacted_asset",
+                summary="Auto-linked impacted asset",
+                details={"source_count": source_count},
+                added_by=user,
+            )
+            db.execute(
+                text(
+                    """
+                    INSERT INTO incident_notes (incident_id, event_type, author, details)
+                    VALUES (:incident_id, 'alert_added', :author, CAST(:details AS jsonb))
+                    """
+                ),
+                {
+                    "incident_id": incident_id,
+                    "author": user,
+                    "details": json.dumps(
+                        {
+                            "auto_rule_id": int(rule.get("auto_rule_id")),
+                            "asset_key": asset_key,
+                            "alert_ids": alert_ids,
+                        }
+                    ),
+                },
+            )
+            triggered.append(
+                {
+                    "auto_rule_id": int(rule.get("auto_rule_id")),
+                    "incident_id": incident_id,
+                    "asset_key": asset_key,
+                    "alert_ids": alert_ids,
+                    "source_count": source_count,
+                }
+            )
+    return {
+        "rules_evaluated": len(rules),
+        "incidents_created": len(created_incident_ids),
+        "incident_ids": created_incident_ids,
+        "triggered": triggered,
+    }
+
+
 @router.get("")
 def list_incidents(
     status: str | None = Query(None, description="Filter by status"),
@@ -219,13 +562,60 @@ def get_incident(
     alerts = db.execute(alerts_q, {"id": incident_id}).mappings().all()
     incident["alerts"] = [_serialize_incident(dict(a)) for a in alerts]
 
-    notes_q = text("""
-        SELECT id, incident_id, event_type, author, body, details, created_at
-        FROM incident_notes WHERE incident_id = :id ORDER BY created_at ASC
-    """)
-    notes = db.execute(notes_q, {"id": incident_id}).mappings().all()
-    incident["timeline"] = [_serialize_note(dict(n)) for n in notes]
+    incident["timeline"] = _incident_timeline_aggregated(db, incident_id)
     incident["linked_risk"] = _load_incident_linked_risk(db, incident_id)
+
+    evidence_rows = db.execute(
+        text(
+            """
+            SELECT evidence_id, incident_id, evidence_type, ref_id, relation, summary, details, added_by, created_at
+            FROM incident_evidence
+            WHERE incident_id = :id
+            ORDER BY created_at ASC, evidence_id ASC
+            """
+        ),
+        {"id": incident_id},
+    ).mappings().all()
+    incident["evidence"] = [_serialize_evidence(dict(row)) for row in evidence_rows]
+
+    watcher_rows = db.execute(
+        text(
+            """
+            SELECT incident_id, username, added_by, added_at
+            FROM incident_watchers
+            WHERE incident_id = :id
+            ORDER BY added_at ASC, username ASC
+            """
+        ),
+        {"id": incident_id},
+    ).mappings().all()
+    incident["watchers"] = [_serialize_watcher(dict(row)) for row in watcher_rows]
+
+    checklist_rows = db.execute(
+        text(
+            """
+            SELECT item_id, incident_id, title, done, done_by, done_at, created_by, created_at, updated_at
+            FROM incident_checklist_items
+            WHERE incident_id = :id
+            ORDER BY created_at ASC, item_id ASC
+            """
+        ),
+        {"id": incident_id},
+    ).mappings().all()
+    incident["checklist"] = [_serialize_checklist_item(dict(row)) for row in checklist_rows]
+
+    decision_rows = db.execute(
+        text(
+            """
+            SELECT decision_id, incident_id, decision, rationale, decided_by, details, created_at
+            FROM incident_decisions
+            WHERE incident_id = :id
+            ORDER BY created_at ASC, decision_id ASC
+            """
+        ),
+        {"id": incident_id},
+    ).mappings().all()
+    incident["decisions"] = [_serialize_decision(dict(row)) for row in decision_rows]
 
     return incident
 
@@ -328,6 +718,16 @@ def create_incident(
             )
             if linked and linked.get("asset_key"):
                 linked_asset_keys.append(linked["asset_key"])
+                _insert_incident_evidence(
+                    db,
+                    incident_id=incident_id,
+                    evidence_type="asset",
+                    ref_id=str(linked["asset_key"]),
+                    relation="linked_asset",
+                    summary="Asset linked during incident creation",
+                    details={},
+                    added_by=user,
+                )
         if linked_asset_keys:
             # Timeline: one "alert_added" entry for this request's newly-linked assets.
             note_q = text("""
@@ -382,6 +782,16 @@ def create_incident(
             )
             if linked and linked.get("alert_id") is not None:
                 linked_alert_ids.append(int(linked["alert_id"]))
+                _insert_incident_evidence(
+                    db,
+                    incident_id=incident_id,
+                    evidence_type="alert",
+                    ref_id=str(linked["alert_id"]),
+                    relation="linked_alert",
+                    summary="Alert linked during incident creation",
+                    details={},
+                    added_by=user,
+                )
         if linked_alert_ids:
             note_q = text("""
                 INSERT INTO incident_notes (incident_id, event_type, author, details)
@@ -399,7 +809,7 @@ def create_incident(
     db.commit()
     log_audit(
         db,
-        "incident_dedupe_hit" if deduped else "incident_create",
+        "incident.dedupe_hit" if deduped else "incident.create",
         user_name=user,
         asset_key=None,
         details={
@@ -501,7 +911,7 @@ def update_incident_status(
     db.commit()
     log_audit(
         db,
-        "incident_status",
+        "incident.status.update",
         user_name=user,
         asset_key=None,
         details={"incident_id": incident_id, "status": body.status},
@@ -543,6 +953,13 @@ def add_incident_note(
     db.execute(
         text("UPDATE incidents SET updated_at = :now WHERE id = :id"),
         {"now": datetime.now(UTC), "id": incident_id},
+    )
+    log_audit(
+        db,
+        "incident.note.create",
+        user_name=user,
+        details={"incident_id": incident_id, "note_id": int(row["id"]) if row else None},
+        request_id=request_id_ctx.get(None),
     )
     db.commit()
 
@@ -608,6 +1025,28 @@ def link_alert(
         # Already linked
         return {"incident_id": incident_id, "asset_key": asset_key, "message": "already linked"}
 
+    if alert_id is not None:
+        _insert_incident_evidence(
+            db,
+            incident_id=incident_id,
+            evidence_type="alert",
+            ref_id=str(alert_id),
+            relation="linked_alert",
+            summary="Alert linked to incident",
+            details={"asset_key": asset_key},
+            added_by=user,
+        )
+    _insert_incident_evidence(
+        db,
+        incident_id=incident_id,
+        evidence_type="asset",
+        ref_id=asset_key,
+        relation="linked_asset",
+        summary="Asset linked to incident",
+        details={"alert_id": alert_id},
+        added_by=user,
+    )
+
     note_q = text("""
         INSERT INTO incident_notes (incident_id, event_type, author, details)
         VALUES (:incident_id, 'alert_added', :author, CAST(:details AS jsonb))
@@ -622,6 +1061,18 @@ def link_alert(
             "details": json.dumps({"asset_key": asset_key, "alert_id": alert_id}),
         },
     )
+    log_audit(
+        db,
+        "incident.alert.link",
+        user_name=user,
+        asset_key=asset_key,
+        details={
+            "incident_id": incident_id,
+            "asset_key": asset_key,
+            "alert_id": alert_id,
+        },
+        request_id=request_id_ctx.get(None),
+    )
     db.commit()
 
     return _serialize_incident(dict(row))
@@ -632,17 +1083,673 @@ def unlink_alert(
     incident_id: int,
     asset_key: str = Query(..., description="Asset key to unlink"),
     db: Session = Depends(get_db),
-    _user: str = Depends(require_role(["admin", "analyst"])),
+    user: str = Depends(require_role(["admin", "analyst"])),
 ):
     """Remove an alert (asset_key) from this incident."""
     q = text(
         "DELETE FROM incident_alerts WHERE incident_id = :incident_id AND asset_key = :asset_key"
     )
     r = db.execute(q, {"incident_id": incident_id, "asset_key": asset_key})
-    db.commit()
     if r.rowcount == 0:
         raise HTTPException(status_code=404, detail="Link not found")
+    log_audit(
+        db,
+        "incident.alert.unlink",
+        user_name=user,
+        asset_key=asset_key,
+        details={"incident_id": incident_id, "asset_key": asset_key},
+        request_id=request_id_ctx.get(None),
+    )
+    db.commit()
     return {"ok": True}
+
+
+class IncidentEvidenceBody(BaseModel):
+    evidence_type: str
+    ref_id: str
+    relation: str = "linked"
+    summary: str | None = None
+    details: dict | None = None
+
+
+@router.get("/{incident_id}/evidence")
+def list_incident_evidence(
+    incident_id: int,
+    db: Session = Depends(get_db),
+    _user: str = Depends(require_auth),
+):
+    exists = db.execute(text("SELECT id FROM incidents WHERE id = :id"), {"id": incident_id}).scalar()
+    if not exists:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    rows = (
+        db.execute(
+            text(
+                """
+                SELECT evidence_id, incident_id, evidence_type, ref_id, relation, summary, details, added_by, created_at
+                FROM incident_evidence
+                WHERE incident_id = :incident_id
+                ORDER BY created_at ASC, evidence_id ASC
+                """
+            ),
+            {"incident_id": incident_id},
+        )
+        .mappings()
+        .all()
+    )
+    return {"items": [_serialize_evidence(dict(row)) for row in rows]}
+
+
+@router.post("/{incident_id}/evidence", status_code=201)
+def add_incident_evidence(
+    incident_id: int,
+    body: IncidentEvidenceBody,
+    db: Session = Depends(get_db),
+    user: str = Depends(require_role(["admin", "analyst"])),
+):
+    valid_types = {"alert", "finding", "asset", "job", "ticket", "note", "event", "other"}
+    evidence_type = str(body.evidence_type or "").strip().lower()
+    if evidence_type not in valid_types:
+        raise HTTPException(status_code=400, detail="Invalid evidence_type")
+    exists = db.execute(text("SELECT id FROM incidents WHERE id = :id"), {"id": incident_id}).scalar()
+    if not exists:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    _insert_incident_evidence(
+        db,
+        incident_id=incident_id,
+        evidence_type=evidence_type,
+        ref_id=str(body.ref_id),
+        relation=str(body.relation or "linked"),
+        summary=body.summary,
+        details=body.details or {},
+        added_by=user,
+    )
+    created = (
+        db.execute(
+            text(
+                """
+                SELECT evidence_id, incident_id, evidence_type, ref_id, relation, summary, details, added_by, created_at
+                FROM incident_evidence
+                WHERE incident_id = :incident_id
+                  AND evidence_type = :evidence_type
+                  AND ref_id = :ref_id
+                  AND relation = :relation
+                ORDER BY evidence_id DESC
+                LIMIT 1
+                """
+            ),
+            {
+                "incident_id": incident_id,
+                "evidence_type": evidence_type,
+                "ref_id": str(body.ref_id),
+                "relation": str(body.relation or "linked"),
+            },
+        )
+        .mappings()
+        .first()
+    )
+    db.commit()
+    log_audit(
+        db,
+        "incident.evidence.add",
+        user_name=user,
+        details={
+            "incident_id": incident_id,
+            "evidence_type": evidence_type,
+            "ref_id": str(body.ref_id),
+            "relation": str(body.relation or "linked"),
+        },
+        request_id=request_id_ctx.get(None),
+    )
+    db.commit()
+    return _serialize_evidence(dict(created or {}))
+
+
+@router.get("/{incident_id}/timeline")
+def get_incident_timeline(
+    incident_id: int,
+    source_type: str | None = Query(
+        None, description="Optional comma-separated source types (note, alert, finding, log, job, automation, response)"
+    ),
+    event_type: str | None = Query(None, description="Optional comma-separated timeline event types"),
+    lookback_hours: int = Query(72, ge=1, le=720),
+    limit: int = Query(500, ge=1, le=2000),
+    db: Session = Depends(get_db),
+    _user: str = Depends(require_auth),
+):
+    exists = db.execute(text("SELECT id FROM incidents WHERE id = :id"), {"id": incident_id}).scalar()
+    if not exists:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    source_types = _parse_csv_filter(source_type)
+    event_types = _parse_csv_filter(event_type)
+    return {
+        "items": _incident_timeline_aggregated(
+            db,
+            incident_id,
+            lookback_hours=lookback_hours,
+            source_limit=max(limit, 140),
+            source_types=source_types,
+            event_types=event_types,
+            limit_total=limit,
+        )
+    }
+
+
+class IncidentWatcherBody(BaseModel):
+    username: str
+
+
+@router.get("/{incident_id}/watchers")
+def list_incident_watchers(
+    incident_id: int,
+    db: Session = Depends(get_db),
+    _user: str = Depends(require_auth),
+):
+    rows = (
+        db.execute(
+            text(
+                """
+                SELECT incident_id, username, added_by, added_at
+                FROM incident_watchers
+                WHERE incident_id = :incident_id
+                ORDER BY added_at ASC, username ASC
+                """
+            ),
+            {"incident_id": incident_id},
+        )
+        .mappings()
+        .all()
+    )
+    return {"items": [_serialize_watcher(dict(row)) for row in rows]}
+
+
+@router.post("/{incident_id}/watchers", status_code=201)
+def add_incident_watcher(
+    incident_id: int,
+    body: IncidentWatcherBody,
+    db: Session = Depends(get_db),
+    user: str = Depends(require_role(["admin", "analyst"])),
+):
+    username = (body.username or "").strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="username required")
+    exists = db.execute(text("SELECT id FROM incidents WHERE id = :id"), {"id": incident_id}).scalar()
+    if not exists:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    db.execute(
+        text(
+            """
+            INSERT INTO incident_watchers (incident_id, username, added_by)
+            VALUES (:incident_id, :username, :added_by)
+            ON CONFLICT (incident_id, username) DO NOTHING
+            """
+        ),
+        {"incident_id": incident_id, "username": username, "added_by": user},
+    )
+    row = (
+        db.execute(
+            text(
+                """
+                SELECT incident_id, username, added_by, added_at
+                FROM incident_watchers
+                WHERE incident_id = :incident_id AND username = :username
+                """
+            ),
+            {"incident_id": incident_id, "username": username},
+        )
+        .mappings()
+        .first()
+    )
+    db.commit()
+    log_audit(
+        db,
+        "incident.watcher.add",
+        user_name=user,
+        details={"incident_id": incident_id, "username": username},
+        request_id=request_id_ctx.get(None),
+    )
+    db.commit()
+    return _serialize_watcher(dict(row or {}))
+
+
+@router.delete("/{incident_id}/watchers")
+def remove_incident_watcher(
+    incident_id: int,
+    username: str = Query(..., min_length=1),
+    db: Session = Depends(get_db),
+    user: str = Depends(require_role(["admin", "analyst"])),
+):
+    removed = db.execute(
+        text(
+            """
+            DELETE FROM incident_watchers
+            WHERE incident_id = :incident_id AND username = :username
+            """
+        ),
+        {"incident_id": incident_id, "username": username},
+    )
+    if int(removed.rowcount or 0) == 0:
+        raise HTTPException(status_code=404, detail="Watcher not found")
+    db.commit()
+    log_audit(
+        db,
+        "incident.watcher.remove",
+        user_name=user,
+        details={"incident_id": incident_id, "username": username},
+        request_id=request_id_ctx.get(None),
+    )
+    db.commit()
+    return {"ok": True}
+
+
+class IncidentChecklistBody(BaseModel):
+    title: str
+
+
+class IncidentChecklistUpdateBody(BaseModel):
+    done: bool
+
+
+@router.get("/{incident_id}/checklist")
+def list_incident_checklist(
+    incident_id: int,
+    db: Session = Depends(get_db),
+    _user: str = Depends(require_auth),
+):
+    rows = (
+        db.execute(
+            text(
+                """
+                SELECT item_id, incident_id, title, done, done_by, done_at, created_by, created_at, updated_at
+                FROM incident_checklist_items
+                WHERE incident_id = :incident_id
+                ORDER BY created_at ASC, item_id ASC
+                """
+            ),
+            {"incident_id": incident_id},
+        )
+        .mappings()
+        .all()
+    )
+    return {"items": [_serialize_checklist_item(dict(row)) for row in rows]}
+
+
+@router.post("/{incident_id}/checklist", status_code=201)
+def add_incident_checklist_item(
+    incident_id: int,
+    body: IncidentChecklistBody,
+    db: Session = Depends(get_db),
+    user: str = Depends(require_role(["admin", "analyst"])),
+):
+    title = (body.title or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="title required")
+    exists = db.execute(text("SELECT id FROM incidents WHERE id = :id"), {"id": incident_id}).scalar()
+    if not exists:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    row = (
+        db.execute(
+            text(
+                """
+                INSERT INTO incident_checklist_items (incident_id, title, created_by, updated_at)
+                VALUES (:incident_id, :title, :created_by, NOW())
+                RETURNING item_id, incident_id, title, done, done_by, done_at, created_by, created_at, updated_at
+                """
+            ),
+            {"incident_id": incident_id, "title": title, "created_by": user},
+        )
+        .mappings()
+        .first()
+    )
+    db.commit()
+    log_audit(
+        db,
+        "incident.checklist.add",
+        user_name=user,
+        details={"incident_id": incident_id, "item_id": int(row["item_id"]) if row else None},
+        request_id=request_id_ctx.get(None),
+    )
+    db.commit()
+    return _serialize_checklist_item(dict(row or {}))
+
+
+@router.patch("/{incident_id}/checklist/{item_id}")
+def update_incident_checklist_item(
+    incident_id: int,
+    item_id: int,
+    body: IncidentChecklistUpdateBody,
+    db: Session = Depends(get_db),
+    user: str = Depends(require_role(["admin", "analyst"])),
+):
+    exists = db.execute(text("SELECT id FROM incidents WHERE id = :id"), {"id": incident_id}).scalar()
+    if not exists:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    row = (
+        db.execute(
+            text(
+                """
+                UPDATE incident_checklist_items
+                SET
+                  done = :done,
+                  done_by = CASE WHEN :done THEN :user_name ELSE NULL END,
+                  done_at = CASE WHEN :done THEN NOW() ELSE NULL END,
+                  updated_at = NOW()
+                WHERE incident_id = :incident_id
+                  AND item_id = :item_id
+                RETURNING item_id, incident_id, title, done, done_by, done_at, created_by, created_at, updated_at
+                """
+            ),
+            {
+                "incident_id": incident_id,
+                "item_id": item_id,
+                "done": bool(body.done),
+                "user_name": user,
+            },
+        )
+        .mappings()
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Checklist item not found")
+    db.commit()
+    log_audit(
+        db,
+        "incident.checklist.update",
+        user_name=user,
+        details={"incident_id": incident_id, "item_id": item_id, "done": bool(body.done)},
+        request_id=request_id_ctx.get(None),
+    )
+    db.commit()
+    return _serialize_checklist_item(dict(row))
+
+
+class IncidentDecisionBody(BaseModel):
+    decision: str
+    rationale: str | None = None
+    details: dict | None = None
+
+
+@router.get("/{incident_id}/decisions")
+def list_incident_decisions(
+    incident_id: int,
+    db: Session = Depends(get_db),
+    _user: str = Depends(require_auth),
+):
+    rows = (
+        db.execute(
+            text(
+                """
+                SELECT decision_id, incident_id, decision, rationale, decided_by, details, created_at
+                FROM incident_decisions
+                WHERE incident_id = :incident_id
+                ORDER BY created_at ASC, decision_id ASC
+                """
+            ),
+            {"incident_id": incident_id},
+        )
+        .mappings()
+        .all()
+    )
+    return {"items": [_serialize_decision(dict(row)) for row in rows]}
+
+
+@router.post("/{incident_id}/decisions", status_code=201)
+def add_incident_decision(
+    incident_id: int,
+    body: IncidentDecisionBody,
+    db: Session = Depends(get_db),
+    user: str = Depends(require_role(["admin", "analyst"])),
+):
+    decision = (body.decision or "").strip()
+    if not decision:
+        raise HTTPException(status_code=400, detail="decision required")
+    exists = db.execute(text("SELECT id FROM incidents WHERE id = :id"), {"id": incident_id}).scalar()
+    if not exists:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    row = (
+        db.execute(
+            text(
+                """
+                INSERT INTO incident_decisions (incident_id, decision, rationale, decided_by, details)
+                VALUES (:incident_id, :decision, :rationale, :decided_by, CAST(:details AS jsonb))
+                RETURNING decision_id, incident_id, decision, rationale, decided_by, details, created_at
+                """
+            ),
+            {
+                "incident_id": incident_id,
+                "decision": decision,
+                "rationale": (body.rationale or "").strip() or None,
+                "decided_by": user,
+                "details": json.dumps(body.details or {}),
+            },
+        )
+        .mappings()
+        .first()
+    )
+    db.commit()
+    log_audit(
+        db,
+        "incident.decision.add",
+        user_name=user,
+        details={"incident_id": incident_id, "decision_id": int(row["decision_id"]) if row else None},
+        request_id=request_id_ctx.get(None),
+    )
+    db.commit()
+    return _serialize_decision(dict(row or {}))
+
+
+class IncidentAutoRuleBody(BaseModel):
+    name: str
+    description: str | None = None
+    enabled: bool = True
+    severity_threshold: str = "high"
+    window_minutes: int = 15
+    min_alerts: int = 2
+    require_distinct_sources: bool = False
+    incident_severity: str = "high"
+
+
+class IncidentAutoRuleUpdateBody(BaseModel):
+    description: str | None = None
+    enabled: bool | None = None
+    severity_threshold: str | None = None
+    window_minutes: int | None = None
+    min_alerts: int | None = None
+    require_distinct_sources: bool | None = None
+    incident_severity: str | None = None
+
+
+@router.get("/auto-rules/list")
+def list_incident_auto_rules(
+    db: Session = Depends(get_db),
+    _user: str = Depends(require_auth),
+):
+    rows = (
+        db.execute(
+            text(
+                """
+                SELECT
+                  auto_rule_id, name, description, enabled, severity_threshold,
+                  window_minutes, min_alerts, require_distinct_sources, incident_severity,
+                  created_by, created_at, updated_at
+                FROM incident_auto_rules
+                ORDER BY updated_at DESC, auto_rule_id DESC
+                """
+            )
+        )
+        .mappings()
+        .all()
+    )
+    return {"items": [_serialize_incident(dict(row)) for row in rows]}
+
+
+@router.post("/auto-rules/create", status_code=201)
+def create_incident_auto_rule(
+    body: IncidentAutoRuleBody,
+    db: Session = Depends(get_db),
+    user: str = Depends(require_role(["admin", "analyst"])),
+):
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name required")
+    if body.severity_threshold not in VALID_SEVERITY:
+        raise HTTPException(status_code=400, detail="Invalid severity_threshold")
+    if body.incident_severity not in VALID_SEVERITY:
+        raise HTTPException(status_code=400, detail="Invalid incident_severity")
+    row = (
+        db.execute(
+            text(
+                """
+                INSERT INTO incident_auto_rules (
+                  name, description, enabled, severity_threshold, window_minutes, min_alerts,
+                  require_distinct_sources, incident_severity, created_by, updated_at
+                )
+                VALUES (
+                  :name, :description, :enabled, :severity_threshold, :window_minutes, :min_alerts,
+                  :require_distinct_sources, :incident_severity, :created_by, NOW()
+                )
+                RETURNING
+                  auto_rule_id, name, description, enabled, severity_threshold,
+                  window_minutes, min_alerts, require_distinct_sources, incident_severity,
+                  created_by, created_at, updated_at
+                """
+            ),
+            {
+                "name": name,
+                "description": (body.description or "").strip() or None,
+                "enabled": bool(body.enabled),
+                "severity_threshold": body.severity_threshold,
+                "window_minutes": max(1, int(body.window_minutes)),
+                "min_alerts": max(1, int(body.min_alerts)),
+                "require_distinct_sources": bool(body.require_distinct_sources),
+                "incident_severity": body.incident_severity,
+                "created_by": user,
+            },
+        )
+        .mappings()
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=500, detail="Failed to create incident auto rule")
+    db.commit()
+    log_audit(
+        db,
+        "incident.auto_rule.create",
+        user_name=user,
+        details={"auto_rule_id": int(row["auto_rule_id"]), "name": name},
+        request_id=request_id_ctx.get(None),
+    )
+    db.commit()
+    return _serialize_incident(dict(row))
+
+
+@router.patch("/auto-rules/{auto_rule_id}")
+def update_incident_auto_rule(
+    auto_rule_id: int,
+    body: IncidentAutoRuleUpdateBody,
+    db: Session = Depends(get_db),
+    user: str = Depends(require_role(["admin", "analyst"])),
+):
+    current = (
+        db.execute(
+            text("SELECT * FROM incident_auto_rules WHERE auto_rule_id = :auto_rule_id"),
+            {"auto_rule_id": auto_rule_id},
+        )
+        .mappings()
+        .first()
+    )
+    if not current:
+        raise HTTPException(status_code=404, detail="Incident auto rule not found")
+    severity_threshold = (
+        body.severity_threshold if body.severity_threshold is not None else current["severity_threshold"]
+    )
+    incident_severity = (
+        body.incident_severity if body.incident_severity is not None else current["incident_severity"]
+    )
+    if severity_threshold not in VALID_SEVERITY:
+        raise HTTPException(status_code=400, detail="Invalid severity_threshold")
+    if incident_severity not in VALID_SEVERITY:
+        raise HTTPException(status_code=400, detail="Invalid incident_severity")
+    updated = (
+        db.execute(
+            text(
+                """
+                UPDATE incident_auto_rules
+                SET
+                  description = :description,
+                  enabled = :enabled,
+                  severity_threshold = :severity_threshold,
+                  window_minutes = :window_minutes,
+                  min_alerts = :min_alerts,
+                  require_distinct_sources = :require_distinct_sources,
+                  incident_severity = :incident_severity,
+                  updated_at = NOW()
+                WHERE auto_rule_id = :auto_rule_id
+                RETURNING
+                  auto_rule_id, name, description, enabled, severity_threshold,
+                  window_minutes, min_alerts, require_distinct_sources, incident_severity,
+                  created_by, created_at, updated_at
+                """
+            ),
+            {
+                "auto_rule_id": auto_rule_id,
+                "description": (
+                    body.description if body.description is not None else current["description"]
+                ),
+                "enabled": bool(body.enabled) if body.enabled is not None else bool(current["enabled"]),
+                "severity_threshold": severity_threshold,
+                "window_minutes": (
+                    max(1, int(body.window_minutes))
+                    if body.window_minutes is not None
+                    else int(current["window_minutes"])
+                ),
+                "min_alerts": (
+                    max(1, int(body.min_alerts))
+                    if body.min_alerts is not None
+                    else int(current["min_alerts"])
+                ),
+                "require_distinct_sources": (
+                    bool(body.require_distinct_sources)
+                    if body.require_distinct_sources is not None
+                    else bool(current["require_distinct_sources"])
+                ),
+                "incident_severity": incident_severity,
+            },
+        )
+        .mappings()
+        .first()
+    )
+    db.commit()
+    log_audit(
+        db,
+        "incident.auto_rule.update",
+        user_name=user,
+        details={"auto_rule_id": auto_rule_id},
+        request_id=request_id_ctx.get(None),
+    )
+    db.commit()
+    return _serialize_incident(dict(updated or {}))
+
+
+@router.post("/auto-rules/run")
+def run_incident_auto_rules(
+    db: Session = Depends(get_db),
+    user: str = Depends(require_role(["admin", "analyst"])),
+):
+    result = _run_incident_auto_rules(db, user=user)
+    db.commit()
+    log_audit(
+        db,
+        "incident.auto_rule.run",
+        user_name=user,
+        details={
+            "rules_evaluated": result.get("rules_evaluated"),
+            "incidents_created": result.get("incidents_created"),
+            "incident_ids": result.get("incident_ids") or [],
+        },
+        request_id=request_id_ctx.get(None),
+    )
+    db.commit()
+    return result
 
 
 def _jira_create_issue(incident: dict, project_key: str, frontend_url: str) -> tuple[str, str]:
@@ -777,7 +1884,7 @@ def create_jira_ticket(
     db.commit()
     log_audit(
         db,
-        "incident_jira_create",
+        "incident.jira.create",
         user_name=user,
         asset_key=None,
         details={"incident_id": incident_id, "jira_issue_key": issue_key},

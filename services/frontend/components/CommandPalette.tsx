@@ -34,7 +34,7 @@ export default function CommandPalette({ isAdmin }: { isAdmin: boolean }) {
       <Dialog.Trigger asChild>
         <button
           type="button"
-          className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-muted)] transition hover:border-[var(--green)]/45 hover:text-[var(--text)]"
+          className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-muted)] transition hover:border-cyan-300/40 hover:bg-cyan-300/[0.08] hover:text-[var(--text)]"
         >
           <Search size={15} />
           Search
@@ -44,8 +44,8 @@ export default function CommandPalette({ isAdmin }: { isAdmin: boolean }) {
         </button>
       </Dialog.Trigger>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[80] bg-black/55 backdrop-blur-sm" />
-        <Dialog.Content className="fixed left-1/2 top-[8%] z-[90] w-[min(92vw,46rem)] -translate-x-1/2 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-2xl shadow-black/50 focus:outline-none">
+          <Dialog.Overlay className="fixed inset-0 z-[80] bg-black/65 backdrop-blur-sm" />
+          <Dialog.Content className="fixed left-1/2 top-[8%] z-[90] w-[min(92vw,46rem)] -translate-x-1/2 overflow-hidden rounded-2xl border border-[var(--border)] bg-[linear-gradient(180deg,rgba(16,32,54,0.96),rgba(9,20,35,0.92))] shadow-2xl shadow-black/55 focus:outline-none">
           <Dialog.Title className="sr-only">Command Palette</Dialog.Title>
           <Dialog.Description className="sr-only">Search and jump to any security workspace page.</Dialog.Description>
           <Command className="max-h-[70vh] overflow-hidden">
@@ -73,7 +73,7 @@ export default function CommandPalette({ isAdmin }: { isAdmin: boolean }) {
                         router.push(item.href);
                         setOpen(false);
                       }}
-                      className="group flex cursor-pointer items-center justify-between rounded-xl px-3 py-2.5 text-sm text-[var(--text-muted)] outline-none transition data-[selected=true]:bg-[var(--green)]/15 data-[selected=true]:text-[var(--text)]"
+                      className="group flex cursor-pointer items-center justify-between rounded-xl px-3 py-2.5 text-sm text-[var(--text-muted)] outline-none transition data-[selected=true]:bg-cyan-300/16 data-[selected=true]:text-[var(--text)]"
                     >
                       <div>
                         <p className="font-medium">{item.label}</p>
@@ -81,7 +81,7 @@ export default function CommandPalette({ isAdmin }: { isAdmin: boolean }) {
                           {item.description}
                         </p>
                       </div>
-                      <ArrowRight size={14} className="text-[var(--muted)] group-data-[selected=true]:text-[var(--green)]" />
+                      <ArrowRight size={14} className="text-[var(--muted)] group-data-[selected=true]:text-cyan-100" />
                     </Command.Item>
                   ))}
                 </Command.Group>

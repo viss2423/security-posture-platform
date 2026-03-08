@@ -122,7 +122,7 @@ def list_findings(
         LIMIT 1
       ) rl ON TRUE
       WHERE {where}
-      ORDER BY COALESCE(f.risk_score, 0) DESC, COALESCE(f.last_seen, f.time) DESC
+      ORDER BY COALESCE(f.last_seen, f.time) DESC, f.finding_id DESC, COALESCE(f.risk_score, 0) DESC
       LIMIT :limit
     """)
     rows = db.execute(q, params).mappings().all()
@@ -761,13 +761,29 @@ def upsert_finding_record(db: Session, body: FindingUpsertBody) -> dict[str, Any
 def upsert_finding(
     body: FindingUpsertBody,
     db: Session = Depends(get_db),
-    _user: str = Depends(require_role(["admin", "analyst"])),
+    user: str = Depends(require_role(["admin", "analyst"])),
 ):
     """
     Upsert by finding_key. If exists: update last_seen (and optionally evidence).
     If new: insert with first_seen=last_seen=now. Requires asset_id or asset_key to resolve.
     """
-    return upsert_finding_record(db, body)
+    result = upsert_finding_record(db, body)
+    log_audit(
+        db,
+        "finding.upsert",
+        user_name=user,
+        asset_key=body.asset_key,
+        details={
+            "finding_key": body.finding_key,
+            "asset_key": body.asset_key,
+            "asset_id": body.asset_id,
+            "updated": bool(result.get("updated")),
+            "source": body.source,
+        },
+        request_id=request_id_ctx.get(None),
+    )
+    db.commit()
+    return result
 
 
 class UpdateStatusBody(BaseModel):

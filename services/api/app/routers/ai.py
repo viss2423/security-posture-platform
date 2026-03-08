@@ -15,6 +15,16 @@ from sqlalchemy.orm import Session
 
 from app.ai_anomaly import SeriesPoint, detect_latest_anomaly
 from app.ai_client import AIClientError, compact_json, generate_text, model_name, provider_name
+from app.ai_context_builder import (
+    build_alert_guardrail_bundle,
+    build_finding_guardrail_bundle,
+    build_incident_guardrail_bundle,
+    build_policy_guardrail_bundle,
+    parse_alert_guarded_payload,
+    parse_guarded_sections_payload,
+    parse_incident_guarded_sections,
+    render_guarded_sections_text,
+)
 from app.audit import log_audit
 from app.db import get_db
 from app.request_context import request_id_ctx
@@ -1244,17 +1254,28 @@ def _compact_alert_guidance_context(context: dict) -> dict:
     }
 
 
-def _incident_summary_prompt(context: dict) -> tuple[str, str]:
+def _incident_summary_prompt(
+    context: dict,
+    evidence_catalog: list[dict[str, object]],
+) -> tuple[str, str]:
     system = (
         "You are a SOC executive reporting assistant. "
-        "Write concise, factual incident summaries for leadership. "
-        "Avoid speculation and include impact, affected assets, current status, and clear next actions."
+        "Use only supplied evidence IDs. "
+        "Return valid JSON only with keys facts, inference, recommendations. "
+        "Each item must be an object with keys statement and evidence. "
+        "Evidence must be a list of evidence IDs that support that statement. "
+        "Never include unsupported claims."
     )
     user = (
-        "Summarize this incident for executive leadership in under 180 words.\n"
-        "Format:\n"
-        "1) Impact\n2) Affected assets\n3) Current severity/status\n4) Immediate recommended actions\n\n"
-        f"Incident context JSON:\n{compact_json(context, max_chars=INCIDENT_SUMMARY_PROMPT_MAX_CHARS)}"
+        "Build an executive-ready grounded summary.\n"
+        "Return JSON shape:\n"
+        "{\n"
+        '  "facts":[{"statement":"...","evidence":["E1"]}],\n'
+        '  "inference":[{"statement":"...","evidence":["E2"]}],\n'
+        '  "recommendations":[{"statement":"...","evidence":["E3"]}]\n'
+        "}\n\n"
+        f"Incident context JSON:\n{compact_json(context, max_chars=INCIDENT_SUMMARY_PROMPT_MAX_CHARS)}\n\n"
+        f"Evidence catalog JSON:\n{compact_json({'evidence_catalog': evidence_catalog}, max_chars=INCIDENT_SUMMARY_PROMPT_MAX_CHARS)}"
     )
     return system, user
 
@@ -1311,6 +1332,33 @@ def _policy_evaluation_summary_prompt(context: dict) -> tuple[str, str]:
     return system, user
 
 
+def _policy_guarded_prompt(
+    context: dict,
+    evidence_catalog: list[dict[str, object]],
+) -> tuple[str, str]:
+    system = (
+        "You are a security compliance remediation assistant. "
+        "Use only supplied evidence IDs. "
+        "Return valid JSON only with keys facts, inference, recommendations. "
+        "Each item must be an object with statement and evidence IDs."
+    )
+    user = (
+        "Return strict JSON with this schema:\n"
+        "{\n"
+        '  "facts":[{"statement":"...","evidence":["E1"]}],\n'
+        '  "inference":[{"statement":"...","evidence":["E2"]}],\n'
+        '  "recommendations":[{"statement":"...","evidence":["E3"]}]\n'
+        "}\n"
+        "Rules:\n"
+        "- Every statement must include at least one valid evidence ID.\n"
+        "- Do not invent evidence IDs.\n"
+        "- Keep each statement concise and operational.\n\n"
+        f"Policy evaluation context JSON:\n{compact_json(context, max_chars=POLICY_EVALUATION_SUMMARY_PROMPT_MAX_CHARS)}\n\n"
+        f"Evidence catalog JSON:\n{compact_json({'evidence_catalog': evidence_catalog}, max_chars=2200)}"
+    )
+    return system, user
+
+
 def _alert_response_guidance_prompt(context: dict) -> tuple[str, str]:
     system = (
         "You are a SOC alert response assistant. "
@@ -1336,6 +1384,65 @@ def _alert_response_guidance_prompt(context: dict) -> tuple[str, str]:
     return system, user
 
 
+def _default_alert_labels(context: dict) -> tuple[str, str]:
+    decision = dict(context.get("decision_signals") or {})
+    maintenance = dict(context.get("maintenance") or {})
+    suppression = dict(context.get("suppression") or {})
+    response_bias = str(decision.get("response_bias") or "").strip().lower()
+    if bool(maintenance.get("active")) or bool(suppression.get("active")):
+        return "suppress", "medium"
+    if bool(decision.get("has_open_incident")):
+        return "assign", "high"
+    if response_bias == "escalate":
+        return "escalate", "high"
+    if response_bias == "assign_or_escalate":
+        return "assign", "high"
+    if response_bias == "assign_or_monitor_existing_incident":
+        return "assign", "high"
+    if response_bias == "assign_or_monitor":
+        return "assign", "medium"
+    if response_bias == "suppress_or_monitor":
+        return "monitor", "medium"
+    if response_bias == "ack_or_assign":
+        return "ack", "medium"
+    if bool(decision.get("currently_down")):
+        return "assign", "high"
+    return "monitor", "low"
+
+
+def _alert_guarded_prompt(
+    context: dict,
+    evidence_catalog: list[dict[str, object]],
+    *,
+    default_action: str,
+    default_urgency: str,
+) -> tuple[str, str]:
+    system = (
+        "You are a SOC alert response assistant. "
+        "Use only supplied evidence IDs. "
+        "Return valid JSON only with keys recommended_action, urgency, facts, inference, recommendations. "
+        "facts/inference/recommendations must contain objects with statement and evidence IDs."
+    )
+    user = (
+        "Return JSON shape:\n"
+        "{\n"
+        '  "recommended_action": "ack|suppress|assign|escalate|resolve|monitor",\n'
+        '  "urgency": "critical|high|medium|low",\n'
+        '  "facts":[{"statement":"...","evidence":["E1"]}],\n'
+        '  "inference":[{"statement":"...","evidence":["E2"]}],\n'
+        '  "recommendations":[{"statement":"...","evidence":["E3"]}]\n'
+        "}\n"
+        "Rules:\n"
+        "- Every statement must cite at least one valid evidence ID.\n"
+        "- Do not invent evidence IDs.\n"
+        "- Keep statements concise and operational.\n"
+        f"- If uncertain, use default action '{default_action}' and urgency '{default_urgency}'.\n\n"
+        f"Alert response context JSON:\n{compact_json(context, max_chars=ALERT_GUIDANCE_PROMPT_MAX_CHARS)}\n\n"
+        f"Evidence catalog JSON:\n{compact_json({'evidence_catalog': evidence_catalog}, max_chars=2200)}"
+    )
+    return system, user
+
+
 def _finding_explanation_prompt(context: dict) -> tuple[str, str]:
     system = (
         "You are a security triage copilot for AppSec and cloud posture teams. "
@@ -1349,6 +1456,28 @@ def _finding_explanation_prompt(context: dict) -> tuple[str, str]:
         "- Why it matters in this environment\n"
         "- Remediation steps\n"
         "- Optional quick patch/config snippet if applicable\n\n"
+        f"Finding context JSON:\n{compact_json(context, max_chars=FINDING_EXPLAIN_PROMPT_MAX_CHARS)}"
+    )
+    return system, user
+
+
+def _finding_guarded_prompt(context: dict, evidence_catalog: list[dict]) -> tuple[str, str]:
+    system = (
+        "You are a security triage copilot for AppSec and cloud posture teams. "
+        "Only use facts that can be tied to provided evidence IDs."
+    )
+    user = (
+        "Return strict JSON with this schema:\n"
+        "{\n"
+        '  "facts": [{"statement": "...", "evidence": ["E1"]}],\n'
+        '  "inference": [{"statement": "...", "evidence": ["E2"]}],\n'
+        '  "recommendations": [{"statement": "...", "evidence": ["E3"]}]\n'
+        "}\n"
+        "Rules:\n"
+        "- Every statement must include at least one valid evidence ID.\n"
+        "- Do not invent evidence IDs.\n"
+        "- Keep each statement under 220 characters.\n\n"
+        f"Evidence catalog JSON:\n{compact_json({'evidence_catalog': evidence_catalog}, max_chars=1800)}\n\n"
         f"Finding context JSON:\n{compact_json(context, max_chars=FINDING_EXPLAIN_PROMPT_MAX_CHARS)}"
     )
     return system, user
@@ -1693,24 +1822,46 @@ def generate_incident_summary(
         out["cached"] = True
         return out
     context = _incident_context(db, incident_id)
-    system_prompt, user_prompt = _incident_summary_prompt(context)
+    guardrail_bundle = build_incident_guardrail_bundle(context)
+    evidence_catalog = [
+        dict(item)
+        for item in (guardrail_bundle.get("evidence_catalog") or [])
+        if isinstance(item, dict)
+    ]
+    fallback_sections = guardrail_bundle.get("sections") or {}
+    allowed_evidence = {
+        str(item.get("id") or "").strip().upper()
+        for item in evidence_catalog
+        if str(item.get("id") or "").strip()
+    }
+    system_prompt, user_prompt = _incident_summary_prompt(context, evidence_catalog)
     generated_provider = provider_name()
     generated_model = model_name()
+    used_fallback_sections = False
     try:
-        summary = generate_text(
+        raw_summary = generate_text(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             max_tokens=INCIDENT_SUMMARY_MAX_TOKENS,
         )
+        sections, used_fallback_sections = parse_incident_guarded_sections(
+            raw_summary,
+            allowed_evidence=allowed_evidence,
+            fallback_sections=fallback_sections,
+        )
+        if used_fallback_sections:
+            generated_provider = f"{generated_provider}-guarded"
     except AIClientError as e:
         if _is_recoverable_ai_error(e):
-            summary = _fallback_incident_summary(context)
+            sections = fallback_sections
+            used_fallback_sections = True
             generated_provider = f"{generated_provider}-fallback"
             generated_model = "template-v1"
         else:
             raise HTTPException(
                 status_code=503, detail=f"AI summary generation unavailable: {e}"
             ) from e
+    summary = render_guarded_sections_text(sections)
 
     params = {
         "incident_id": incident_id,
@@ -1718,7 +1869,18 @@ def generate_incident_summary(
         "provider": generated_provider,
         "model": generated_model,
         "generated_by": user,
-        "context_json": json.dumps({"generated_from": context.get("incident", {}), "source": "ai"}),
+        "context_json": json.dumps(
+            {
+                "generated_from": context.get("incident", {}),
+                "source": "ai",
+                "guardrails": {
+                    "mode": "incident_grounded_v1",
+                    "used_fallback_sections": used_fallback_sections,
+                    "evidence_catalog": evidence_catalog,
+                    "sections": sections,
+                },
+            }
+        ),
     }
     row = (
         db.execute(
@@ -1787,9 +1949,47 @@ def generate_policy_evaluation_summary(
     stored_context = context
     generated_provider = provider_name()
     generated_model = model_name()
-    system_prompt, user_prompt = _policy_evaluation_summary_prompt(context)
+    guardrail_bundle = build_policy_guardrail_bundle(context)
+    evidence_catalog = [
+        dict(item)
+        for item in (guardrail_bundle.get("evidence_catalog") or [])
+        if isinstance(item, dict)
+    ]
+    fallback_sections = guardrail_bundle.get("sections") or {}
+    allowed_evidence = {
+        str(item.get("id") or "").strip().upper()
+        for item in evidence_catalog
+        if str(item.get("id") or "").strip()
+    }
+    system_prompt, user_prompt = _policy_guarded_prompt(context, evidence_catalog)
+
+    def _finalize_policy_summary(
+        raw_text: str,
+    ) -> tuple[str, dict[str, list[dict[str, object]]], bool, str]:
+        parsed = parse_guarded_sections_payload(
+            raw_text,
+            allowed_evidence=allowed_evidence,
+            fallback_sections=fallback_sections,
+        )
+        if parsed is not None:
+            sections, used_fallback_sections = parsed
+            rendered = render_guarded_sections_text(sections)
+            return rendered, sections, used_fallback_sections, "json"
+
+        legacy_text = str(raw_text or "").strip()
+        legacy_lower = legacy_text.lower()
+        if (
+            "overall posture" in legacy_lower
+            and "main failure themes" in legacy_lower
+            and "remediation priorities" in legacy_lower
+        ):
+            return legacy_text, fallback_sections, True, "legacy"
+
+        rendered = render_guarded_sections_text(fallback_sections)
+        return rendered, fallback_sections, True, "fallback"
+
     try:
-        summary = generate_text(
+        raw_summary = generate_text(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             max_tokens=POLICY_EVALUATION_SUMMARY_MAX_TOKENS,
@@ -1798,15 +1998,30 @@ def generate_policy_evaluation_summary(
                 float(POLICY_EVALUATION_SUMMARY_TIMEOUT_SECONDS),
             ),
         )
+        summary_text, sections, used_fallback_sections, parse_mode = _finalize_policy_summary(
+            raw_summary
+        )
     except AIClientError as e:
         if not _is_recoverable_ai_error(e):
             raise HTTPException(
                 status_code=503, detail=f"AI summary generation unavailable: {e}"
             ) from e
         compact_context = _compact_policy_evaluation_context(context)
-        compact_system, compact_user = _policy_evaluation_summary_prompt(compact_context)
+        compact_bundle = build_policy_guardrail_bundle(compact_context)
+        evidence_catalog = [
+            dict(item)
+            for item in (compact_bundle.get("evidence_catalog") or [])
+            if isinstance(item, dict)
+        ]
+        fallback_sections = compact_bundle.get("sections") or {}
+        allowed_evidence = {
+            str(item.get("id") or "").strip().upper()
+            for item in evidence_catalog
+            if str(item.get("id") or "").strip()
+        }
+        compact_system, compact_user = _policy_guarded_prompt(compact_context, evidence_catalog)
         try:
-            summary = generate_text(
+            raw_summary = generate_text(
                 system_prompt=compact_system,
                 user_prompt=compact_user,
                 max_tokens=POLICY_EVALUATION_SUMMARY_RETRY_MAX_TOKENS,
@@ -1816,19 +2031,37 @@ def generate_policy_evaluation_summary(
                 ),
             )
             stored_context = compact_context
+            summary_text, sections, used_fallback_sections, parse_mode = _finalize_policy_summary(
+                raw_summary
+            )
         except AIClientError as retry_error:
             raise HTTPException(
                 status_code=503,
                 detail=f"AI summary generation unavailable: {retry_error}",
             ) from retry_error
 
+    if parse_mode in {"json", "fallback"} and used_fallback_sections:
+        generated_provider = f"{generated_provider}-guarded"
+
     params = {
         "evaluation_id": evaluation_id,
-        "summary_text": summary.strip(),
+        "summary_text": summary_text.strip(),
         "provider": generated_provider,
         "model": generated_model,
         "generated_by": user,
-        "context_json": json.dumps({"generated_from": stored_context, "source": "ai"}),
+        "context_json": json.dumps(
+            {
+                "generated_from": stored_context,
+                "source": "ai",
+                "guardrails": {
+                    "mode": "policy_evaluation_grounded_v1",
+                    "parse_mode": parse_mode,
+                    "used_fallback_sections": used_fallback_sections,
+                    "evidence_catalog": evidence_catalog,
+                    "sections": sections,
+                },
+            }
+        ),
     }
     row = (
         db.execute(
@@ -1910,9 +2143,70 @@ def generate_alert_guidance(
     stored_context = context
     generated_provider = provider_name()
     generated_model = model_name()
-    system_prompt, user_prompt = _alert_response_guidance_prompt(context)
+    guardrail_bundle = build_alert_guardrail_bundle(context)
+    evidence_catalog = [
+        dict(item)
+        for item in (guardrail_bundle.get("evidence_catalog") or [])
+        if isinstance(item, dict)
+    ]
+    fallback_sections = guardrail_bundle.get("sections") or {}
+    allowed_evidence = {
+        str(item.get("id") or "").strip().upper()
+        for item in evidence_catalog
+        if str(item.get("id") or "").strip()
+    }
+    fallback_action, fallback_urgency = _default_alert_labels(context)
+    system_prompt, user_prompt = _alert_guarded_prompt(
+        context,
+        evidence_catalog,
+        default_action=fallback_action,
+        default_urgency=fallback_urgency,
+    )
+
+    def _finalize_guidance(raw_text: str) -> tuple[str, str | None, str | None, dict, bool, str]:
+        parsed = parse_alert_guarded_payload(
+            raw_text,
+            allowed_evidence=allowed_evidence,
+            fallback_sections=fallback_sections,
+            fallback_action=fallback_action,
+            fallback_urgency=fallback_urgency,
+        )
+        if parsed is not None:
+            sections, used_fallback_sections, parsed_action, parsed_urgency = parsed
+            rendered = (
+                f"Recommended action: {parsed_action}\n"
+                f"Urgency: {parsed_urgency}\n\n"
+                f"{render_guarded_sections_text(sections)}"
+            )
+            return rendered, parsed_action, parsed_urgency, sections, used_fallback_sections, "json"
+
+        legacy_action, legacy_urgency = _alert_guidance_labels(raw_text)
+        if legacy_action and legacy_urgency:
+            return (
+                str(raw_text or "").strip(),
+                legacy_action,
+                legacy_urgency,
+                fallback_sections,
+                True,
+                "legacy",
+            )
+
+        rendered = (
+            f"Recommended action: {fallback_action}\n"
+            f"Urgency: {fallback_urgency}\n\n"
+            f"{render_guarded_sections_text(fallback_sections)}"
+        )
+        return (
+            rendered,
+            fallback_action,
+            fallback_urgency,
+            fallback_sections,
+            True,
+            "fallback",
+        )
+
     try:
-        guidance_text = generate_text(
+        raw_guidance = generate_text(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             max_tokens=ALERT_GUIDANCE_MAX_TOKENS,
@@ -1921,15 +2215,36 @@ def generate_alert_guidance(
                 float(ALERT_GUIDANCE_TIMEOUT_SECONDS),
             ),
         )
+        guidance_text, recommended_action, urgency, sections, used_fallback_sections, parse_mode = (
+            _finalize_guidance(raw_guidance)
+        )
     except AIClientError as e:
         if not _is_recoverable_ai_error(e):
             raise HTTPException(
                 status_code=503, detail=f"AI guidance generation unavailable: {e}"
             ) from e
         compact_context = _compact_alert_guidance_context(context)
-        compact_system, compact_user = _alert_response_guidance_prompt(compact_context)
+        compact_bundle = build_alert_guardrail_bundle(compact_context)
+        evidence_catalog = [
+            dict(item)
+            for item in (compact_bundle.get("evidence_catalog") or [])
+            if isinstance(item, dict)
+        ]
+        fallback_sections = compact_bundle.get("sections") or {}
+        allowed_evidence = {
+            str(item.get("id") or "").strip().upper()
+            for item in evidence_catalog
+            if str(item.get("id") or "").strip()
+        }
+        fallback_action, fallback_urgency = _default_alert_labels(compact_context)
+        compact_system, compact_user = _alert_guarded_prompt(
+            compact_context,
+            evidence_catalog,
+            default_action=fallback_action,
+            default_urgency=fallback_urgency,
+        )
         try:
-            guidance_text = generate_text(
+            raw_guidance = generate_text(
                 system_prompt=compact_system,
                 user_prompt=compact_user,
                 max_tokens=ALERT_GUIDANCE_RETRY_MAX_TOKENS,
@@ -1940,13 +2255,18 @@ def generate_alert_guidance(
             )
             stored_context = compact_context
             context_signature = _alert_context_signature(compact_context)
+            guidance_text, recommended_action, urgency, sections, used_fallback_sections, parse_mode = (
+                _finalize_guidance(raw_guidance)
+            )
         except AIClientError as retry_error:
             raise HTTPException(
                 status_code=503,
                 detail=f"AI guidance generation unavailable: {retry_error}",
             ) from retry_error
 
-    recommended_action, urgency = _alert_guidance_labels(guidance_text)
+    if parse_mode in {"json", "fallback"} and used_fallback_sections:
+        generated_provider = f"{generated_provider}-guarded"
+
     params = {
         "asset_key": asset_key,
         "guidance_text": guidance_text.strip(),
@@ -1956,7 +2276,19 @@ def generate_alert_guidance(
         "model": generated_model,
         "generated_by": user,
         "context_signature": context_signature,
-        "context_json": json.dumps({"generated_from": stored_context, "source": "ai"}),
+        "context_json": json.dumps(
+            {
+                "generated_from": stored_context,
+                "source": "ai",
+                "guardrails": {
+                    "mode": "alert_grounded_v1",
+                    "parse_mode": parse_mode,
+                    "used_fallback_sections": used_fallback_sections,
+                    "evidence_catalog": evidence_catalog,
+                    "sections": sections,
+                },
+            }
+        ),
     }
     row = (
         db.execute(
@@ -2305,12 +2637,24 @@ def generate_finding_explanation(
         out["cached"] = True
         return out
     context = _finding_context(db, finding_id, include_evidence=True)
-    stored_context = context
+    guardrail_bundle = build_finding_guardrail_bundle(context)
+    evidence_catalog = [
+        dict(item)
+        for item in (guardrail_bundle.get("evidence_catalog") or [])
+        if isinstance(item, dict)
+    ]
+    fallback_sections = guardrail_bundle.get("sections") or {}
+    allowed_evidence = {
+        str(item.get("id") or "").strip().upper()
+        for item in evidence_catalog
+        if str(item.get("id") or "").strip()
+    }
     generated_provider = provider_name()
     generated_model = model_name()
-    system_prompt, user_prompt = _finding_explanation_prompt(context)
+    used_fallback_sections = False
+    system_prompt, user_prompt = _finding_guarded_prompt(context, evidence_catalog)
     try:
-        explanation = generate_text(
+        raw_explanation = generate_text(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             max_tokens=FINDING_EXPLAIN_MAX_TOKENS,
@@ -2319,15 +2663,34 @@ def generate_finding_explanation(
                 float(FINDING_EXPLAIN_PRIMARY_TIMEOUT_SECONDS),
             ),
         )
+        sections, used_fallback_sections = parse_incident_guarded_sections(
+            raw_explanation,
+            allowed_evidence=allowed_evidence,
+            fallback_sections=fallback_sections,
+        )
+        if used_fallback_sections:
+            generated_provider = f"{generated_provider}-guarded"
     except AIClientError as e:
         if not _is_recoverable_ai_error(e):
             raise HTTPException(
                 status_code=503, detail=f"AI explanation generation unavailable: {e}"
             ) from e
         compact_context = _finding_context(db, finding_id, include_evidence=False, evidence_limit=0)
-        compact_system, compact_user = _finding_explanation_prompt(compact_context)
+        compact_bundle = build_finding_guardrail_bundle(compact_context)
+        evidence_catalog = [
+            dict(item)
+            for item in (compact_bundle.get("evidence_catalog") or [])
+            if isinstance(item, dict)
+        ]
+        fallback_sections = compact_bundle.get("sections") or {}
+        allowed_evidence = {
+            str(item.get("id") or "").strip().upper()
+            for item in evidence_catalog
+            if str(item.get("id") or "").strip()
+        }
+        compact_system, compact_user = _finding_guarded_prompt(compact_context, evidence_catalog)
         try:
-            explanation = generate_text(
+            raw_explanation = generate_text(
                 system_prompt=compact_system,
                 user_prompt=compact_user,
                 max_tokens=FINDING_EXPLAIN_RETRY_MAX_TOKENS,
@@ -2336,11 +2699,19 @@ def generate_finding_explanation(
                     float(FINDING_EXPLAIN_RETRY_TIMEOUT_SECONDS),
                 ),
             )
-            stored_context = compact_context
+            sections, used_fallback_sections = parse_incident_guarded_sections(
+                raw_explanation,
+                allowed_evidence=allowed_evidence,
+                fallback_sections=fallback_sections,
+            )
+            if used_fallback_sections:
+                generated_provider = f"{generated_provider}-guarded"
+            context = compact_context
         except AIClientError as retry_error:
             if _is_recoverable_ai_error(retry_error):
-                explanation = _fallback_finding_explanation(compact_context)
-                stored_context = compact_context
+                sections = fallback_sections
+                used_fallback_sections = True
+                context = compact_context
                 generated_provider = f"{generated_provider}-fallback"
                 generated_model = "template-v1"
             else:
@@ -2348,6 +2719,7 @@ def generate_finding_explanation(
                     status_code=503,
                     detail=f"AI explanation generation unavailable: {retry_error}",
                 ) from retry_error
+    explanation = render_guarded_sections_text(sections)
 
     params = {
         "finding_id": finding_id,
@@ -2356,7 +2728,16 @@ def generate_finding_explanation(
         "model": generated_model,
         "generated_by": user,
         "context_json": json.dumps(
-            {"generated_from": stored_context.get("finding", {}), "source": "ai"}
+            {
+                "generated_from": context.get("finding", {}),
+                "source": "ai",
+                "guardrails": {
+                    "mode": "finding_grounded_v1",
+                    "used_fallback_sections": used_fallback_sections,
+                    "evidence_catalog": evidence_catalog,
+                    "sections": sections,
+                },
+            }
         ),
     }
     row = (

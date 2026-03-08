@@ -4,16 +4,25 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.alert_clusterer import cluster_alert_rows
+from app.alert_enricher import (
+    build_alert_enrichment,
+    fetch_alert_related_events,
+    get_security_alert_by_id,
+)
 from app.alerts_v2 import reopen_expired_suppressed_alerts, transition_security_alert
+from app.audit import log_audit
 from app.db import get_db
+from app.request_context import request_id_ctx
 from app.routers.auth import require_auth, require_role
 from app.routers.posture import _fetch_posture_list_raw
 from app.schemas.posture import raw_to_asset_state
+from app.severity_engine import compute_effective_alert_severity
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
@@ -382,6 +391,34 @@ def _load_alert_enrichment(
     return out
 
 
+def _compute_effective_severity_fields(
+    *,
+    base_item: dict,
+    enrichment_item: dict | None = None,
+) -> dict:
+    context = enrichment_item or {}
+    context_json = base_item.get("context_json") if isinstance(base_item, dict) else {}
+    if not isinstance(context_json, dict):
+        context_json = {}
+    severity = compute_effective_alert_severity(
+        base_severity=base_item.get("severity") or "medium",
+        asset_criticality=context.get("criticality"),
+        ti_match=bool(base_item.get("ti_match")),
+        anomaly_score=context_json.get("anomaly_score"),
+        recurrence_count=int(base_item.get("event_count") or 1),
+        top_risk_score=context.get("top_risk_score"),
+        active_finding_count=context.get("active_finding_count"),
+        open_incident_count=context.get("open_incident_count"),
+        maintenance_active=bool(context.get("maintenance_active")),
+        suppression_active=bool(context.get("suppression_rule_active")),
+    )
+    return {
+        "effective_severity": severity.get("effective_severity"),
+        "effective_severity_score": severity.get("effective_score"),
+        "effective_severity_top_drivers": severity.get("top_drivers"),
+    }
+
+
 def _upsert_alert_state(
     db: Session,
     asset_key: str,
@@ -432,10 +469,11 @@ def _upsert_alert_state(
             ON CONFLICT (asset_key) DO UPDATE SET assigned_to = :assigned_to, updated_at = :now
         """)
         db.execute(q, {"asset_key": asset_key, "assigned_to": assigned_to or "", "now": now})
-    db.commit()
 
 
-def _list_security_event_alerts(db: Session, *, now: datetime) -> list[dict]:
+def _list_security_event_alerts(
+    db: Session, *, now: datetime, enrichment_map: dict[str, dict] | None = None
+) -> list[dict]:
     reopen_expired_suppressed_alerts(db)
     rows = (
         db.execute(
@@ -470,6 +508,11 @@ def _list_security_event_alerts(db: Session, *, now: datetime) -> list[dict]:
         item.setdefault("asset_key", f"event:{item.get('alert_id')}")
         item["asset_key"] = item["asset_key"] or f"event:{item.get('alert_id')}"
         item.setdefault("asset_name", item.get("title"))
+        asset_key = str(item.get("asset_key") or "").strip()
+        enrichment_item = (enrichment_map or {}).get(asset_key) if asset_key else None
+        if enrichment_item:
+            item.update(enrichment_item)
+        item.update(_compute_effective_severity_fields(base_item=item, enrichment_item=enrichment_item))
         out.append(item)
     return out
 
@@ -487,7 +530,28 @@ def list_alerts(db: Session = Depends(get_db), _user: str = Depends(require_auth
     down_assets = sorted(
         asset_key for asset_key, item in posture.items() if item.get("posture_status") == "red"
     )
-    candidate_asset_keys = sorted(set(down_assets) | set(states_map.keys()))
+    security_alert_asset_rows = (
+        db.execute(
+            text(
+                """
+                SELECT DISTINCT asset_key
+                FROM security_alerts
+                WHERE asset_key IS NOT NULL
+                  AND asset_key <> ''
+                """
+            )
+        )
+        .mappings()
+        .all()
+    )
+    security_alert_asset_keys = [
+        str(row.get("asset_key") or "").strip()
+        for row in security_alert_asset_rows
+        if str(row.get("asset_key") or "").strip()
+    ]
+    candidate_asset_keys = sorted(
+        set(down_assets) | set(states_map.keys()) | set(security_alert_asset_keys)
+    )
     enrichment = _load_alert_enrichment(db, candidate_asset_keys, posture_items=raw_items, now=now)
 
     firing = []
@@ -516,6 +580,7 @@ def list_alerts(db: Session = Depends(get_db), _user: str = Depends(require_auth
             item.update(_serialize(row))
         else:
             item.setdefault("state", "firing")
+        item.update(_compute_effective_severity_fields(base_item=item, enrichment_item=item))
         if (
             item.get("maintenance_active")
             or item.get("suppression_rule_active")
@@ -541,6 +606,7 @@ def list_alerts(db: Session = Depends(get_db), _user: str = Depends(require_auth
             **(enrichment.get(asset_key) or {}),
             **_serialize(row),
         }
+        item.update(_compute_effective_severity_fields(base_item=item, enrichment_item=item))
         sup_until = row.get("suppressed_until")
         if (
             item.get("maintenance_active")
@@ -566,7 +632,7 @@ def list_alerts(db: Session = Depends(get_db), _user: str = Depends(require_auth
             item.setdefault("state", row.get("state") or "resolved")
             resolved.append(item)
 
-    for event_alert in _list_security_event_alerts(db, now=now):
+    for event_alert in _list_security_event_alerts(db, now=now, enrichment_map=enrichment):
         state = str(event_alert.get("state") or "firing")
         if state == "acked":
             acked.append(event_alert)
@@ -578,6 +644,161 @@ def list_alerts(db: Session = Depends(get_db), _user: str = Depends(require_auth
             firing.append(event_alert)
 
     return {"firing": firing, "acked": acked, "suppressed": suppressed, "resolved": resolved}
+
+
+@router.get("/clusters")
+def list_alert_clusters(
+    by: str = Query("asset"),
+    status: str | None = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
+    _user: str = Depends(require_auth),
+):
+    cluster_mode = (by or "asset").strip().lower()
+    if cluster_mode not in {"asset", "source_ip", "technique", "campaign"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid cluster mode. Use one of: asset, source_ip, technique, campaign",
+        )
+    normalized_status = (status or "").strip().lower() or None
+    if normalized_status and normalized_status not in {"firing", "acked", "suppressed", "resolved"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid status. Use one of: firing, acked, suppressed, resolved",
+        )
+
+    params = {"limit": int(limit)}
+    where = ""
+    if normalized_status:
+        where = "WHERE status = :status"
+        params["status"] = normalized_status
+    rows = (
+        db.execute(
+            text(
+                f"""
+                SELECT
+                  alert_id,
+                  asset_key,
+                  status,
+                  severity,
+                  source,
+                  event_count,
+                  first_seen_at,
+                  last_seen_at,
+                  mitre_techniques,
+                  payload_json,
+                  context_json
+                FROM security_alerts
+                {where}
+                ORDER BY last_seen_at DESC
+                LIMIT :limit
+                """
+            ),
+            params,
+        )
+        .mappings()
+        .all()
+    )
+    items = cluster_alert_rows([dict(row) for row in rows], mode=cluster_mode, limit=limit)
+    return {
+        "cluster_by": cluster_mode,
+        "status": normalized_status,
+        "items": items,
+    }
+
+
+@router.get("/{alert_id}/related-events")
+def alert_related_events(
+    alert_id: int,
+    lookback_hours: int = Query(24, ge=1, le=168),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    _user: str = Depends(require_auth),
+):
+    alert_row = get_security_alert_by_id(db, int(alert_id))
+    if not alert_row:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    items = fetch_alert_related_events(
+        db,
+        alert_row=alert_row,
+        lookback_hours=lookback_hours,
+        limit=limit,
+    )
+    return {
+        "alert_id": int(alert_id),
+        "lookback_hours": int(lookback_hours),
+        "items": items,
+    }
+
+
+@router.get("/{alert_id}/enrichment")
+def alert_enrichment(
+    alert_id: int,
+    lookback_hours: int = Query(24, ge=1, le=168),
+    related_limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    _user: str = Depends(require_auth),
+):
+    alert_row = get_security_alert_by_id(db, int(alert_id))
+    if not alert_row:
+        raise HTTPException(status_code=404, detail="Alert not found")
+
+    asset_key = str(alert_row.get("asset_key") or "").strip()
+    asset_context = (
+        _load_alert_enrichment(db, [asset_key]).get(asset_key) if asset_key else {}
+    ) or {}
+    related_events = fetch_alert_related_events(
+        db,
+        alert_row=alert_row,
+        lookback_hours=lookback_hours,
+        limit=related_limit,
+    )
+    payload = build_alert_enrichment(
+        alert_row=alert_row,
+        asset_context=asset_context,
+        related_events=related_events,
+    )
+
+    dedupe_rows = (
+        db.execute(
+            text(
+                """
+                SELECT
+                  alert_id,
+                  status,
+                  severity,
+                  event_count,
+                  first_seen_at,
+                  last_seen_at
+                FROM security_alerts
+                WHERE dedupe_key = :dedupe_key
+                ORDER BY last_seen_at DESC
+                LIMIT 20
+                """
+            ),
+            {"dedupe_key": alert_row.get("dedupe_key")},
+        )
+        .mappings()
+        .all()
+    )
+    payload["dedupe_group"] = [
+        {
+            "alert_id": int(row.get("alert_id") or 0),
+            "status": row.get("status"),
+            "severity": row.get("severity"),
+            "event_count": int(row.get("event_count") or 1),
+            "first_seen_at": row.get("first_seen_at").isoformat()
+            if hasattr(row.get("first_seen_at"), "isoformat")
+            else row.get("first_seen_at"),
+            "last_seen_at": row.get("last_seen_at").isoformat()
+            if hasattr(row.get("last_seen_at"), "isoformat")
+            else row.get("last_seen_at"),
+        }
+        for row in dedupe_rows
+    ]
+    payload["effective_severity"] = payload.get("severity_analysis", {}).get("effective_severity")
+    payload["effective_severity_score"] = payload.get("severity_analysis", {}).get("effective_score")
+    return payload
 
 
 class AckBody(BaseModel):
@@ -619,11 +840,28 @@ def alert_ack(
         )
         if not row:
             raise HTTPException(status_code=404, detail="Alert not found")
+        log_audit(
+            db,
+            "alert.ack",
+            user_name=user,
+            asset_key=row.get("asset_key"),
+            details={"alert_id": int(body.alert_id), "reason": body.reason or ""},
+            request_id=request_id_ctx.get(None),
+        )
         db.commit()
         return {"ok": True, "alert_id": int(body.alert_id), "state": "acked", "item": row}
     if not body.asset_key:
         raise HTTPException(status_code=400, detail="asset_key or alert_id is required")
     _upsert_alert_state(db, body.asset_key, "acked", ack_reason=body.reason, acked_by=user)
+    log_audit(
+        db,
+        "alert.ack",
+        user_name=user,
+        asset_key=body.asset_key,
+        details={"asset_key": body.asset_key, "reason": body.reason or ""},
+        request_id=request_id_ctx.get(None),
+    )
+    db.commit()
     return {"ok": True, "asset_key": body.asset_key, "state": "acked"}
 
 
@@ -631,7 +869,7 @@ def alert_ack(
 def alert_suppress(
     body: SuppressBody,
     db: Session = Depends(get_db),
-    _user: str = Depends(require_role(["admin", "analyst"])),
+    user: str = Depends(require_role(["admin", "analyst"])),
 ):
     try:
         until = datetime.fromisoformat(body.until_iso.replace("Z", "+00:00"))
@@ -647,6 +885,14 @@ def alert_suppress(
         )
         if not row:
             raise HTTPException(status_code=404, detail="Alert not found")
+        log_audit(
+            db,
+            "alert.suppress",
+            user_name=user,
+            asset_key=row.get("asset_key"),
+            details={"alert_id": int(body.alert_id), "until_iso": body.until_iso},
+            request_id=request_id_ctx.get(None),
+        )
         db.commit()
         return {
             "ok": True,
@@ -658,6 +904,15 @@ def alert_suppress(
     if not body.asset_key:
         raise HTTPException(status_code=400, detail="asset_key or alert_id is required")
     _upsert_alert_state(db, body.asset_key, "suppressed", suppressed_until=until)
+    log_audit(
+        db,
+        "alert.suppress",
+        user_name=user,
+        asset_key=body.asset_key,
+        details={"asset_key": body.asset_key, "until_iso": body.until_iso},
+        request_id=request_id_ctx.get(None),
+    )
+    db.commit()
     return {
         "ok": True,
         "asset_key": body.asset_key,
@@ -670,22 +925,39 @@ def alert_suppress(
 def alert_resolve(
     body: ResolveBody,
     db: Session = Depends(get_db),
-    _user: str = Depends(require_role(["admin", "analyst"])),
+    user: str = Depends(require_role(["admin", "analyst"])),
 ):
     if body.alert_id is not None:
         row = transition_security_alert(
             db,
             alert_id=int(body.alert_id),
             action="resolve",
-            user_name=_user,
+            user_name=user,
         )
         if not row:
             raise HTTPException(status_code=404, detail="Alert not found")
+        log_audit(
+            db,
+            "alert.resolve",
+            user_name=user,
+            asset_key=row.get("asset_key"),
+            details={"alert_id": int(body.alert_id)},
+            request_id=request_id_ctx.get(None),
+        )
         db.commit()
         return {"ok": True, "alert_id": int(body.alert_id), "state": "resolved", "item": row}
     if not body.asset_key:
         raise HTTPException(status_code=400, detail="asset_key or alert_id is required")
     _upsert_alert_state(db, body.asset_key, "resolved")
+    log_audit(
+        db,
+        "alert.resolve",
+        user_name=user,
+        asset_key=body.asset_key,
+        details={"asset_key": body.asset_key},
+        request_id=request_id_ctx.get(None),
+    )
+    db.commit()
     return {"ok": True, "asset_key": body.asset_key, "state": "resolved"}
 
 
@@ -693,7 +965,7 @@ def alert_resolve(
 def alert_assign(
     body: AssignBody,
     db: Session = Depends(get_db),
-    _user: str = Depends(require_role(["admin", "analyst"])),
+    user: str = Depends(require_role(["admin", "analyst"])),
 ):
     if body.alert_id is not None:
         row = transition_security_alert(
@@ -704,6 +976,14 @@ def alert_assign(
         )
         if not row:
             raise HTTPException(status_code=404, detail="Alert not found")
+        log_audit(
+            db,
+            "alert.assign",
+            user_name=user,
+            asset_key=row.get("asset_key"),
+            details={"alert_id": int(body.alert_id), "assigned_to": body.assigned_to or ""},
+            request_id=request_id_ctx.get(None),
+        )
         db.commit()
         return {
             "ok": True,
@@ -714,4 +994,13 @@ def alert_assign(
     if not body.asset_key:
         raise HTTPException(status_code=400, detail="asset_key or alert_id is required")
     _upsert_alert_state(db, body.asset_key, "assigned", assigned_to=body.assigned_to)
+    log_audit(
+        db,
+        "alert.assign",
+        user_name=user,
+        asset_key=body.asset_key,
+        details={"asset_key": body.asset_key, "assigned_to": body.assigned_to or ""},
+        request_id=request_id_ctx.get(None),
+    )
+    db.commit()
     return {"ok": True, "asset_key": body.asset_key, "assigned_to": body.assigned_to}

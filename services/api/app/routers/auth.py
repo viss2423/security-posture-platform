@@ -7,8 +7,8 @@ import json
 import logging
 import secrets
 import time
-from datetime import datetime, timedelta
-from urllib.parse import quote, urlencode, urlparse
+from datetime import UTC, datetime, timedelta
+from urllib.parse import urlencode, urlparse
 
 import bcrypt
 import httpx
@@ -43,6 +43,11 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 security = HTTPBearer(auto_error=False)
 
 ALGORITHM = "HS256"
+REFRESH_TOKEN_BYTES = 64
+REFRESH_TOKEN_ROTATED_REASON = "rotated"
+REFRESH_TOKEN_REVOKED_REASON = "revoked"
+REFRESH_TOKEN_EXPIRED_REASON = "expired"
+REFRESH_TOKEN_REPLAY_REASON = "replayed"
 
 
 def _is_service_actor(username: str | None) -> bool:
@@ -86,10 +91,153 @@ def _reject_default_password_in_prod():
 
 
 def create_access_token(sub: str, role: str = "admin") -> str:
-    expire = datetime.utcnow() + timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
+    expire = datetime.now(UTC) + timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode = {"sub": sub, "role": role, "exp": expire}
     raw = jwt.encode(to_encode, settings.API_SECRET_KEY, algorithm=ALGORITHM)
     return raw if isinstance(raw, str) else raw.decode("utf-8")
+
+
+def _create_refresh_token_raw() -> str:
+    return secrets.token_urlsafe(REFRESH_TOKEN_BYTES)
+
+
+def _hash_refresh_token(raw_token: str) -> str:
+    return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
+
+def _refresh_token_expiry() -> datetime:
+    return datetime.now(UTC) + timedelta(minutes=settings.JWT_REFRESH_TOKEN_EXPIRE_MINUTES)
+
+
+def _store_refresh_token(
+    db: Session,
+    *,
+    raw_token: str,
+    username: str,
+    role: str,
+    request: Request | None = None,
+) -> str:
+    token_hash = _hash_refresh_token(raw_token)
+    client_ip = _client_id(request) if request else None
+    user_agent = ((request.headers.get("user-agent") or "")[:512] if request else None) or None
+    db.execute(
+        text(
+            """
+            INSERT INTO auth_refresh_tokens(
+              token_hash,
+              username,
+              role,
+              expires_at,
+              client_ip,
+              user_agent
+            )
+            VALUES(
+              :token_hash,
+              :username,
+              :role,
+              :expires_at,
+              :client_ip,
+              :user_agent
+            )
+            """
+        ),
+        {
+            "token_hash": token_hash,
+            "username": username,
+            "role": role,
+            "expires_at": _refresh_token_expiry(),
+            "client_ip": client_ip,
+            "user_agent": user_agent,
+        },
+    )
+    return token_hash
+
+
+def _issue_token_pair(
+    db: Session,
+    *,
+    username: str,
+    role: str,
+    request: Request | None = None,
+) -> "Token":
+    access_token = create_access_token(username, role=role)
+    refresh_token = _create_refresh_token_raw()
+    _store_refresh_token(
+        db,
+        raw_token=refresh_token,
+        username=username,
+        role=role,
+        request=request,
+    )
+    return Token(access_token=access_token, refresh_token=refresh_token)
+
+
+def _resolve_active_role(db: Session, username: str) -> str | None:
+    row = (
+        db.execute(
+            text("SELECT role, disabled FROM users WHERE username = :u"),
+            {"u": username},
+        )
+        .mappings()
+        .first()
+    )
+    if row:
+        if row.get("disabled"):
+            return None
+        return row.get("role") or "viewer"
+    if username == settings.ADMIN_USERNAME:
+        return "admin"
+    return None
+
+
+def _revoke_refresh_token_by_hash(
+    db: Session,
+    *,
+    token_hash: str,
+    reason: str,
+    replaced_by_hash: str | None = None,
+) -> None:
+    db.execute(
+        text(
+            """
+            UPDATE auth_refresh_tokens
+            SET revoked_at = NOW(),
+                revoked_reason = :reason,
+                replaced_by_hash = COALESCE(:replaced_by_hash, replaced_by_hash)
+            WHERE token_hash = :token_hash
+              AND revoked_at IS NULL
+            """
+        ),
+        {
+            "token_hash": token_hash,
+            "reason": reason,
+            "replaced_by_hash": replaced_by_hash,
+        },
+    )
+
+
+def _log_refresh_attempt(
+    db: Session,
+    *,
+    success: bool,
+    request_id: str,
+    username: str | None = None,
+    reason: str | None = None,
+) -> None:
+    details: dict[str, object] = {
+        "success": success,
+        "method": "refresh_token",
+        "actor_type": _actor_type(username) if username else "unknown",
+    }
+    if reason:
+        details["reason"] = reason
+    log_audit(
+        db,
+        "token.refresh",
+        user_name=username,
+        details=details,
+        request_id=request_id or None,
+    )
 
 
 def decode_token(token: str) -> str | None:
@@ -125,7 +273,41 @@ def get_role_for_username(db: Session, username: str) -> str:
 
 class Token(BaseModel):
     access_token: str
+    refresh_token: str | None = None
     token_type: str = "bearer"
+
+
+class RefreshTokenBody(BaseModel):
+    refresh_token: str
+
+
+VALID_USER_ROLES = {"viewer", "analyst", "admin"}
+
+
+def _normalize_username(username: str) -> str:
+    value = (username or "").strip()
+    if not value:
+        raise HTTPException(status_code=400, detail="username required")
+    return value
+
+
+def _normalize_role(role: str | None, *, default: str = "viewer") -> str:
+    value = (role or default).strip().lower()
+    if value not in VALID_USER_ROLES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid role. Use one of: {sorted(VALID_USER_ROLES)}",
+        )
+    return value
+
+
+def _password_hash_or_none(password: str | None) -> str | None:
+    if password is None:
+        return None
+    raw = password.strip()
+    if len(raw) < 8:
+        raise HTTPException(status_code=400, detail="password must be at least 8 characters")
+    return bcrypt.hashpw(raw.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def _client_id(request: Request) -> str:
@@ -163,7 +345,48 @@ async def login(
     request: Request, form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)
 ):
     req_id = request_id_ctx.get("")
-    key = f"login:{_client_id(request)}"
+    username_for_key = (form.username or "").strip().lower() or "unknown"
+    key = f"login:{_client_id(request)}:{username_for_key}"
+    _reject_default_password_in_prod()
+
+    # 1) Try users table (username + password_hash)
+    role = _verify_user_password(db, form.username, form.password)
+    if role is not None:
+        audit.info("action=login user=%s success=true request_id=%s", form.username, req_id)
+        log_audit(
+            db,
+            "login",
+            user_name=form.username,
+            details={
+                "success": True,
+                "method": "password",
+                "actor_type": _actor_type(form.username),
+            },
+            request_id=req_id or None,
+        )
+        token_pair = _issue_token_pair(db, username=form.username, role=role, request=request)
+        db.commit()
+        return token_pair
+
+    # 2) Fall back to config admin
+    if form.username == settings.ADMIN_USERNAME and _verify_password(form.password):
+        audit.info("action=login user=%s success=true request_id=%s", form.username, req_id)
+        log_audit(
+            db,
+            "login",
+            user_name=form.username,
+            details={
+                "success": True,
+                "method": "password",
+                "actor_type": _actor_type(form.username),
+            },
+            request_id=req_id or None,
+        )
+        role = get_role_for_username(db, form.username)
+        token_pair = _issue_token_pair(db, username=form.username, role=role, request=request)
+        db.commit()
+        return token_pair
+
     if not await check_rate_limit(key, settings.RATE_LIMIT_LOGIN_PER_MINUTE, 60.0):
         audit.info(
             "action=login user=%s success=false reason=rate_limited request_id=%s",
@@ -183,43 +406,6 @@ async def login(
         )
         db.commit()
         raise HTTPException(status_code=429, detail="Too many login attempts. Try again later.")
-    _reject_default_password_in_prod()
-
-    # 1) Try users table (username + password_hash)
-    role = _verify_user_password(db, form.username, form.password)
-    if role is not None:
-        audit.info("action=login user=%s success=true request_id=%s", form.username, req_id)
-        log_audit(
-            db,
-            "login",
-            user_name=form.username,
-            details={
-                "success": True,
-                "method": "password",
-                "actor_type": _actor_type(form.username),
-            },
-            request_id=req_id or None,
-        )
-        db.commit()
-        return Token(access_token=create_access_token(form.username, role=role))
-
-    # 2) Fall back to config admin
-    if form.username == settings.ADMIN_USERNAME and _verify_password(form.password):
-        audit.info("action=login user=%s success=true request_id=%s", form.username, req_id)
-        log_audit(
-            db,
-            "login",
-            user_name=form.username,
-            details={
-                "success": True,
-                "method": "password",
-                "actor_type": _actor_type(form.username),
-            },
-            request_id=req_id or None,
-        )
-        role = get_role_for_username(db, form.username)
-        db.commit()
-        return Token(access_token=create_access_token(form.username, role=role))
 
     audit.info(
         "action=login user=%s success=false reason=invalid request_id=%s", form.username, req_id
@@ -233,6 +419,106 @@ async def login(
     )
     db.commit()
     raise HTTPException(status_code=401, detail="Invalid username or password")
+
+
+@router.post("/refresh", response_model=Token)
+def refresh_token(
+    body: RefreshTokenBody,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    req_id = request_id_ctx.get("")
+    raw_token = (body.refresh_token or "").strip()
+    if not raw_token:
+        raise HTTPException(status_code=400, detail="refresh_token required")
+
+    token_hash = _hash_refresh_token(raw_token)
+    row = (
+        db.execute(
+            text(
+                """
+                SELECT token_hash, username, role, expires_at, revoked_at, revoked_reason
+                FROM auth_refresh_tokens
+                WHERE token_hash = :token_hash
+                FOR UPDATE
+                """
+            ),
+            {"token_hash": token_hash},
+        )
+        .mappings()
+        .first()
+    )
+    if not row:
+        _log_refresh_attempt(db, success=False, request_id=req_id, reason="not_found")
+        db.commit()
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+    username = str(row.get("username") or "")
+    if row.get("revoked_at") is not None:
+        _log_refresh_attempt(
+            db,
+            success=False,
+            request_id=req_id,
+            username=username,
+            reason=REFRESH_TOKEN_REPLAY_REASON,
+        )
+        db.commit()
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+    expires_at = row.get("expires_at")
+    if isinstance(expires_at, datetime) and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if not isinstance(expires_at, datetime) or expires_at <= datetime.now(UTC):
+        _revoke_refresh_token_by_hash(
+            db,
+            token_hash=token_hash,
+            reason=REFRESH_TOKEN_EXPIRED_REASON,
+        )
+        _log_refresh_attempt(
+            db,
+            success=False,
+            request_id=req_id,
+            username=username,
+            reason=REFRESH_TOKEN_EXPIRED_REASON,
+        )
+        db.commit()
+        raise HTTPException(status_code=401, detail="Refresh token expired")
+
+    role = _resolve_active_role(db, username)
+    if not role:
+        _revoke_refresh_token_by_hash(
+            db,
+            token_hash=token_hash,
+            reason=REFRESH_TOKEN_REVOKED_REASON,
+        )
+        _log_refresh_attempt(
+            db,
+            success=False,
+            request_id=req_id,
+            username=username,
+            reason="user_inactive",
+        )
+        db.commit()
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+    new_refresh_token = _create_refresh_token_raw()
+    new_token_hash = _store_refresh_token(
+        db,
+        raw_token=new_refresh_token,
+        username=username,
+        role=role,
+        request=request,
+    )
+    _revoke_refresh_token_by_hash(
+        db,
+        token_hash=token_hash,
+        reason=REFRESH_TOKEN_ROTATED_REASON,
+        replaced_by_hash=new_token_hash,
+    )
+    access_token = create_access_token(username, role=role)
+    _log_refresh_attempt(db, success=True, request_id=req_id, username=username)
+    db.commit()
+    return Token(access_token=access_token, refresh_token=new_refresh_token)
 
 
 def get_current_user_opt(
@@ -299,7 +585,18 @@ def list_users(db: Session = Depends(get_db), _user: str = Depends(require_role(
     try:
         rows = (
             db.execute(
-                text("SELECT username, role, disabled, created_at FROM users ORDER BY username")
+                text(
+                    """
+                    SELECT
+                      username,
+                      role,
+                      disabled,
+                      created_at,
+                      (password_hash IS NOT NULL) AS password_configured
+                    FROM users
+                    ORDER BY username
+                    """
+                )
             )
             .mappings()
             .all()
@@ -310,12 +607,259 @@ def list_users(db: Session = Depends(get_db), _user: str = Depends(require_role(
                 "role": r["role"],
                 "source": "db",
                 "disabled": r["disabled"],
+                "password_configured": bool(r.get("password_configured")),
             }
             for r in rows
         ]
     except Exception:
-        items = [{"username": settings.ADMIN_USERNAME, "role": "admin", "source": "config"}]
+        items = [
+            {
+                "username": settings.ADMIN_USERNAME,
+                "role": "admin",
+                "source": "config",
+                "password_configured": bool(settings.ADMIN_PASSWORD_HASH),
+            }
+        ]
     return {"items": items}
+
+
+class CreateUserBody(BaseModel):
+    username: str
+    role: str = "viewer"
+    password: str | None = None
+    disabled: bool = False
+
+
+class UpdateUserBody(BaseModel):
+    role: str | None = None
+    disabled: bool | None = None
+
+
+class ResetPasswordBody(BaseModel):
+    password: str
+
+
+@router.post("/users")
+def create_user(
+    body: CreateUserBody,
+    db: Session = Depends(get_db),
+    admin_user: str = Depends(require_role(["admin"])),
+):
+    username = _normalize_username(body.username)
+    role = _normalize_role(body.role)
+    password_hash = _password_hash_or_none(body.password)
+    if username == settings.ADMIN_USERNAME and role != "admin":
+        raise HTTPException(status_code=400, detail="cannot downgrade configured admin role")
+
+    row = (
+        db.execute(
+            text(
+                """
+                INSERT INTO users(username, role, password_hash, disabled)
+                VALUES (:username, :role, :password_hash, :disabled)
+                ON CONFLICT (username) DO NOTHING
+                RETURNING username, role, disabled, created_at, (password_hash IS NOT NULL) AS password_configured
+                """
+            ),
+            {
+                "username": username,
+                "role": role,
+                "password_hash": password_hash,
+                "disabled": bool(body.disabled),
+            },
+        )
+        .mappings()
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=409, detail="user already exists")
+    log_audit(
+        db,
+        "user.create",
+        user_name=admin_user,
+        details={"username": username, "role": role, "disabled": bool(body.disabled)},
+        request_id=request_id_ctx.get(None),
+    )
+    db.commit()
+    out = dict(row)
+    if hasattr(out.get("created_at"), "isoformat"):
+        out["created_at"] = out["created_at"].isoformat()
+    return out
+
+
+@router.patch("/users/{username}")
+def update_user(
+    username: str,
+    body: UpdateUserBody,
+    db: Session = Depends(get_db),
+    admin_user: str = Depends(require_role(["admin"])),
+):
+    normalized_username = _normalize_username(username)
+    updates: dict[str, object] = {}
+    if body.role is not None:
+        updates["role"] = _normalize_role(body.role)
+    if body.disabled is not None:
+        updates["disabled"] = bool(body.disabled)
+    if not updates:
+        raise HTTPException(status_code=400, detail="no user fields provided")
+    if normalized_username == settings.ADMIN_USERNAME and (
+        updates.get("role") not in {None, "admin"} or updates.get("disabled") is True
+    ):
+        raise HTTPException(status_code=400, detail="cannot disable or downgrade configured admin")
+
+    row = (
+        db.execute(
+            text(
+                """
+                UPDATE users
+                SET
+                  role = COALESCE(:role, role),
+                  disabled = COALESCE(:disabled, disabled)
+                WHERE username = :username
+                RETURNING username, role, disabled, created_at, (password_hash IS NOT NULL) AS password_configured
+                """
+            ),
+            {
+                "username": normalized_username,
+                "role": updates.get("role"),
+                "disabled": updates.get("disabled"),
+            },
+        )
+        .mappings()
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="user not found")
+    log_audit(
+        db,
+        "user.update",
+        user_name=admin_user,
+        details={"username": normalized_username, "updates": updates},
+        request_id=request_id_ctx.get(None),
+    )
+    db.commit()
+    out = dict(row)
+    if hasattr(out.get("created_at"), "isoformat"):
+        out["created_at"] = out["created_at"].isoformat()
+    return out
+
+
+@router.post("/users/{username}/disable")
+def disable_user(
+    username: str,
+    db: Session = Depends(get_db),
+    admin_user: str = Depends(require_role(["admin"])),
+):
+    normalized_username = _normalize_username(username)
+    if normalized_username == settings.ADMIN_USERNAME:
+        raise HTTPException(status_code=400, detail="cannot disable configured admin")
+    row = (
+        db.execute(
+            text(
+                """
+                UPDATE users
+                SET disabled = TRUE
+                WHERE username = :username
+                RETURNING username, role, disabled, created_at, (password_hash IS NOT NULL) AS password_configured
+                """
+            ),
+            {"username": normalized_username},
+        )
+        .mappings()
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="user not found")
+    log_audit(
+        db,
+        "user.disable",
+        user_name=admin_user,
+        details={"username": normalized_username},
+        request_id=request_id_ctx.get(None),
+    )
+    db.commit()
+    out = dict(row)
+    if hasattr(out.get("created_at"), "isoformat"):
+        out["created_at"] = out["created_at"].isoformat()
+    return out
+
+
+@router.post("/users/{username}/enable")
+def enable_user(
+    username: str,
+    db: Session = Depends(get_db),
+    admin_user: str = Depends(require_role(["admin"])),
+):
+    normalized_username = _normalize_username(username)
+    row = (
+        db.execute(
+            text(
+                """
+                UPDATE users
+                SET disabled = FALSE
+                WHERE username = :username
+                RETURNING username, role, disabled, created_at, (password_hash IS NOT NULL) AS password_configured
+                """
+            ),
+            {"username": normalized_username},
+        )
+        .mappings()
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="user not found")
+    log_audit(
+        db,
+        "user.enable",
+        user_name=admin_user,
+        details={"username": normalized_username},
+        request_id=request_id_ctx.get(None),
+    )
+    db.commit()
+    out = dict(row)
+    if hasattr(out.get("created_at"), "isoformat"):
+        out["created_at"] = out["created_at"].isoformat()
+    return out
+
+
+@router.post("/users/{username}/reset-password")
+def reset_user_password(
+    username: str,
+    body: ResetPasswordBody,
+    db: Session = Depends(get_db),
+    admin_user: str = Depends(require_role(["admin"])),
+):
+    normalized_username = _normalize_username(username)
+    password_hash = _password_hash_or_none(body.password)
+    row = (
+        db.execute(
+            text(
+                """
+                UPDATE users
+                SET password_hash = :password_hash, disabled = FALSE
+                WHERE username = :username
+                RETURNING username, role, disabled, created_at, (password_hash IS NOT NULL) AS password_configured
+                """
+            ),
+            {"username": normalized_username, "password_hash": password_hash},
+        )
+        .mappings()
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="user not found")
+    log_audit(
+        db,
+        "user.reset_password",
+        user_name=admin_user,
+        details={"username": normalized_username},
+        request_id=request_id_ctx.get(None),
+    )
+    db.commit()
+    out = dict(row)
+    if hasattr(out.get("created_at"), "isoformat"):
+        out["created_at"] = out["created_at"].isoformat()
+    return out
 
 
 # ---------- OIDC SSO (Phase B.1) ----------
@@ -708,9 +1252,15 @@ async def oidc_callback(
         details={"success": True, "method": "oidc", "actor_type": _actor_type(username)},
         request_id=req_id or None,
     )
+    token_pair = _issue_token_pair(db, username=username, role=role, request=request)
     db.commit()
-
-    access_token = create_access_token(username, role=role)
+    fragment = urlencode(
+        {
+            "access_token": token_pair.access_token,
+            "refresh_token": token_pair.refresh_token or "",
+        }
+    )
     return RedirectResponse(
-        url=login_fragment + "access_token=" + quote(access_token, safe=""), status_code=302
+        url=login_fragment + fragment,
+        status_code=302,
     )

@@ -8,7 +8,6 @@ import re
 import shutil
 import socket
 import subprocess
-import threading
 from datetime import UTC, datetime
 from ipaddress import ip_network
 from urllib.parse import urlparse
@@ -19,6 +18,7 @@ from sqlalchemy import text
 from .alerts_v2 import upsert_security_alert
 from .audit import log_audit
 from .db import SessionLocal
+from .queue import publish_scan_job
 from .request_context import request_id_ctx
 from .settings import settings
 from .telemetry import ingest_telemetry_events
@@ -497,6 +497,9 @@ def run_attack_lab_job(job_id: int) -> None:
                 events=synthetic,
                 default_asset_key=target_asset_key,
                 create_alerts=True,
+                collector=f"attack_lab.{task_type}",
+                ingest_job_id=job_id,
+                raw_path=f"attack-lab://run/{run_id}/{task_type}",
             )
             result["ingest_summary"] = summary
             created_alert = upsert_security_alert(
@@ -557,7 +560,7 @@ def run_attack_lab_job(job_id: int) -> None:
         )
         log_audit(
             db,
-            "attack_lab_run",
+            "attack_lab.run",
             user_name=requested_by,
             asset_key=target_asset_key,
             details={
@@ -589,10 +592,34 @@ def run_attack_lab_job(job_id: int) -> None:
 
 
 def launch_attack_lab_job(job_id: int) -> None:
-    thread = threading.Thread(
-        target=run_attack_lab_job,
-        args=(job_id,),
-        name=f"attack-lab-job-{job_id}",
-        daemon=True,
+    db = SessionLocal()
+    try:
+        row = (
+            db.execute(
+                text(
+                    """
+                    SELECT target_asset_id, requested_by
+                    FROM scan_jobs
+                    WHERE job_id = :job_id
+                    """
+                ),
+                {"job_id": job_id},
+            )
+            .mappings()
+            .first()
+        )
+        if not row:
+            logger.warning("attack_lab_enqueue_missing_job job_id=%s", job_id)
+            return
+        requested_by = str((row or {}).get("requested_by") or "system")
+        target_asset_id = (row or {}).get("target_asset_id")
+    finally:
+        db.close()
+    published = publish_scan_job(
+        int(job_id),
+        "attack_lab_run",
+        int(target_asset_id) if target_asset_id is not None else None,
+        requested_by,
     )
-    thread.start()
+    if not published:
+        logger.warning("attack_lab_enqueue_failed job_id=%s", job_id)

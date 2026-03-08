@@ -5,18 +5,65 @@ from __future__ import annotations
 import ipaddress
 import json
 import logging
-import threading
-from datetime import UTC, datetime
+import time
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
 from sqlalchemy import text
 
+from .campaign_tracker import normalize_campaign_tag, normalize_confidence_label
 from .db import SessionLocal
+from .intel_confidence_service import (
+    blended_confidence,
+    confidence_label,
+    normalize_confidence_score,
+    normalize_source_priority,
+)
+from .queue import publish_scan_job
 from .settings import settings
 
 logger = logging.getLogger("secplat.threat_intel")
+
+
+def _is_deadlock_retryable(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return (
+        "deadlock detected" in message
+        or "current transaction is aborted" in message
+        or "serialization failure" in message
+    )
+
+
+def _run_db_with_retry(
+    db,
+    operation_name: str,
+    fn,
+    *,
+    retries: int = 4,
+    base_delay_seconds: float = 0.1,
+):
+    for attempt in range(retries + 1):
+        try:
+            return fn()
+        except Exception as exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            if attempt >= retries or not _is_deadlock_retryable(exc):
+                raise
+            delay = base_delay_seconds * (2**attempt)
+            logger.warning(
+                "threat_intel_retry operation=%s attempt=%s delay=%.3fs error=%s",
+                operation_name,
+                attempt + 1,
+                delay,
+                exc,
+            )
+            time.sleep(delay)
+    raise RuntimeError("threat_intel_retry_exhausted")
 
 DEFAULT_THREAT_INTEL_FEEDS: list[dict[str, Any]] = [
     {
@@ -61,6 +108,16 @@ DEFAULT_THREAT_INTEL_FEEDS: list[dict[str, Any]] = [
         "headers_env": {"Key": "THREAT_INTEL_ABUSEIPDB_API_KEY"},
     },
 ]
+
+SOURCE_CONFIDENCE_PROFILES: dict[str, dict[str, Any]] = {
+    "abuseipdb-official": {"priority": 90, "confidence": 0.9},
+    "abuseipdb-s100-mirror": {"priority": 80, "confidence": 0.82},
+    "crowdsec-community": {"priority": 78, "confidence": 0.8},
+    "binary-defense-banlist": {"priority": 74, "confidence": 0.76},
+    "ciarmy-badguys": {"priority": 70, "confidence": 0.72},
+    "openphish-urls": {"priority": 83, "confidence": 0.86},
+    "manual-lab": {"priority": 65, "confidence": 0.7},
+}
 
 
 def _job_log_line(message: str) -> str:
@@ -159,6 +216,25 @@ def _normalize_feed(feed: dict[str, Any]) -> dict[str, Any] | None:
         return None
     if missing_env_vars:
         raise ValueError(f"feed_headers_missing:{source}:{','.join(missing_env_vars)}")
+
+    profile = SOURCE_CONFIDENCE_PROFILES.get(source, {})
+    source_priority = normalize_source_priority(
+        feed.get("source_priority"),
+        default=int(profile.get("priority", 50)),
+    )
+    base_confidence = normalize_confidence_score(
+        feed.get("confidence_score") if "confidence_score" in feed else feed.get("confidence"),
+        default=float(profile.get("confidence", 0.6)),
+    )
+    campaign_tag = normalize_campaign_tag(feed.get("campaign_tag"))
+    campaign_title = str(feed.get("campaign_title") or "").strip() or None
+    expires_in_days_raw = feed.get("expires_in_days")
+    expires_in_days: int | None = None
+    if expires_in_days_raw is not None:
+        try:
+            expires_in_days = max(0, int(expires_in_days_raw))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"feed_expires_invalid:{source}") from exc
     return {
         "source": source,
         "url": url,
@@ -166,6 +242,11 @@ def _normalize_feed(feed: dict[str, Any]) -> dict[str, Any] | None:
         "format": fmt,
         "headers": headers,
         "optional": optional,
+        "source_priority": source_priority,
+        "confidence_score": base_confidence,
+        "campaign_tag": campaign_tag,
+        "campaign_title": campaign_title,
+        "expires_in_days": expires_in_days,
     }
 
 
@@ -257,11 +338,20 @@ def _fetch_feed(feed: dict[str, Any]) -> dict[str, Any]:
         response = client.get(feed["url"])
         response.raise_for_status()
     indicators = _parse_text_feed(response.text, indicator_type=feed["indicator_type"])
+    expires_at = None
+    expires_in_days = feed.get("expires_in_days")
+    if isinstance(expires_in_days, int) and expires_in_days > 0:
+        expires_at = (datetime.now(UTC) + timedelta(days=expires_in_days)).isoformat()
     return {
         "source": feed["source"],
         "url": feed["url"],
         "indicator_type": feed["indicator_type"],
         "indicators": indicators,
+        "source_priority": normalize_source_priority(feed.get("source_priority"), default=50),
+        "confidence_score": normalize_confidence_score(feed.get("confidence_score"), default=0.6),
+        "campaign_tag": normalize_campaign_tag(feed.get("campaign_tag")),
+        "campaign_title": feed.get("campaign_title"),
+        "expires_at": expires_at,
     }
 
 
@@ -273,7 +363,7 @@ def _manual_iocs(job_params: dict[str, Any]) -> list[dict[str, Any]]:
         loaded = raw
     if not isinstance(loaded, list):
         return []
-    grouped: dict[tuple[str, str], list[str]] = {}
+    grouped: dict[tuple[str, str, int, float, str | None], list[str]] = {}
     for item in loaded:
         if not isinstance(item, dict):
             continue
@@ -285,7 +375,17 @@ def _manual_iocs(job_params: dict[str, Any]) -> list[dict[str, Any]]:
         )
         if indicator_type not in {"ip", "domain"} or not indicator:
             continue
-        key = (source, indicator_type)
+        source_profile = SOURCE_CONFIDENCE_PROFILES.get(source, {})
+        source_priority = normalize_source_priority(
+            item.get("source_priority"),
+            default=int(source_profile.get("priority", 65)),
+        )
+        confidence_score = normalize_confidence_score(
+            item.get("confidence_score") if "confidence_score" in item else item.get("confidence"),
+            default=float(source_profile.get("confidence", 0.7)),
+        )
+        campaign_tag = normalize_campaign_tag(item.get("campaign_tag"))
+        key = (source, indicator_type, source_priority, confidence_score, campaign_tag)
         grouped.setdefault(key, [])
         if indicator not in grouped[key]:
             grouped[key].append(indicator)
@@ -295,8 +395,13 @@ def _manual_iocs(job_params: dict[str, Any]) -> list[dict[str, Any]]:
             "url": None,
             "indicator_type": indicator_type,
             "indicators": indicators,
+            "source_priority": source_priority,
+            "confidence_score": confidence_score,
+            "campaign_tag": campaign_tag,
+            "campaign_title": str(campaign_tag or "").replace("-", " ").title() or None,
+            "expires_at": None,
         }
-        for (source, indicator_type), indicators in grouped.items()
+        for (source, indicator_type, source_priority, confidence_score, campaign_tag), indicators in grouped.items()
     ]
 
 
@@ -308,6 +413,30 @@ def _upsert_iocs(db, feed_results: list[dict[str, Any]]) -> tuple[int, int]:
         if not source:
             continue
         by_source.setdefault(source, []).append(result)
+
+    campaign_rows = (
+        db.execute(
+            text(
+                """
+                SELECT campaign_tag, confidence_weight, source_priority, confidence_label
+                FROM threat_ioc_campaigns
+                WHERE is_active = TRUE
+                """
+            )
+        )
+        .mappings()
+        .all()
+    )
+    campaign_profiles: dict[str, dict[str, Any]] = {}
+    for row in campaign_rows:
+        tag = normalize_campaign_tag(row.get("campaign_tag"))
+        if not tag:
+            continue
+        campaign_profiles[tag] = {
+            "confidence_weight": row.get("confidence_weight"),
+            "source_priority": row.get("source_priority"),
+            "confidence_label": row.get("confidence_label"),
+        }
 
     refreshed_sources: set[str] = set(by_source.keys())
     for source, source_results in by_source.items():
@@ -353,6 +482,54 @@ def _upsert_iocs(db, feed_results: list[dict[str, Any]]) -> tuple[int, int]:
         for result in source_results:
             indicator_type = str(result.get("indicator_type") or "").strip().lower()
             feed_url = result.get("url")
+            source_priority = normalize_source_priority(result.get("source_priority"), default=50)
+            base_confidence = normalize_confidence_score(
+                result.get("confidence_score"),
+                default=0.6,
+            )
+            campaign_tag = normalize_campaign_tag(result.get("campaign_tag"))
+            campaign_title = str(result.get("campaign_title") or "").strip() or None
+            campaign_profile = campaign_profiles.get(campaign_tag or "")
+            effective_priority = source_priority
+            if campaign_profile:
+                effective_priority = normalize_source_priority(
+                    campaign_profile.get("source_priority"),
+                    default=source_priority,
+                )
+            effective_confidence = blended_confidence(
+                base_score=base_confidence,
+                source_priority=effective_priority,
+                campaign_weight=(campaign_profile or {}).get("confidence_weight", 1.0),
+            )
+            confidence_lbl = normalize_confidence_label(
+                (campaign_profile or {}).get("confidence_label"),
+                default=confidence_label(effective_confidence),
+            )
+            expires_at = result.get("expires_at")
+            if campaign_tag:
+                db.execute(
+                    text(
+                        """
+                        INSERT INTO threat_ioc_campaigns(
+                          campaign_tag, title, description, confidence_weight, source_priority,
+                          confidence_label, is_active, created_by, created_at, updated_at
+                        )
+                        VALUES (
+                          :campaign_tag, :title, :description, 1.0, :source_priority,
+                          :confidence_label, TRUE, 'system-threat-intel', NOW(), NOW()
+                        )
+                        ON CONFLICT (campaign_tag) DO UPDATE
+                        SET updated_at = NOW()
+                        """
+                    ),
+                    {
+                        "campaign_tag": campaign_tag,
+                        "title": campaign_title or campaign_tag.replace("-", " ").title(),
+                        "description": f"Auto-created from feed source {source}",
+                        "source_priority": effective_priority,
+                        "confidence_label": confidence_lbl,
+                    },
+                )
             for indicator in result.get("indicators") or []:
                 normalized = str(indicator or "").strip().lower()
                 if indicator_type not in {"ip", "domain"} or not normalized:
@@ -361,22 +538,33 @@ def _upsert_iocs(db, feed_results: list[dict[str, Any]]) -> tuple[int, int]:
                     "feed_url": feed_url,
                     "source": source,
                     "indicator_type": indicator_type,
+                    "source_priority": effective_priority,
+                    "confidence_score": effective_confidence,
+                    "confidence_label": confidence_lbl,
+                    "campaign_tag": campaign_tag,
                 }
                 db.execute(
                     text(
                         """
                         INSERT INTO threat_iocs(
                           source, indicator, indicator_type, feed_url, first_seen_at, last_seen_at,
-                          is_active, metadata, created_at, updated_at
+                          is_active, metadata, confidence_score, confidence_label, source_priority,
+                          campaign_tag, expires_at, created_at, updated_at
                         )
                         VALUES (
                           :source, :indicator, :indicator_type, :feed_url, NOW(), NOW(),
-                          TRUE, CAST(:metadata AS jsonb), NOW(), NOW()
+                          TRUE, CAST(:metadata AS jsonb), :confidence_score, :confidence_label,
+                          :source_priority, :campaign_tag, :expires_at, NOW(), NOW()
                         )
                         ON CONFLICT (source, indicator_type, indicator) DO UPDATE
                         SET feed_url = EXCLUDED.feed_url,
                             last_seen_at = NOW(),
                             is_active = TRUE,
+                            confidence_score = EXCLUDED.confidence_score,
+                            confidence_label = EXCLUDED.confidence_label,
+                            source_priority = EXCLUDED.source_priority,
+                            campaign_tag = EXCLUDED.campaign_tag,
+                            expires_at = EXCLUDED.expires_at,
                             metadata = EXCLUDED.metadata,
                             updated_at = NOW()
                         """
@@ -386,6 +574,11 @@ def _upsert_iocs(db, feed_results: list[dict[str, Any]]) -> tuple[int, int]:
                         "indicator": normalized,
                         "indicator_type": indicator_type,
                         "feed_url": feed_url,
+                        "confidence_score": effective_confidence,
+                        "confidence_label": confidence_lbl,
+                        "source_priority": effective_priority,
+                        "campaign_tag": campaign_tag,
+                        "expires_at": expires_at,
                         "metadata": json.dumps(metadata),
                     },
                 )
@@ -429,8 +622,6 @@ def _rebuild_asset_matches(db) -> int:
         asset_key = str(row.get("asset_key") or "")
         name = str(row.get("name") or "")
         address = row.get("address")
-        domain_candidates = []
-        ip_candidates = []
         for field, value in (
             ("address", address),
             ("name", name),
@@ -446,7 +637,6 @@ def _rebuild_asset_matches(db) -> int:
                         "matched_value": domain,
                     }
                 )
-                domain_candidates.append(domain)
             ip_value = _ip_candidate(value)
             if ip_value:
                 asset_lookup["ip"].setdefault(ip_value, []).append(
@@ -457,12 +647,11 @@ def _rebuild_asset_matches(db) -> int:
                         "matched_value": ip_value,
                     }
                 )
-                ip_candidates.append(ip_value)
     active_iocs = (
         db.execute(
             text(
                 """
-                SELECT id, source, indicator, indicator_type
+                SELECT id, source, indicator, indicator_type, campaign_tag, confidence_label, confidence_score
                 FROM threat_iocs
                 WHERE is_active = TRUE
                 """
@@ -472,12 +661,28 @@ def _rebuild_asset_matches(db) -> int:
         .all()
     )
     db.execute(text("DELETE FROM threat_ioc_asset_matches"))
+    db.execute(text("UPDATE threat_iocs SET last_match_count = 0 WHERE is_active = TRUE"))
+    match_counts: dict[int, int] = {}
     inserted = 0
     for ioc in active_iocs:
+        threat_ioc_id = int(ioc["id"])
         indicator = str(ioc.get("indicator") or "").strip().lower()
         indicator_type = str(ioc.get("indicator_type") or "").strip().lower()
         matches = asset_lookup.get(indicator_type, {}).get(indicator, [])
+        unique_matches: list[dict[str, Any]] = []
+        seen_keys: set[tuple[int, str, str]] = set()
         for match in matches:
+            match_key = (
+                int(match["asset_id"]),
+                str(match["match_field"]),
+                str(match["matched_value"]),
+            )
+            if match_key in seen_keys:
+                continue
+            seen_keys.add(match_key)
+            unique_matches.append(match)
+        match_counts[threat_ioc_id] = len(unique_matches)
+        for match in unique_matches:
             db.execute(
                 text(
                     """
@@ -489,10 +694,15 @@ def _rebuild_asset_matches(db) -> int:
                       :threat_ioc_id, :asset_id, :asset_key, :match_field, :matched_value,
                       NOW(), NOW(), CAST(:metadata AS jsonb)
                     )
+                    ON CONFLICT (threat_ioc_id, asset_id, match_field, matched_value)
+                    DO UPDATE SET
+                      asset_key = EXCLUDED.asset_key,
+                      last_seen_at = EXCLUDED.last_seen_at,
+                      metadata = EXCLUDED.metadata
                     """
                 ),
                 {
-                    "threat_ioc_id": int(ioc["id"]),
+                    "threat_ioc_id": threat_ioc_id,
                     "asset_id": int(match["asset_id"]),
                     "asset_key": match["asset_key"],
                     "match_field": match["match_field"],
@@ -500,7 +710,52 @@ def _rebuild_asset_matches(db) -> int:
                     "metadata": json.dumps({"source": ioc.get("source")}),
                 },
             )
+            db.execute(
+                text(
+                    """
+                    INSERT INTO threat_ioc_sightings(
+                      threat_ioc_id, asset_id, asset_key, match_field, matched_value,
+                      source_event_id, source_event_ref, source_tool, sighted_at, context_json
+                    )
+                    VALUES (
+                      :threat_ioc_id, :asset_id, :asset_key, :match_field, :matched_value,
+                      NULL, :source_event_ref, 'threat_intel_refresh', NOW(), CAST(:context_json AS jsonb)
+                    )
+                    """
+                ),
+                {
+                    "threat_ioc_id": threat_ioc_id,
+                    "asset_id": int(match["asset_id"]),
+                    "asset_key": match["asset_key"],
+                    "match_field": match["match_field"],
+                    "matched_value": match["matched_value"],
+                    "source_event_ref": (
+                        f"ioc:{threat_ioc_id}:{match['asset_key']}:"
+                        f"{match['match_field']}:{match['matched_value']}"
+                    ),
+                    "context_json": json.dumps(
+                        {
+                            "source": ioc.get("source"),
+                            "campaign_tag": ioc.get("campaign_tag"),
+                            "confidence_label": ioc.get("confidence_label"),
+                            "confidence_score": ioc.get("confidence_score"),
+                        }
+                    ),
+                },
+            )
             inserted += 1
+    for threat_ioc_id, count in match_counts.items():
+        db.execute(
+            text(
+                """
+                UPDATE threat_iocs
+                   SET last_match_count = :match_count,
+                       updated_at = NOW()
+                 WHERE id = :threat_ioc_id
+                """
+            ),
+            {"threat_ioc_id": threat_ioc_id, "match_count": int(count)},
+        )
     db.commit()
     return inserted
 
@@ -559,8 +814,16 @@ def run_threat_intel_refresh_job(job_id: int) -> None:
             )
         if not results:
             raise ValueError("threat_intel_feed_refresh_failed")
-        total_iocs, refreshed_sources = _upsert_iocs(db, results)
-        match_count = _rebuild_asset_matches(db)
+        total_iocs, refreshed_sources = _run_db_with_retry(
+            db,
+            "upsert_iocs",
+            lambda: _upsert_iocs(db, results),
+        )
+        match_count = _run_db_with_retry(
+            db,
+            "rebuild_asset_matches",
+            lambda: _rebuild_asset_matches(db),
+        )
         _finish_job(
             db,
             job_id,
@@ -572,18 +835,53 @@ def run_threat_intel_refresh_job(job_id: int) -> None:
         )
     except Exception as exc:
         logger.exception("threat_intel_refresh_failed job_id=%s", job_id)
-        _finish_job(
-            db, job_id, ok=False, error=str(exc), message=f"Threat-intel refresh failed: {exc}"
-        )
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        try:
+            _finish_job(
+                db,
+                job_id,
+                ok=False,
+                error=str(exc),
+                message=f"Threat-intel refresh failed: {exc}",
+            )
+        except Exception:
+            logger.exception("threat_intel_refresh_finish_failed job_id=%s", job_id)
     finally:
         db.close()
 
 
 def launch_threat_intel_refresh_job(job_id: int) -> None:
-    thread = threading.Thread(
-        target=run_threat_intel_refresh_job,
-        args=(job_id,),
-        name=f"threat-intel-job-{job_id}",
-        daemon=True,
+    db = SessionLocal()
+    try:
+        row = (
+            db.execute(
+                text(
+                    """
+                    SELECT target_asset_id, requested_by
+                    FROM scan_jobs
+                    WHERE job_id = :job_id
+                    """
+                ),
+                {"job_id": job_id},
+            )
+            .mappings()
+            .first()
+        )
+        if not row:
+            logger.warning("threat_intel_enqueue_missing_job job_id=%s", job_id)
+            return
+        requested_by = str((row or {}).get("requested_by") or "system")
+        target_asset_id = (row or {}).get("target_asset_id")
+    finally:
+        db.close()
+    published = publish_scan_job(
+        int(job_id),
+        "threat_intel_refresh",
+        int(target_asset_id) if target_asset_id is not None else None,
+        requested_by,
     )
-    thread.start()
+    if not published:
+        logger.warning("threat_intel_enqueue_failed job_id=%s", job_id)

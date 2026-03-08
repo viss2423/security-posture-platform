@@ -18,6 +18,15 @@ CONSUMER_GROUP = "workers"
 MAX_SCAN_DURATION_SECONDS = int(os.getenv("MAX_SCAN_DURATION_SECONDS", "900"))
 REQUIRE_DOMAIN_VERIFICATION = os.getenv("REQUIRE_DOMAIN_VERIFICATION", "true").lower() == "true"
 STREAM_MAX_RETRIES = int(os.getenv("STREAM_MAX_RETRIES", "5"))
+API_URL = (os.getenv("API_URL") or "http://api:8000").rstrip("/")
+WORKER_API_USERNAME = os.getenv("WORKER_API_USERNAME", "scanner-service")
+WORKER_API_PASSWORD = os.getenv("WORKER_API_PASSWORD", "scanner-local-strong")
+WORKER_API_TIMEOUT_SECONDS = int(
+    os.getenv(
+        "WORKER_API_TIMEOUT_SECONDS",
+        str(max(MAX_SCAN_DURATION_SECONDS + 180, 1200)),
+    )
+)
 STREAM_CLAIM_IDLE_MS = int(
     os.getenv(
         "STREAM_CLAIM_IDLE_MS",
@@ -31,6 +40,20 @@ STALE_RUNNING_TTL_SECONDS = int(
     )
 )
 STALE_RECOVERY_INTERVAL_SECONDS = int(os.getenv("STALE_RECOVERY_INTERVAL_SECONDS", "30"))
+
+SUPPORTED_JOB_TYPES = {
+    "web_exposure",
+    "score_recompute",
+    "repository_scan",
+    "threat_intel_refresh",
+    "telemetry_import",
+    "network_anomaly_score",
+    "attack_lab_run",
+    "detection_rule_test",
+    "detection_rule_schedule",
+    "correlation_pass",
+}
+API_EXECUTED_JOB_TYPES = SUPPORTED_JOB_TYPES - {"web_exposure"}
 
 SAFE_HEADERS_TO_CHECK = [
     "strict-transport-security",
@@ -102,9 +125,16 @@ def configure_logging() -> None:
 
 configure_logging()
 logger = logging.getLogger("worker-web")
+_token: str | None = None
+
+
+class NonRetryableJobError(Exception):
+    """Job failures that should not be retried by the worker."""
 
 
 def _is_retryable_exception(exc: Exception) -> bool:
+    if isinstance(exc, NonRetryableJobError):
+        return False
     return isinstance(
         exc,
         (
@@ -129,14 +159,26 @@ def db_conn():
 
 
 def fetch_job(conn):
-    """Claim next queued web_exposure job from DB. Returns dict with job_id, target_asset_id or None."""
+    """Claim next queued supported job from DB."""
     with conn.cursor() as cur:
         # Lock one queued row first to avoid duplicate claims across worker replicas.
         cur.execute("""
             WITH next_job AS (
                 SELECT job_id
                   FROM scan_jobs
-                 WHERE status='queued' AND job_type='web_exposure'
+                 WHERE status='queued'
+                   AND job_type IN (
+                     'web_exposure',
+                     'score_recompute',
+                     'repository_scan',
+                     'threat_intel_refresh',
+                     'telemetry_import',
+                     'network_anomaly_score',
+                     'attack_lab_run',
+                     'detection_rule_test',
+                     'detection_rule_schedule',
+                     'correlation_pass'
+                   )
                  ORDER BY created_at ASC
                  FOR UPDATE SKIP LOCKED
                  LIMIT 1
@@ -145,20 +187,33 @@ def fetch_job(conn):
                SET status='running', started_at=NOW()
               FROM next_job
              WHERE j.job_id = next_job.job_id
-             RETURNING j.job_id, j.target_asset_id;
+             RETURNING j.job_id, j.job_type, j.target_asset_id, j.retry_count;
         """)
         return cur.fetchone()
 
 
 def claim_job_by_id(conn, job_id: int):
-    """Claim a specific job by id if still queued. Returns dict with job_id, target_asset_id or None."""
+    """Claim a specific supported job by id if still queued."""
     with conn.cursor() as cur:
         cur.execute(
             """
             UPDATE scan_jobs
                SET status='running', started_at=NOW()
-             WHERE job_id = %s AND status = 'queued'
-             RETURNING job_id, target_asset_id;
+             WHERE job_id = %s
+               AND status = 'queued'
+               AND job_type IN (
+                 'web_exposure',
+                 'score_recompute',
+                 'repository_scan',
+                 'threat_intel_refresh',
+                 'telemetry_import',
+                 'network_anomaly_score',
+                 'attack_lab_run',
+                 'detection_rule_test',
+                 'detection_rule_schedule',
+                 'correlation_pass'
+               )
+             RETURNING job_id, job_type, target_asset_id, retry_count;
         """,
             (job_id,),
         )
@@ -281,8 +336,11 @@ def finish_job(conn, job_id: int, ok: bool, error: str | None = None, log_line: 
             )
 
 
-def run_one_job(conn, job_id: int, asset_id: int):
-    """Execute one scan job (after claim). Uses existing get_asset, set_job_log, finish_job, insert_finding."""
+def _run_web_exposure_job(conn, job_id: int, asset_id: int | None):
+    """Execute one web_exposure job."""
+    if asset_id is None:
+        finish_job(conn, job_id, ok=False, error="Asset not found", log_line="Asset not found")
+        return "failed"
     set_job_log(
         conn, job_id, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Started job for asset_id={asset_id}"
     )
@@ -290,7 +348,7 @@ def run_one_job(conn, job_id: int, asset_id: int):
 
     if not asset:
         finish_job(conn, job_id, ok=False, error="Asset not found", log_line="Asset not found")
-        return
+        return "failed"
     if asset["type"] != "external_web":
         finish_job(
             conn,
@@ -299,12 +357,12 @@ def run_one_job(conn, job_id: int, asset_id: int):
             error="Target is not external_web",
             log_line="Target is not external_web",
         )
-        return
+        return "failed"
     if REQUIRE_DOMAIN_VERIFICATION and not asset["verified"]:
         finish_job(
             conn, job_id, ok=False, error="Domain not verified", log_line="Domain not verified"
         )
-        return
+        return "failed"
 
     set_job_log(conn, job_id, f"Scanning {asset.get('name', '')} ...")
     start = time.time()
@@ -342,6 +400,99 @@ def run_one_job(conn, job_id: int, asset_id: int):
         )
         set_job_log(conn, job_id, f"Finding: Missing headers {scan['missing_headers']}")
     finish_job(conn, job_id, ok=True, log_line="Done")
+    return "done"
+
+
+def _worker_token(force_refresh: bool = False) -> str:
+    global _token
+    if _token and not force_refresh:
+        return _token
+    response = requests.post(
+        f"{API_URL}/auth/login",
+        data={
+            "username": WORKER_API_USERNAME,
+            "password": WORKER_API_PASSWORD,
+        },
+        timeout=15,
+    )
+    if response.status_code >= 400:
+        raise NonRetryableJobError(f"worker_login_failed status={response.status_code}")
+    data = response.json()
+    token = str(data.get("access_token") or "").strip()
+    if not token:
+        raise NonRetryableJobError("worker_login_missing_token")
+    _token = token
+    return token
+
+
+def _execute_job_via_api(job_id: int, job_type: str, trace_id: str | None = None) -> dict:
+    timeout = max(30, WORKER_API_TIMEOUT_SECONDS)
+    token = _worker_token()
+    headers = {"Authorization": f"Bearer {token}"}
+    if trace_id:
+        headers["x-request-id"] = trace_id
+    response = requests.post(
+        f"{API_URL}/jobs/{job_id}/execute",
+        headers=headers,
+        timeout=timeout,
+    )
+    if response.status_code in (401, 403):
+        token = _worker_token(force_refresh=True)
+        headers = {"Authorization": f"Bearer {token}"}
+        if trace_id:
+            headers["x-request-id"] = trace_id
+        response = requests.post(
+            f"{API_URL}/jobs/{job_id}/execute",
+            headers=headers,
+            timeout=timeout,
+        )
+
+    if response.status_code in {400, 404, 409, 422}:
+        raise NonRetryableJobError(
+            f"api_execute_failed status={response.status_code} job_type={job_type}"
+        )
+    if response.status_code == 429 or response.status_code >= 500:
+        raise TimeoutError(f"api_execute_unavailable status={response.status_code}")
+    if response.status_code >= 400:
+        raise NonRetryableJobError(
+            f"api_execute_failed status={response.status_code} job_type={job_type}"
+        )
+
+    payload = response.json() if response.content else {}
+    status = str(payload.get("status") or "").strip().lower()
+    if status in {"done", "failed"}:
+        return payload
+    if status in {"queued", "running"}:
+        raise TimeoutError(f"api_execute_not_finished status={status}")
+    return payload
+
+
+def run_one_job(conn, *, job: dict, trace_id: str | None = None):
+    """Execute one claimed job via local scanner or delegated API execution."""
+    job_id = int(job["job_id"])
+    job_type = str(job.get("job_type") or "").strip()
+    asset_id_raw = job.get("target_asset_id")
+    asset_id = int(asset_id_raw) if asset_id_raw is not None else None
+    if job_type not in SUPPORTED_JOB_TYPES:
+        raise NonRetryableJobError(f"unsupported_job_type:{job_type}")
+    set_job_log(
+        conn,
+        job_id,
+        f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Worker dispatch job_type={job_type}",
+    )
+    if job_type == "web_exposure":
+        return _run_web_exposure_job(conn, job_id, asset_id)
+    if job_type not in API_EXECUTED_JOB_TYPES:
+        raise NonRetryableJobError(f"job_type_not_dispatchable:{job_type}")
+    payload = _execute_job_via_api(job_id, job_type, trace_id=trace_id)
+    result_status = str(payload.get("status") or "").strip().lower()
+    if result_status == "done":
+        set_job_log(conn, job_id, f"Worker execution completed via API for job_type={job_type}")
+        return "done"
+    if result_status == "failed":
+        set_job_log(conn, job_id, f"Worker execution failed via API for job_type={job_type}")
+        return "failed"
+    return result_status or "running"
 
 
 def scan_external_web(asset_name: str):
@@ -505,6 +656,17 @@ def _parse_attempts(fields: dict) -> int:
         return 0
 
 
+def _json_payload(fields: dict) -> dict:
+    raw = fields.get("payload")
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def main():
     logger.info(
         "worker_started",
@@ -515,6 +677,7 @@ def main():
             "stream_claim_idle_ms": STREAM_CLAIM_IDLE_MS,
             "stream_max_retries": STREAM_MAX_RETRIES,
             "stale_running_ttl_seconds": STALE_RUNNING_TTL_SECONDS,
+            "api_url": API_URL,
         },
     )
     redis_client = _redis_client()
@@ -548,7 +711,8 @@ def main():
                 delivery, msg_id, fields = from_redis
                 attempts = _parse_attempts(fields)
                 trace_id = (fields.get("trace_id") or "").strip() or None
-                job_id_str = (fields.get("job_id") or "").strip()
+                payload = _json_payload(fields)
+                job_id_str = (fields.get("job_id") or str(payload.get("job_id") or "")).strip()
                 if not job_id_str:
                     logger.warning(
                         "redis_job_missing_id",
@@ -601,14 +765,16 @@ def main():
                             job = claim_job_by_id(conn, job_id)
                             if job:
                                 try:
-                                    run_one_job(conn, job["job_id"], job["target_asset_id"])
+                                    run_status = run_one_job(conn, job=job, trace_id=trace_id)
+                                    log_status = "done" if run_status == "done" else run_status
                                     logger.info(
                                         "job_completed",
                                         extra={
                                             "action": "job_run",
-                                            "status": "done",
+                                            "status": log_status,
                                             "job_id": job["job_id"],
-                                            "asset_id": job["target_asset_id"],
+                                            "job_type": job["job_type"],
+                                            "asset_id": job.get("target_asset_id"),
                                             "delivery": delivery,
                                             "trace_id": trace_id,
                                         },
@@ -630,6 +796,7 @@ def main():
                                                     "action": "job_requeue",
                                                     "status": "error",
                                                     "job_id": job["job_id"],
+                                                    "job_type": job["job_type"],
                                                     "retryable": True,
                                                     "error": str(requeue_exc),
                                                     "trace_id": trace_id,
@@ -660,7 +827,8 @@ def main():
                                                     "action": "job_requeue",
                                                     "status": "queued",
                                                     "job_id": job["job_id"],
-                                                    "asset_id": job["target_asset_id"],
+                                                    "job_type": job["job_type"],
+                                                    "asset_id": job.get("target_asset_id"),
                                                     "retryable": True,
                                                     "attempt": attempts + 1,
                                                     "trace_id": trace_id,
@@ -688,7 +856,8 @@ def main():
                                             "action": "job_run",
                                             "status": "failed",
                                             "job_id": job["job_id"],
-                                            "asset_id": job["target_asset_id"],
+                                            "job_type": job["job_type"],
+                                            "asset_id": job.get("target_asset_id"),
                                             "retryable": retryable,
                                             "attempt": attempts,
                                             "trace_id": trace_id,
@@ -742,46 +911,105 @@ def main():
                     conn.autocommit = True
                     job = fetch_job(conn)
                     if job:
+                        attempts = max(0, int(job.get("retry_count") or 0))
                         try:
-                            run_one_job(conn, job["job_id"], job["target_asset_id"])
+                            run_status = run_one_job(conn, job=job)
+                            log_status = "done" if run_status == "done" else run_status
                             logger.info(
                                 "job_completed",
                                 extra={
                                     "action": "job_run",
-                                    "status": "done",
+                                    "status": log_status,
                                     "job_id": job["job_id"],
-                                    "asset_id": job["target_asset_id"],
+                                    "job_type": job["job_type"],
+                                    "asset_id": job.get("target_asset_id"),
                                 },
                             )
                         except Exception as e:
                             error_text, retryable = _job_error_message(e)
-                            try:
-                                finish_job(
-                                    conn,
-                                    job["job_id"],
-                                    ok=False,
-                                    error=error_text,
-                                    log_line=f"Unhandled worker error ({error_text})",
-                                )
-                            except Exception as finish_exc:
-                                logger.exception(
-                                    "job_finish_failed",
-                                    extra={
-                                        "action": "job_finish",
-                                        "status": "error",
-                                        "job_id": job["job_id"],
-                                        "retryable": True,
-                                        "error": str(finish_exc),
-                                    },
-                                )
+                            if retryable and attempts < STREAM_MAX_RETRIES:
+                                try:
+                                    requeue_job(
+                                        conn,
+                                        job["job_id"],
+                                        error=error_text,
+                                        log_line=f"Retrying after error ({error_text}); attempt={attempts + 1}",
+                                    )
+                                except Exception as requeue_exc:
+                                    logger.exception(
+                                        "job_requeue_failed",
+                                        extra={
+                                            "action": "job_requeue",
+                                            "status": "error",
+                                            "job_id": job["job_id"],
+                                            "job_type": job["job_type"],
+                                            "retryable": True,
+                                            "error": str(requeue_exc),
+                                        },
+                                    )
+                                    try:
+                                        finish_job(
+                                            conn,
+                                            job["job_id"],
+                                            ok=False,
+                                            error=error_text,
+                                            log_line=f"Unhandled worker error ({error_text})",
+                                        )
+                                    except Exception as finish_exc:
+                                        logger.exception(
+                                            "job_finish_failed",
+                                            extra={
+                                                "action": "job_finish",
+                                                "status": "error",
+                                                "job_id": job["job_id"],
+                                                "job_type": job["job_type"],
+                                                "retryable": True,
+                                                "error": str(finish_exc),
+                                            },
+                                        )
+                                else:
+                                    logger.warning(
+                                        "job_requeued_db_poll",
+                                        extra={
+                                            "action": "job_requeue",
+                                            "status": "queued",
+                                            "job_id": job["job_id"],
+                                            "job_type": job["job_type"],
+                                            "attempt": attempts + 1,
+                                            "retryable": True,
+                                        },
+                                    )
+                            else:
+                                try:
+                                    finish_job(
+                                        conn,
+                                        job["job_id"],
+                                        ok=False,
+                                        error=error_text,
+                                        log_line=f"Unhandled worker error ({error_text})",
+                                    )
+                                except Exception as finish_exc:
+                                    logger.exception(
+                                        "job_finish_failed",
+                                        extra={
+                                            "action": "job_finish",
+                                            "status": "error",
+                                            "job_id": job["job_id"],
+                                            "job_type": job["job_type"],
+                                            "retryable": True,
+                                            "error": str(finish_exc),
+                                        },
+                                    )
                             logger.exception(
                                 "job_failed",
                                 extra={
                                     "action": "job_run",
                                     "status": "failed",
                                     "job_id": job["job_id"],
-                                    "asset_id": job["target_asset_id"],
+                                    "job_type": job["job_type"],
+                                    "asset_id": job.get("target_asset_id"),
                                     "retryable": retryable,
+                                    "attempt": attempts,
                                 },
                             )
             if job is None:

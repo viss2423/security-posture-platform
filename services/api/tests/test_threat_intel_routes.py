@@ -59,6 +59,15 @@ def admin_headers(client):
     )
 
 
+@pytest.fixture(scope="module")
+def viewer_headers(client):
+    return _login(
+        client,
+        os.getenv("VIEWER_USERNAME", "viewer"),
+        os.getenv("VIEWER_PASSWORD", "viewer"),
+    )
+
+
 def _create_asset(client: TestClient, headers: dict, asset_key: str, address: str) -> dict:
     response = client.post(
         "/assets/",
@@ -258,3 +267,134 @@ def test_threat_intel_refresh_keeps_ip_and_domain_for_same_source():
         counts = {str(row["indicator_type"]): int(row["active_count"] or 0) for row in rows}
         assert counts.get("ip", 0) >= 1
         assert counts.get("domain", 0) >= 1
+
+
+def test_threat_intel_campaign_ioc_and_sightings_routes(client, admin_headers, viewer_headers):
+    campaign_tag = f"pytest-campaign-{uuid.uuid4().hex[:8]}"
+    created_campaign = client.post(
+        "/threat-intel/campaigns",
+        headers=admin_headers,
+        json={
+            "campaign_tag": campaign_tag,
+            "title": "Pytest campaign",
+            "description": "Threat-intel campaign route test",
+            "confidence_weight": 1.2,
+            "source_priority": 88,
+            "confidence_label": "high",
+            "is_active": True,
+        },
+    )
+    assert created_campaign.status_code == 200, created_campaign.text
+
+    denied_campaign = client.post(
+        "/threat-intel/campaigns",
+        headers=viewer_headers,
+        json={"campaign_tag": f"{campaign_tag}-viewer", "title": "Denied campaign"},
+    )
+    assert denied_campaign.status_code == 403, denied_campaign.text
+
+    asset_key = f"threat-campaign-asset-{uuid.uuid4().hex[:8]}"
+    asset = _create_asset(client, admin_headers, asset_key, "https://campaign.example/login")
+
+    source = f"pytest-source-{uuid.uuid4().hex[:8]}"
+    with engine.begin() as conn:
+        ioc_row = (
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO threat_iocs(
+                      source, indicator, indicator_type, feed_url, is_active,
+                      confidence_score, confidence_label, source_priority, metadata
+                    )
+                    VALUES (
+                      :source, 'campaign.example', 'domain', 'https://feed.example/campaign',
+                      TRUE, 0.71, 'medium', 70, CAST(:metadata AS jsonb)
+                    )
+                    RETURNING id
+                    """
+                ),
+                {"source": source, "metadata": json.dumps({"pytest": True})},
+            )
+            .mappings()
+            .first()
+        )
+        assert ioc_row is not None
+        ioc_id = int(ioc_row["id"])
+        conn.execute(
+            text(
+                """
+                INSERT INTO threat_ioc_asset_matches(
+                  threat_ioc_id, asset_id, asset_key, match_field, matched_value, metadata
+                )
+                VALUES (
+                  :threat_ioc_id, :asset_id, :asset_key, 'address', 'campaign.example',
+                  CAST(:metadata AS jsonb)
+                )
+                """
+            ),
+            {
+                "threat_ioc_id": ioc_id,
+                "asset_id": int(asset["asset_id"]),
+                "asset_key": asset_key,
+                "metadata": json.dumps({"source": source}),
+            },
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO threat_ioc_sightings(
+                  threat_ioc_id, asset_id, asset_key, match_field, matched_value,
+                  source_event_ref, source_tool, context_json
+                )
+                VALUES (
+                  :threat_ioc_id, :asset_id, :asset_key, 'address', 'campaign.example',
+                  'pytest-ref', 'pytest', CAST(:context_json AS jsonb)
+                )
+                """
+            ),
+            {
+                "threat_ioc_id": ioc_id,
+                "asset_id": int(asset["asset_id"]),
+                "asset_key": asset_key,
+                "context_json": json.dumps({"test": True}),
+            },
+        )
+
+    assigned = client.post(
+        f"/threat-intel/campaigns/{campaign_tag}/assign",
+        headers=admin_headers,
+        json={"ioc_ids": [ioc_id]},
+    )
+    assert assigned.status_code == 200, assigned.text
+    assert int(assigned.json()["updated"]) >= 1
+
+    campaigns = client.get("/threat-intel/campaigns", headers=admin_headers)
+    assert campaigns.status_code == 200, campaigns.text
+    assert any(item["campaign_tag"] == campaign_tag for item in campaigns.json().get("items") or [])
+
+    iocs = client.get(
+        f"/threat-intel/iocs?campaign_tag={campaign_tag}&min_confidence=0.0&limit=20",
+        headers=admin_headers,
+    )
+    assert iocs.status_code == 200, iocs.text
+    ioc_items = iocs.json().get("items") or []
+    assert any(int(item.get("id") or 0) == ioc_id for item in ioc_items)
+
+    detail = client.get(f"/threat-intel/iocs/{ioc_id}", headers=admin_headers)
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["ioc"]["campaign_tag"] == campaign_tag
+
+    sightings = client.get(
+        f"/threat-intel/sightings?campaign_tag={campaign_tag}&limit=20",
+        headers=admin_headers,
+    )
+    assert sightings.status_code == 200, sightings.text
+    assert any(
+        int(item.get("ioc_id") or 0) == ioc_id for item in sightings.json().get("items") or []
+    )
+
+    summary = client.get("/threat-intel/summary", headers=admin_headers)
+    assert summary.status_code == 200, summary.text
+    summary_body = summary.json()
+    assert "campaign_count" in summary_body
+    assert "top_sightings" in summary_body

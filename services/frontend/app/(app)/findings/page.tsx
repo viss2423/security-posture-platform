@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
+  createAIFeedback,
+  createAISummaryVersion,
   getFindings,
   updateFindingStatus,
   acceptFindingRisk,
@@ -11,6 +13,7 @@ import {
   bootstrapRiskModelLabels,
   trainRiskModel,
   generateFindingAIExplanation,
+  type AIFeedbackValue,
   type AIFindingExplanation,
   type Finding,
   type FindingStatus,
@@ -116,6 +119,78 @@ function packageChip(finding: Finding): string | null {
   return `${finding.package_name}@${finding.package_version}`;
 }
 
+type GuardrailItem = { statement: string; evidence: string[] };
+type GuardrailSectionKey = 'facts' | 'inference' | 'recommendations';
+
+function parseGuardrailItems(raw: unknown): GuardrailItem[] {
+  if (!Array.isArray(raw)) return [];
+  const out: GuardrailItem[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const statement = String((entry as Record<string, unknown>).statement || '').trim();
+    if (!statement) continue;
+    const evidenceRaw = (entry as Record<string, unknown>).evidence;
+    const evidence = Array.isArray(evidenceRaw)
+      ? evidenceRaw
+          .map((value) => String(value || '').trim().toUpperCase())
+          .filter((value) => value.length > 0)
+      : [];
+    out.push({ statement, evidence });
+  }
+  return out;
+}
+
+function parseFindingGuardrails(ai?: AIFindingExplanation | null): {
+  mode: string;
+  usedFallbackSections: boolean;
+  sections: Record<GuardrailSectionKey, GuardrailItem[]>;
+  evidenceMap: Record<string, string>;
+} | null {
+  if (!ai?.context_json || typeof ai.context_json !== 'object') return null;
+  const guardrails = (ai.context_json as Record<string, unknown>).guardrails;
+  if (!guardrails || typeof guardrails !== 'object') return null;
+
+  const guardrailObj = guardrails as Record<string, unknown>;
+  const mode = String(guardrailObj.mode || '').trim();
+  const usedFallbackSections = Boolean(guardrailObj.used_fallback_sections);
+  const sectionsRaw = guardrailObj.sections;
+  const sectionsObj =
+    sectionsRaw && typeof sectionsRaw === 'object'
+      ? (sectionsRaw as Record<string, unknown>)
+      : {};
+
+  const sections: Record<GuardrailSectionKey, GuardrailItem[]> = {
+    facts: parseGuardrailItems(sectionsObj.facts),
+    inference: parseGuardrailItems(sectionsObj.inference),
+    recommendations: parseGuardrailItems(sectionsObj.recommendations),
+  };
+
+  if (
+    sections.facts.length === 0 &&
+    sections.inference.length === 0 &&
+    sections.recommendations.length === 0
+  ) {
+    return null;
+  }
+
+  const evidenceMap: Record<string, string> = {};
+  const catalog = guardrailObj.evidence_catalog;
+  if (Array.isArray(catalog)) {
+    for (const item of catalog) {
+      if (!item || typeof item !== 'object') continue;
+      const row = item as Record<string, unknown>;
+      const id = String(row.id || '').trim().toUpperCase();
+      if (!id) continue;
+      const kind = String(row.kind || '').trim();
+      const value = String(row.value ?? '').trim();
+      const label = kind && value ? `${kind}: ${value}` : kind || value || id;
+      evidenceMap[id] = label.slice(0, 140);
+    }
+  }
+
+  return { mode, usedFallbackSections, sections, evidenceMap };
+}
+
 export default function FindingsPage() {
   const { canMutate, isAdmin } = useAuth();
   const [findings, setFindings] = useState<Finding[]>([]);
@@ -133,8 +208,12 @@ export default function FindingsPage() {
   const [acceptReason, setAcceptReason] = useState('');
   const [acceptExpires, setAcceptExpires] = useState('');
   const [aiByFindingId, setAiByFindingId] = useState<Record<number, AIFindingExplanation>>({});
+  const [aiVersionIdByFindingId, setAiVersionIdByFindingId] = useState<Record<number, number>>({});
+  const [aiMessageByFindingId, setAiMessageByFindingId] = useState<Record<number, string>>({});
   const [aiErrorByFindingId, setAiErrorByFindingId] = useState<Record<number, string>>({});
   const [explainingId, setExplainingId] = useState<number | null>(null);
+  const [savingVersionId, setSavingVersionId] = useState<number | null>(null);
+  const [feedbackBusyKey, setFeedbackBusyKey] = useState<string | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -212,14 +291,111 @@ export default function FindingsPage() {
       delete next[findingId];
       return next;
     });
+    setAiMessageByFindingId((prev) => {
+      const next = { ...prev };
+      delete next[findingId];
+      return next;
+    });
     try {
       const out = await generateFindingAIExplanation(findingId, force);
       setAiByFindingId((prev) => ({ ...prev, [findingId]: out }));
+      setAiVersionIdByFindingId((prev) => {
+        const next = { ...prev };
+        delete next[findingId];
+        return next;
+      });
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'AI explanation failed';
       setAiErrorByFindingId((prev) => ({ ...prev, [findingId]: msg }));
     } finally {
       setExplainingId(null);
+    }
+  };
+
+  const saveFindingAiVersion = async (findingId: number): Promise<number | null> => {
+    const ai = aiByFindingId[findingId];
+    if (!ai?.explanation_text) {
+      setAiMessageByFindingId((prev) => ({
+        ...prev,
+        [findingId]: 'Generate an AI explanation before saving a version.',
+      }));
+      return null;
+    }
+    setSavingVersionId(findingId);
+    setAiErrorByFindingId((prev) => {
+      const next = { ...prev };
+      delete next[findingId];
+      return next;
+    });
+    try {
+      const created = await createAISummaryVersion('finding', findingId, {
+        content_text: ai.explanation_text,
+        provider: ai.provider,
+        model: ai.model,
+        source_type: 'generated',
+        context_json: ai.context_json || {},
+        evidence_json: {
+          generated_at: ai.generated_at,
+          remediation_patch: ai.remediation_patch || null,
+        },
+      });
+      setAiVersionIdByFindingId((prev) => ({ ...prev, [findingId]: created.version_id }));
+      setAiMessageByFindingId((prev) => ({
+        ...prev,
+        [findingId]: `Saved version v${created.version_no}.`,
+      }));
+      return created.version_id;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to save AI version';
+      setAiErrorByFindingId((prev) => ({ ...prev, [findingId]: msg }));
+      return null;
+    } finally {
+      setSavingVersionId(null);
+    }
+  };
+
+  const handleFindingAiFeedback = async (findingId: number, feedback: AIFeedbackValue) => {
+    const ai = aiByFindingId[findingId];
+    if (!ai?.explanation_text) {
+      setAiMessageByFindingId((prev) => ({
+        ...prev,
+        [findingId]: 'Generate an AI explanation before submitting feedback.',
+      }));
+      return;
+    }
+    const opKey = `${findingId}:${feedback}`;
+    setFeedbackBusyKey(opKey);
+    setAiErrorByFindingId((prev) => {
+      const next = { ...prev };
+      delete next[findingId];
+      return next;
+    });
+    try {
+      let versionId = aiVersionIdByFindingId[findingId];
+      if (!versionId) {
+        const saved = await saveFindingAiVersion(findingId);
+        if (!saved) return;
+        versionId = saved;
+      }
+      await createAIFeedback({
+        entity_type: 'finding',
+        entity_id: findingId,
+        version_id: versionId,
+        feedback,
+        context_json: { surface: 'findings_page' },
+      });
+      setAiMessageByFindingId((prev) => ({
+        ...prev,
+        [findingId]:
+          feedback === 'up'
+            ? 'Feedback saved: explanation was useful.'
+            : 'Feedback saved: explanation needs improvement.',
+      }));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to save AI feedback';
+      setAiErrorByFindingId((prev) => ({ ...prev, [findingId]: msg }));
+    } finally {
+      setFeedbackBusyKey(null);
     }
   };
 
@@ -292,17 +468,45 @@ export default function FindingsPage() {
   ].filter(Boolean) as string[];
 
   return (
-    <main className="page-shell">
-      <section className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <div className="text-sm text-[var(--muted)]">
-          Highest-risk issues are listed first. Open a finding only when you need deeper workflow
-          controls or AI context.
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <span className="stat-chip-strong">{findings.length} visible</span>
-          <span className="stat-chip">Critical {visibleRiskCounts.critical}</span>
-          <span className="stat-chip">High {visibleRiskCounts.high}</span>
-          <span className="stat-chip">Pending {visibleRiskCounts.unscored}</span>
+    <main className="page-shell view-stack">
+      <section className="page-hero animate-in">
+        <div className="hero-grid">
+          <div>
+            <h1 className="hero-title">Findings Command Queue</h1>
+            <p className="hero-copy">
+              Risk-ranked vulnerability and detection findings with direct workflow control,
+              analyst labels, and AI-backed investigation context.
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Link href="/ml-risk" className="btn-secondary text-sm">
+                Open ML lab
+              </Link>
+              <Link href="/incidents" className="btn-secondary text-sm">
+                Open incidents
+              </Link>
+              <Link href="/jobs" className="btn-secondary text-sm">
+                Run scans
+              </Link>
+            </div>
+          </div>
+          <div className="hero-stat-grid">
+            <div className="hero-stat">
+              <p className="hero-stat-label">Visible findings</p>
+              <p className="hero-stat-value">{findings.length}</p>
+            </div>
+            <div className="hero-stat">
+              <p className="hero-stat-label">Critical</p>
+              <p className="hero-stat-value">{visibleRiskCounts.critical}</p>
+            </div>
+            <div className="hero-stat">
+              <p className="hero-stat-label">High</p>
+              <p className="hero-stat-value">{visibleRiskCounts.high}</p>
+            </div>
+            <div className="hero-stat">
+              <p className="hero-stat-label">Pending score</p>
+              <p className="hero-stat-value">{visibleRiskCounts.unscored}</p>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -431,7 +635,7 @@ export default function FindingsPage() {
         </details>
       )}
 
-      <section className="section-panel-tight mb-6 animate-in">
+      <section className="section-panel animate-in">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="section-title mb-2">Filter queue</p>
@@ -527,12 +731,13 @@ export default function FindingsPage() {
           description="Run the scanner to generate TLS and security header findings, or wait for the scheduled scan."
         />
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-5">
           {findings.map((f) => {
             const drivers = riskDrivers(f);
             const ai = aiByFindingId[f.finding_id];
+            const guardrails = parseFindingGuardrails(ai);
             return (
-              <article key={f.finding_id} className="section-panel-tight animate-in">
+              <article key={f.finding_id} className="section-panel animate-in">
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div className="min-w-0 flex-1">
                     <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -757,10 +962,95 @@ export default function FindingsPage() {
                             <p className="whitespace-pre-wrap text-sm text-[var(--text)]">
                               {ai.explanation_text}
                             </p>
+                            {guardrails && (
+                              <div className="rounded-xl border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
+                                  Evidence-backed breakdown
+                                </p>
+                                {guardrails.mode && (
+                                  <p className="mt-1 text-[11px] text-[var(--muted)]">
+                                    Mode: {guardrails.mode}
+                                  </p>
+                                )}
+                                {guardrails.usedFallbackSections && (
+                                  <p className="mt-1 text-[11px] text-[var(--amber)]">
+                                    Some sections used guarded fallback statements.
+                                  </p>
+                                )}
+                                <div className="mt-2 space-y-2 text-xs">
+                                  {(
+                                    [
+                                      ['facts', 'Facts'],
+                                      ['inference', 'Inference'],
+                                      ['recommendations', 'Recommendations'],
+                                    ] as const
+                                  ).map(([key, label]) =>
+                                    guardrails.sections[key].length > 0 ? (
+                                      <div key={key}>
+                                        <p className="font-semibold text-[var(--text)]">{label}</p>
+                                        <ul className="mt-1 space-y-1 text-[var(--muted)]">
+                                          {guardrails.sections[key].map((item, idx) => (
+                                            <li key={`${key}-${idx}`} className="rounded border border-[var(--border)] px-2 py-1">
+                                              <p>{item.statement}</p>
+                                              {item.evidence.length > 0 && (
+                                                <div className="mt-1 flex flex-wrap gap-1">
+                                                  {item.evidence.map((eid) => (
+                                                    <span
+                                                      key={`${key}-${idx}-${eid}`}
+                                                      className="stat-chip"
+                                                      title={guardrails.evidenceMap[eid] || eid}
+                                                    >
+                                                      {eid}
+                                                    </span>
+                                                  ))}
+                                                </div>
+                                              )}
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      </div>
+                                    ) : null
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                            {aiMessageByFindingId[f.finding_id] && (
+                              <p className="text-xs text-[var(--muted)]">
+                                {aiMessageByFindingId[f.finding_id]}
+                              </p>
+                            )}
                             {isFallbackProvider(ai.provider) && (
                               <p className="text-xs text-[var(--amber)]">
                                 Showing fallback guidance because the AI provider was temporarily slow or unavailable.
                               </p>
+                            )}
+                            {canMutate && (
+                              <div className="flex flex-wrap gap-2 pt-1">
+                                <button
+                                  type="button"
+                                  onClick={() => saveFindingAiVersion(f.finding_id)}
+                                  disabled={savingVersionId === f.finding_id}
+                                  className="btn-secondary text-xs"
+                                >
+                                  {savingVersionId === f.finding_id ? 'Saving...' : 'Save version'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleFindingAiFeedback(f.finding_id, 'up')}
+                                  disabled={feedbackBusyKey != null}
+                                  className="btn-secondary text-xs"
+                                >
+                                  {feedbackBusyKey === `${f.finding_id}:up` ? 'Saving...' : 'Thumbs up'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleFindingAiFeedback(f.finding_id, 'down')}
+                                  disabled={feedbackBusyKey != null}
+                                  className="btn-secondary text-xs"
+                                >
+                                  {feedbackBusyKey === `${f.finding_id}:down` ? 'Saving...' : 'Thumbs down'}
+                                </button>
+                              </div>
                             )}
                           </div>
                         ) : aiErrorByFindingId[f.finding_id] ? (

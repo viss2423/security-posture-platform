@@ -17,8 +17,11 @@ class Settings(BaseSettings):
     CORRELATOR_SERVICE_USERNAME: str = "correlator-service"
     CORRELATOR_SERVICE_PASSWORD: str = "correlator-local-strong"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24h; shorten for higher security
-    POSTGRES_DSN: str
-    OPENSEARCH_URL: str = "http://opensearch:9200"
+    JWT_REFRESH_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 30  # 30d
+    # Default keeps local imports/test collection working when env is not preloaded.
+    # Runtime environments should still override this via POSTGRES_DSN.
+    POSTGRES_DSN: str = "postgresql+psycopg://secplat:secplat@localhost:5433/secplat"
+    OPENSEARCH_URL: str = "http://localhost:9200"
     REDIS_URL: str | None = None  # Phase 1: when set, API publishes scan jobs to Redis stream
     MAX_SCAN_DURATION_SECONDS: int = 900
     MAX_REQUESTS_PER_SECOND: int = 2
@@ -132,6 +135,7 @@ class Settings(BaseSettings):
     TELEMETRY_SURICATA_LOG_PATH: str = "/workspace/lab-data/suricata/eve.json"
     TELEMETRY_ZEEK_LOG_PATH: str = "/workspace/lab-data/zeek/conn.log"
     TELEMETRY_AUDITD_LOG_PATH: str = "/workspace/lab-data/auditd/audit.log"
+    TELEMETRY_AUTH_LOG_PATH: str = "/workspace/lab-data/auth/auth.log"
     TELEMETRY_COWRIE_LOG_PATH: str = "/workspace/lab-data/cowrie/cowrie.json"
     CYBERLAB_AUTO_SEED_DEMO: bool = False
     CYBERLAB_AUTO_SEED_FORCE: bool = False

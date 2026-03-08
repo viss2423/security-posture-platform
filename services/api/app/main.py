@@ -15,8 +15,12 @@ from .logging_config import configure_logging
 from .request_context import request_id_ctx
 from .routers import (
     ai,
+    ai_feedback,
     alerts,
+    automation,
     assets,
+    attack_surface,
+    attack_graph,
     attack_lab,
     auth,
     cyber_range,
@@ -29,6 +33,7 @@ from .routers import (
     policy,
     posture,
     retention,
+    risk,
     risk_ml,
     suppression,
     telemetry,
@@ -90,7 +95,7 @@ def _scheduled_telemetry_sources() -> list[str]:
     for part in raw.split(","):
         candidate = part.strip().lower()
         if (
-            candidate in {"suricata", "zeek", "auditd", "cowrie", "custom"}
+            candidate in {"suricata", "zeek", "auditd", "authlog", "cowrie", "custom"}
             and candidate not in parsed
         ):
             parsed.append(candidate)
@@ -217,6 +222,9 @@ app.include_router(posture.router)
 app.include_router(retention.router)
 app.include_router(audit_router.router)
 app.include_router(alerts.router)
+app.include_router(automation.router)
+app.include_router(attack_surface.router)
+app.include_router(attack_graph.router)
 app.include_router(incidents.router)
 app.include_router(jobs.router, prefix="/jobs", tags=["jobs"])
 app.include_router(findings.router, prefix="/findings", tags=["findings"])
@@ -225,8 +233,10 @@ app.include_router(integrations.router)
 app.include_router(suppression.router)
 app.include_router(threat_intel.router)
 app.include_router(telemetry.router)
+app.include_router(risk.router)
 app.include_router(attack_lab.router)
 app.include_router(cyber_range.router)
 app.include_router(detections.router)
 app.include_router(ai.router)
+app.include_router(ai_feedback.router)
 app.include_router(risk_ml.router)

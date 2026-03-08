@@ -100,6 +100,12 @@ export default async function ThreatIntelPage() {
                 </div>
               </div>
             </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <span className="stat-chip">
+                High confidence {summary.high_confidence_indicators ?? 0}
+              </span>
+              <span className="stat-chip">Campaigns {summary.campaign_count ?? 0}</span>
+            </div>
             {summary.last_refreshed_at ? (
               <p className="mt-3 text-xs uppercase tracking-[0.14em] text-[var(--muted)]">
                 Last refreshed {formatDateTime(summary.last_refreshed_at)}
@@ -214,6 +220,8 @@ export default async function ThreatIntelPage() {
                     </div>
                     <p className="mt-3 text-sm text-[var(--muted)]">
                       IP {source.by_type.ip} | Domain {source.by_type.domain}
+                      {source.avg_confidence != null &&
+                        ` | confidence ${Math.round(Number(source.avg_confidence) * 100)}%`}
                       {source.last_seen_at ? ` | ${formatDateTime(source.last_seen_at)}` : ''}
                     </p>
                   </div>
@@ -238,11 +246,71 @@ export default async function ThreatIntelPage() {
                     </div>
                     <p className="mt-2 text-xs text-[var(--muted)]">
                       {ioc.source}
+                      {ioc.confidence_score != null &&
+                        ` | ${Math.round(Number(ioc.confidence_score) * 100)}% ${ioc.confidence_label || 'confidence'}`}
+                      {ioc.campaign_tag ? ` | ${ioc.campaign_tag}` : ''}
                       {ioc.last_seen_at ? ` | ${formatDateTime(ioc.last_seen_at)}` : ''}
                     </p>
                   </div>
                 ))}
               </div>
+            </div>
+          </section>
+          <section className="mt-6 grid gap-6 xl:grid-cols-2">
+            <div className="section-panel animate-in">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <h2 className="section-title">Campaigns</h2>
+                <span className="stat-chip">{summary.campaigns?.length ?? 0}</span>
+              </div>
+              {!(summary.campaigns && summary.campaigns.length > 0) ? (
+                <p className="text-sm text-[var(--muted)]">No campaigns tagged yet.</p>
+              ) : (
+                <div className="space-y-3">
+                  {summary.campaigns.map((campaign) => (
+                    <div
+                      key={campaign.campaign_tag}
+                      className="rounded-2xl border border-[var(--border)] bg-[var(--surface-elevated)]/40 p-4"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="font-medium text-[var(--text)]">{campaign.title}</span>
+                        <span className="stat-chip">{campaign.campaign_tag}</span>
+                      </div>
+                      <p className="mt-2 text-xs text-[var(--muted)]">
+                        IOCs {campaign.ioc_count} | Matched assets {campaign.matched_asset_count}
+                        {campaign.updated_at ? ` | ${formatDateTime(campaign.updated_at)}` : ''}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="section-panel animate-in">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <h2 className="section-title">Recent sightings</h2>
+                <span className="stat-chip">{summary.top_sightings?.length ?? 0}</span>
+              </div>
+              {!(summary.top_sightings && summary.top_sightings.length > 0) ? (
+                <p className="text-sm text-[var(--muted)]">No IOC sightings captured yet.</p>
+              ) : (
+                <div className="space-y-3">
+                  {summary.top_sightings.map((sighting) => (
+                    <div
+                      key={sighting.sighting_id}
+                      className="rounded-2xl border border-[var(--border)] bg-[var(--surface-elevated)]/40 p-4"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="font-medium text-[var(--text)]">{sighting.indicator}</span>
+                        <span className="stat-chip uppercase">{sighting.indicator_type}</span>
+                      </div>
+                      <p className="mt-2 text-xs text-[var(--muted)]">
+                        {sighting.asset_name || sighting.asset_key} | {sighting.source}
+                        {sighting.campaign_tag ? ` | ${sighting.campaign_tag}` : ''}
+                        {sighting.sighted_at ? ` | ${formatDateTime(sighting.sighted_at)}` : ''}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </section>
         </>

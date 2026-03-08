@@ -3,6 +3,10 @@
 # Optional: .\scripts\smoke-roadmap.ps1 -Build   to rebuild images (slower).
 param([switch]$Build)
 $ErrorActionPreference = "Stop"
+# Docker Compose may emit normal progress output on stderr; do not treat that as a terminating error.
+if ($PSVersionTable.PSVersion.Major -ge 7) {
+    $PSNativeCommandUseErrorActionPreference = $false
+}
 $repoRoot = $PSScriptRoot | Split-Path -Parent
 if (-not (Test-Path (Join-Path $repoRoot "docker-compose.yml"))) {
     throw "Repo root not found (no docker-compose.yml in $repoRoot). Run from security-posture-platform root."
@@ -10,11 +14,12 @@ if (-not (Test-Path (Join-Path $repoRoot "docker-compose.yml"))) {
 Set-Location $repoRoot
 if ($Build) {
     Write-Host "Building and starting stack (this can take 1-2 min)..."
-    docker compose up -d --build 2>&1
+    docker compose up -d --build
 } else {
     Write-Host "Starting stack (no rebuild; use -Build to rebuild)..."
-    docker compose up -d 2>&1
+    docker compose up -d
 }
+if ($LASTEXITCODE -ne 0) { throw "docker compose up failed" }
 Write-Host "Waiting 8s for API/Redis..."
 Start-Sleep -Seconds 8
 Write-Host "Checking API health and X-Request-Id..."
@@ -26,7 +31,8 @@ docker compose exec redis redis-cli PING
 if ($LASTEXITCODE -ne 0) { throw "Redis PING failed" }
 Write-Host "Phase 0 + 1 smoke OK"
 Write-Host "Starting roadmap profile (deriver, notifier)..."
-docker compose --profile roadmap up -d deriver notifier 2>&1
+docker compose --profile roadmap up -d deriver notifier
+if ($LASTEXITCODE -ne 0) { throw "docker compose --profile roadmap up failed" }
 Start-Sleep -Seconds 2
 docker logs secplat-deriver --tail 1
 docker logs secplat-notifier --tail 1

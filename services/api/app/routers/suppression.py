@@ -7,7 +7,9 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.audit import log_audit
 from app.db import get_db
+from app.request_context import request_id_ctx
 from app.routers.auth import require_auth, require_role
 
 router = APIRouter(prefix="/suppression", tags=["suppression"])
@@ -95,6 +97,19 @@ def create_maintenance_window(
         .mappings()
         .first()
     )
+    log_audit(
+        db,
+        "maintenance_window.create",
+        user_name=user,
+        asset_key=row.get("asset_key"),
+        details={
+            "window_id": int(row["id"]),
+            "asset_key": row.get("asset_key"),
+            "start_at": body.start_at,
+            "end_at": body.end_at,
+        },
+        request_id=request_id_ctx.get(None),
+    )
     db.commit()
     return _serialize_mw(dict(row))
 
@@ -103,12 +118,33 @@ def create_maintenance_window(
 def delete_maintenance_window(
     window_id: int,
     db: Session = Depends(get_db),
-    _user: str = Depends(require_role(["admin", "analyst"])),
+    user: str = Depends(require_role(["admin", "analyst"])),
 ):
-    r = db.execute(text("DELETE FROM maintenance_windows WHERE id = :id"), {"id": window_id})
-    db.commit()
-    if r.rowcount == 0:
+    deleted = (
+        db.execute(
+            text(
+                """
+                DELETE FROM maintenance_windows
+                WHERE id = :id
+                RETURNING id, asset_key
+                """
+            ),
+            {"id": window_id},
+        )
+        .mappings()
+        .first()
+    )
+    if not deleted:
         raise HTTPException(status_code=404, detail="Maintenance window not found")
+    log_audit(
+        db,
+        "maintenance_window.delete",
+        user_name=user,
+        asset_key=deleted.get("asset_key"),
+        details={"window_id": int(deleted["id"]), "asset_key": deleted.get("asset_key")},
+        request_id=request_id_ctx.get(None),
+    )
+    db.commit()
     return {"ok": True}
 
 
@@ -184,6 +220,20 @@ def create_suppression_rule(
         .mappings()
         .first()
     )
+    log_audit(
+        db,
+        "suppression_rule.create",
+        user_name=user,
+        asset_key=body.scope_value if body.scope == "asset" else None,
+        details={
+            "rule_id": int(row["id"]),
+            "scope": row.get("scope"),
+            "scope_value": row.get("scope_value"),
+            "starts_at": body.starts_at,
+            "ends_at": body.ends_at,
+        },
+        request_id=request_id_ctx.get(None),
+    )
     db.commit()
     return _serialize_sr(dict(row))
 
@@ -192,10 +242,35 @@ def create_suppression_rule(
 def delete_suppression_rule(
     rule_id: int,
     db: Session = Depends(get_db),
-    _user: str = Depends(require_role(["admin", "analyst"])),
+    user: str = Depends(require_role(["admin", "analyst"])),
 ):
-    r = db.execute(text("DELETE FROM suppression_rules WHERE id = :id"), {"id": rule_id})
-    db.commit()
-    if r.rowcount == 0:
+    deleted = (
+        db.execute(
+            text(
+                """
+                DELETE FROM suppression_rules
+                WHERE id = :id
+                RETURNING id, scope, scope_value
+                """
+            ),
+            {"id": rule_id},
+        )
+        .mappings()
+        .first()
+    )
+    if not deleted:
         raise HTTPException(status_code=404, detail="Suppression rule not found")
+    log_audit(
+        db,
+        "suppression_rule.delete",
+        user_name=user,
+        asset_key=deleted.get("scope_value") if deleted.get("scope") == "asset" else None,
+        details={
+            "rule_id": int(deleted["id"]),
+            "scope": deleted.get("scope"),
+            "scope_value": deleted.get("scope_value"),
+        },
+        request_id=request_id_ctx.get(None),
+    )
+    db.commit()
     return {"ok": True}

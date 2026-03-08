@@ -159,7 +159,7 @@ def get_asset_by_key(
 def create_asset(
     payload: dict,
     db: Session = Depends(get_db),
-    _user: str = Depends(require_role(["admin", "analyst"])),
+    user: str = Depends(require_role(["admin", "analyst"])),
 ):
     """
     Create asset inventory record.
@@ -226,6 +226,21 @@ def create_asset(
 
     try:
         row = db.execute(q, params).mappings().first()
+        if row:
+            log_audit(
+                db,
+                "asset.create",
+                user_name=user,
+                asset_key=str(row.get("asset_key") or asset_key),
+                details={
+                    "asset_id": row.get("asset_id"),
+                    "asset_key": row.get("asset_key") or asset_key,
+                    "type": asset_type,
+                    "environment": params.get("environment"),
+                    "criticality": params.get("criticality"),
+                },
+                request_id=request_id_ctx.get("") or None,
+            )
         db.commit()
         return dict(row)
     except Exception as e:
@@ -308,7 +323,7 @@ def update_asset_by_key(
             recompute_asset_findings_risk(db, int(row["asset_id"]))
         log_audit(
             db,
-            "asset_edit",
+            "asset.update",
             user_name=_user,
             asset_key=asset_key,
             details=fields,
@@ -323,7 +338,7 @@ def update_asset_by_key(
 
 @router.delete("/by-key/{asset_key}")
 def delete_asset_by_key(
-    asset_key: str, db: Session = Depends(get_db), _user: str = Depends(require_role(["admin"]))
+    asset_key: str, db: Session = Depends(get_db), user: str = Depends(require_role(["admin"]))
 ):
     """
     Delete by asset_key. If findings references asset_id, this will fail (FK).
@@ -339,6 +354,14 @@ def delete_asset_by_key(
         )
         if not row:
             raise HTTPException(status_code=404, detail="Asset not found")
+        log_audit(
+            db,
+            "asset.delete",
+            user_name=user,
+            asset_key=asset_key,
+            details={"asset_id": row.get("asset_id"), "asset_key": row.get("asset_key")},
+            request_id=request_id_ctx.get("") or None,
+        )
         db.commit()
         return {"ok": True, **dict(row)}
     except Exception as e:
@@ -386,6 +409,19 @@ def verify_asset(
     try:
         row = db.execute(uq, {"m": method, "id": asset_id}).mappings().first()
         recompute_asset_findings_risk(db, asset_id)
+        log_audit(
+            db,
+            "asset.verify",
+            user_name=_user,
+            asset_key=str(asset.get("asset_key") or ""),
+            details={
+                "asset_id": asset_id,
+                "asset_key": asset.get("asset_key"),
+                "method": method,
+                "verified": True,
+            },
+            request_id=request_id_ctx.get("") or None,
+        )
         db.commit()
         return dict(row)
     except Exception as e:

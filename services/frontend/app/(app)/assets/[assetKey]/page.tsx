@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import {
+  createAIFeedback,
+  createAISummaryVersion,
   generateAssetAIDiagnosis,
   getAssetAIDiagnosis,
   getAssetDetail,
@@ -11,6 +13,7 @@ import {
   getTelemetryAssetLogs,
   getThreatIntelAssetMatches,
   updateAssetByKey,
+  type AIFeedbackValue,
   type AIAssetDiagnosis,
   type AssetDetail,
   type RepositoryScanSummary,
@@ -76,6 +79,10 @@ export default function AssetDetailPage() {
   const [loadingDiagnosis, setLoadingDiagnosis] = useState(false);
   const [generatingDiagnosis, setGeneratingDiagnosis] = useState(false);
   const [diagnosisMessage, setDiagnosisMessage] = useState<string | null>(null);
+  const [savingDiagnosisVersion, setSavingDiagnosisVersion] = useState(false);
+  const [diagnosisFeedbackBusy, setDiagnosisFeedbackBusy] = useState<AIFeedbackValue | null>(
+    null
+  );
   const [repositorySummary, setRepositorySummary] = useState<RepositoryScanSummary | null>(
     null
   );
@@ -233,6 +240,59 @@ export default function AssetDetailPage() {
       setDiagnosisMessage(e instanceof Error ? e.message : 'AI diagnosis generation failed');
     } finally {
       setGeneratingDiagnosis(false);
+    }
+  };
+
+  const handleSaveDiagnosisVersion = async () => {
+    if (!aiDiagnosis?.diagnosis_text) {
+      setDiagnosisMessage('Generate AI diagnosis before saving a version.');
+      return;
+    }
+    setSavingDiagnosisVersion(true);
+    setDiagnosisMessage(null);
+    try {
+      const created = await createAISummaryVersion('asset', assetKey, {
+        content_text: aiDiagnosis.diagnosis_text,
+        provider: aiDiagnosis.provider,
+        model: aiDiagnosis.model,
+        source_type: aiDiagnosis.cached ? 'cached' : 'generated',
+        context_json: aiDiagnosis.context_json || {},
+        evidence_json: {
+          generated_at: aiDiagnosis.generated_at,
+          generated_by: aiDiagnosis.generated_by || null,
+        },
+      });
+      setDiagnosisMessage(`Saved version v${created.version_no}.`);
+    } catch (e) {
+      setDiagnosisMessage(e instanceof Error ? e.message : 'Saving diagnosis version failed');
+    } finally {
+      setSavingDiagnosisVersion(false);
+    }
+  };
+
+  const handleDiagnosisFeedback = async (feedback: AIFeedbackValue) => {
+    if (!aiDiagnosis?.diagnosis_text) {
+      setDiagnosisMessage('Generate AI diagnosis before submitting feedback.');
+      return;
+    }
+    setDiagnosisFeedbackBusy(feedback);
+    setDiagnosisMessage(null);
+    try {
+      await createAIFeedback({
+        entity_type: 'asset',
+        entity_id: assetKey,
+        feedback,
+        context_json: { surface: 'asset_detail' },
+      });
+      setDiagnosisMessage(
+        feedback === 'up'
+          ? 'Feedback recorded: diagnosis was useful.'
+          : 'Feedback recorded: diagnosis needs improvement.'
+      );
+    } catch (e) {
+      setDiagnosisMessage(e instanceof Error ? e.message : 'Saving diagnosis feedback failed');
+    } finally {
+      setDiagnosisFeedbackBusy(null);
     }
   };
 
@@ -691,6 +751,46 @@ export default function AssetDetailPage() {
                         Generated {formatDateTime(aiDiagnosis.generated_at)} via {aiDiagnosis.provider}/
                         {aiDiagnosis.model}
                       </p>
+                      {canMutate && (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={handleSaveDiagnosisVersion}
+                            disabled={
+                              savingDiagnosisVersion ||
+                              generatingDiagnosis ||
+                              diagnosisFeedbackBusy != null
+                            }
+                            className="btn-secondary text-xs"
+                          >
+                            {savingDiagnosisVersion ? 'Saving...' : 'Save version'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDiagnosisFeedback('up')}
+                            disabled={
+                              generatingDiagnosis ||
+                              savingDiagnosisVersion ||
+                              diagnosisFeedbackBusy != null
+                            }
+                            className="btn-secondary text-xs"
+                          >
+                            {diagnosisFeedbackBusy === 'up' ? 'Saving...' : 'Thumbs up'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDiagnosisFeedback('down')}
+                            disabled={
+                              generatingDiagnosis ||
+                              savingDiagnosisVersion ||
+                              diagnosisFeedbackBusy != null
+                            }
+                            className="btn-secondary text-xs"
+                          >
+                            {diagnosisFeedbackBusy === 'down' ? 'Saving...' : 'Thumbs down'}
+                          </button>
+                        </div>
+                      )}
                     </>
                   ) : (
                     <p className="text-sm text-[var(--muted)]">
