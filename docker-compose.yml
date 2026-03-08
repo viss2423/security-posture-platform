@@ -2,6 +2,8 @@ services:
   postgres:
     image: postgres:16
     container_name: secplat-postgres
+    cpus: 1.50
+    mem_limit: 2g
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -32,6 +34,8 @@ services:
     image: opensearchproject/opensearch:2.14.0
     container_name: secplat-opensearch
     restart: "no"
+    cpus: 1.50
+    mem_limit: 2g
     environment:
       - discovery.type=single-node
       - bootstrap.memory_lock=true
@@ -54,6 +58,8 @@ services:
   grafana:
     image: grafana/grafana:11.1.0
     container_name: secplat-grafana
+    profiles:
+      - observability
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
@@ -84,6 +90,8 @@ services:
     build:
       context: ./services/api
     container_name: secplat-api
+    cpus: 1.00
+    mem_limit: 1g
     environment:
       ENV: ${ENV}
       API_SECRET_KEY: ${API_SECRET_KEY}
@@ -150,16 +158,16 @@ services:
       TELEMETRY_MIRROR_TO_OPENSEARCH: ${TELEMETRY_MIRROR_TO_OPENSEARCH:-true}
       TELEMETRY_OPENSEARCH_INDEX_PREFIX: ${TELEMETRY_OPENSEARCH_INDEX_PREFIX:-secplat-telemetry}
       TELEMETRY_DEFAULT_LOOKBACK_HOURS: ${TELEMETRY_DEFAULT_LOOKBACK_HOURS:-24}
-      ENABLE_SCHEDULED_TELEMETRY_IMPORT: ${ENABLE_SCHEDULED_TELEMETRY_IMPORT:-true}
+      ENABLE_SCHEDULED_TELEMETRY_IMPORT: ${ENABLE_SCHEDULED_TELEMETRY_IMPORT:-false}
       SCHEDULED_TELEMETRY_IMPORT_INTERVAL_SECONDS: ${SCHEDULED_TELEMETRY_IMPORT_INTERVAL_SECONDS:-180}
       TELEMETRY_SCHEDULED_SOURCES: ${TELEMETRY_SCHEDULED_SOURCES:-suricata,zeek,auditd,cowrie}
-      ENABLE_TELEMETRY_KEEPALIVE: ${ENABLE_TELEMETRY_KEEPALIVE:-true}
+      ENABLE_TELEMETRY_KEEPALIVE: ${ENABLE_TELEMETRY_KEEPALIVE:-false}
       TELEMETRY_KEEPALIVE_INTERVAL_SECONDS: ${TELEMETRY_KEEPALIVE_INTERVAL_SECONDS:-120}
       TELEMETRY_KEEPALIVE_MAX_SILENCE_MINUTES: ${TELEMETRY_KEEPALIVE_MAX_SILENCE_MINUTES:-3}
       TELEMETRY_KEEPALIVE_CREATE_ALERTS: ${TELEMETRY_KEEPALIVE_CREATE_ALERTS:-false}
       TELEMETRY_KEEPALIVE_ASSET_KEY: ${TELEMETRY_KEEPALIVE_ASSET_KEY:-cyberlab-demo-asset}
       NETWORK_ANOMALY_THRESHOLD: ${NETWORK_ANOMALY_THRESHOLD:-2.5}
-      ENABLE_SCHEDULED_NETWORK_ANOMALY: ${ENABLE_SCHEDULED_NETWORK_ANOMALY:-true}
+      ENABLE_SCHEDULED_NETWORK_ANOMALY: ${ENABLE_SCHEDULED_NETWORK_ANOMALY:-false}
       SCHEDULED_NETWORK_ANOMALY_INTERVAL_MINUTES: ${SCHEDULED_NETWORK_ANOMALY_INTERVAL_MINUTES:-60}
       ATTACK_LAB_ALLOWED_NETWORKS: ${ATTACK_LAB_ALLOWED_NETWORKS:-127.0.0.1/32,172.16.0.0/12,192.168.0.0/16}
       ATTACK_LAB_DEFAULT_PORTS: ${ATTACK_LAB_DEFAULT_PORTS:-22,80,443,3000,5432,6379,9200}
@@ -168,6 +176,7 @@ services:
       TELEMETRY_SURICATA_LOG_PATH: ${TELEMETRY_SURICATA_LOG_PATH:-/workspace/lab-data/suricata/eve.json}
       TELEMETRY_ZEEK_LOG_PATH: ${TELEMETRY_ZEEK_LOG_PATH:-/workspace/lab-data/zeek/conn.log}
       TELEMETRY_AUDITD_LOG_PATH: ${TELEMETRY_AUDITD_LOG_PATH:-/workspace/lab-data/auditd/audit.log}
+      TELEMETRY_AUTH_LOG_PATH: ${TELEMETRY_AUTH_LOG_PATH:-/workspace/lab-data/auth/auth.log}
       TELEMETRY_COWRIE_LOG_PATH: ${TELEMETRY_COWRIE_LOG_PATH:-/workspace/lab-data/cowrie/cowrie.json}
       CYBERLAB_AUTO_SEED_DEMO: ${CYBERLAB_AUTO_SEED_DEMO:-false}
       CYBERLAB_AUTO_SEED_FORCE: ${CYBERLAB_AUTO_SEED_FORCE:-false}
@@ -200,6 +209,8 @@ services:
   web:
     image: nginx:alpine
     container_name: secplat-web
+    profiles:
+      - optional-web
     ports:
       - "127.0.0.1:${WEB_PORT:-8082}:80"
     volumes:
@@ -250,6 +261,8 @@ services:
       context: ./services/scanner
       dockerfile: Dockerfile
     container_name: secplat-scanner
+    profiles:
+      - scan
     environment:
       API_URL: http://api:8000
       SCANNER_API_USERNAME: ${SCANNER_SERVICE_USERNAME:-scanner-service}
@@ -323,11 +336,19 @@ services:
       context: ./services/worker-web
       dockerfile: Dockerfile
     container_name: secplat-worker-web
+    cpus: 0.75
+    mem_limit: 512m
+    profiles:
+      - jobs
     environment:
       POSTGRES_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       MAX_SCAN_DURATION_SECONDS: ${MAX_SCAN_DURATION_SECONDS:-900}
       REQUIRE_DOMAIN_VERIFICATION: ${REQUIRE_DOMAIN_VERIFICATION:-true}
+      API_URL: http://api:8000
+      WORKER_API_USERNAME: ${SCANNER_SERVICE_USERNAME:-scanner-service}
+      WORKER_API_PASSWORD: ${SCANNER_SERVICE_PASSWORD:-scanner-local-strong}
+      WORKER_API_TIMEOUT_SECONDS: ${WORKER_API_TIMEOUT_SECONDS:-1800}
     depends_on:
       postgres:
         condition: service_healthy
