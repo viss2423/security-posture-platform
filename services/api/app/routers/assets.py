@@ -5,11 +5,14 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from ..audit import log_audit
+from ..cache import cache_delete_prefix, cache_get, cache_set
 from ..db import get_db
-from ..request_context import request_id_ctx
+from ..request_context import current_tenant_id, request_id_ctx
 from ..risk_scoring import recompute_asset_findings_risk
 from ..verification import generate_token, verify_domain_ownership
 from .auth import get_current_role, require_auth, require_role
+
+_ASSETS_CACHE_TTL = 30
 
 router = APIRouter(prefix="/assets", tags=["assets"])
 
@@ -50,6 +53,11 @@ def list_assets(
     _user: str = Depends(require_auth),
     role: str = Depends(get_current_role),
 ):
+    cache_key = f"secplat:cache:assets:{current_tenant_id()}:{role}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     q = text("""
       SELECT
         asset_id,
@@ -77,7 +85,9 @@ def list_assets(
       ORDER BY asset_id DESC
     """)
     rows = db.execute(q).mappings().all()
-    return [_redact_asset(dict(r), role=role) for r in rows]
+    result = [_redact_asset(dict(r), role=role) for r in rows]
+    cache_set(cache_key, result, ttl_seconds=_ASSETS_CACHE_TTL)
+    return result
 
 
 @router.get("/{asset_id}")
@@ -245,6 +255,7 @@ def create_asset(
                 request_id=request_id_ctx.get("") or None,
             )
         db.commit()
+        cache_delete_prefix(f"secplat:cache:assets:{current_tenant_id()}:")
         return dict(row)
     except Exception as e:
         db.rollback()
@@ -333,6 +344,7 @@ def update_asset_by_key(
             request_id=request_id_ctx.get("") or None,
         )
         db.commit()
+        cache_delete_prefix(f"secplat:cache:assets:{current_tenant_id()}:")
         return dict(row)
     except Exception as e:
         db.rollback()
@@ -366,6 +378,7 @@ def delete_asset_by_key(
             request_id=request_id_ctx.get("") or None,
         )
         db.commit()
+        cache_delete_prefix(f"secplat:cache:assets:{current_tenant_id()}:")
         return {"ok": True, **dict(row)}
     except Exception as e:
         db.rollback()

@@ -56,11 +56,11 @@ spec:
               value: "1"
           resources:
             requests:
-              cpu: 150m
-              memory: 256Mi
+              cpu: 300m
+              memory: 512Mi
             limits:
               cpu: "1"
-              memory: 512Mi
+              memory: 1Gi
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

@@ -130,11 +130,11 @@ api:
     port: 8000
   resources:
     requests:
-      cpu: 250m
-      memory: 512Mi
-    limits:
-      cpu: "1"
+      cpu: 500m
       memory: 1Gi
+    limits:
+      cpu: "1500m"
+      memory: 2Gi
 
 workerWeb:
   replicaCount: 1
@@ -142,11 +142,11 @@ workerWeb:
     port: 9101
   resources:
     requests:
-      cpu: 150m
-      memory: 256Mi
+      cpu: 300m
+      memory: 512Mi
     limits:
       cpu: "1"
-      memory: 512Mi
+      memory: 1Gi
 
 correlator:
   replicaCount: 1
