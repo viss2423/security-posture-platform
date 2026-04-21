@@ -1,0 +1,173 @@
+name: Supply Chain
+
+on:
+  pull_request:
+    branches: [main, master]
+  push:
+    branches: [main, master]
+
+jobs:
+  release-gate-contract:
+    name: release-gate-contract (${{ matrix.mode }})
+    if: ${{ matrix.mode == 'baseline' || vars.SECPLAT_STRICT_RELEASE_PROFILE == 'true' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [baseline, strict]
+    env:
+      SECPLAT_SLI_REPORT_JSON: ${{ vars.SECPLAT_SLI_REPORT_JSON }}
+      SECPLAT_SLI_REPORT_PATH: ${{ vars.SECPLAT_SLI_REPORT_PATH }}
+      SECPLAT_RUNTIME_DB_DSN: ${{ secrets.SECPLAT_RUNTIME_DB_DSN }}
+      SECPLAT_REQUIRE_RUNTIME_DB_ROLE_CHECK: ${{ vars.SECPLAT_REQUIRE_RUNTIME_DB_ROLE_CHECK }}
+      SECPLAT_REQUIRE_REAL_IMAGE_DIGESTS: ${{ vars.SECPLAT_REQUIRE_REAL_IMAGE_DIGESTS }}
+      SECPLAT_REQUIRE_RELEASE_GATE_INPUT: ${{ vars.SECPLAT_REQUIRE_RELEASE_GATE_INPUT }}
+      SECPLAT_RELEASE_IMAGE_MAP_PATH: ${{ vars.SECPLAT_RELEASE_IMAGE_MAP_PATH }}
+      SECPLAT_RELEASE_GITHUB_REPOSITORY: ${{ vars.SECPLAT_RELEASE_GITHUB_REPOSITORY }}
+      SECPLAT_REQUIRE_REAL_SECURITY_CONTACTS: ${{ vars.SECPLAT_REQUIRE_REAL_SECURITY_CONTACTS }}
+      SECURITY_CONTACT_EMAIL: ${{ vars.SECPLAT_SECURITY_CONTACT_EMAIL }}
+      SECURITY_CONTACT_URL: ${{ vars.SECPLAT_SECURITY_CONTACT_URL }}
+      SECURITY_POLICY_URL: ${{ vars.SECPLAT_SECURITY_POLICY_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate release-gate contract script
+        run: |
+          if [ "${{ matrix.mode }}" = "strict" ]; then
+            python services/api/scripts/check_release_gate.py
+          elif [ "${SECPLAT_REQUIRE_RELEASE_GATE_INPUT}" = "true" ]; then
+            python services/api/scripts/check_release_gate.py
+          else
+            python services/api/scripts/check_release_gate.py --allow-sample-fallback
+          fi
+
+      - name: Validate contract parity checks
+        run: python services/api/scripts/check_contract_parity.py
+
+      - name: Render production release bundle
+        run: |
+          image_map_path="${SECPLAT_RELEASE_IMAGE_MAP_PATH:-services/api/examples/release-images.example.json}"
+          github_repository="${SECPLAT_RELEASE_GITHUB_REPOSITORY:-acme/security-posture-platform}"
+          if [ "${{ matrix.mode }}" = "strict" ] && [ -z "${SECPLAT_RELEASE_IMAGE_MAP_PATH}" ]; then
+            echo "SECPLAT_RELEASE_IMAGE_MAP_PATH is required in strict mode."
+            exit 2
+          fi
+          python services/api/scripts/render_release_bundle.py \
+            --image-map-json "${image_map_path}" \
+            --out-dir artifacts/release-bundle \
+            --github-repository "${github_repository}"
+
+      - name: Validate Kubernetes image pinning and policy enforcement
+        run: |
+          if [ "${{ matrix.mode }}" = "strict" ]; then
+            python services/api/scripts/check_k8s_image_pinning.py \
+              --repo-root artifacts/release-bundle \
+              --k8s-dir infra/k8s \
+              --policy-file infra/policy/kyverno/verify-secplat-images.yaml \
+              --require-real-digests
+          elif [ "${SECPLAT_REQUIRE_REAL_IMAGE_DIGESTS}" = "true" ]; then
+            python services/api/scripts/check_k8s_image_pinning.py \
+              --repo-root artifacts/release-bundle \
+              --k8s-dir infra/k8s \
+              --policy-file infra/policy/kyverno/verify-secplat-images.yaml \
+              --require-real-digests
+          else
+            python services/api/scripts/check_k8s_image_pinning.py \
+              --repo-root artifacts/release-bundle \
+              --k8s-dir infra/k8s \
+              --policy-file infra/policy/kyverno/verify-secplat-images.yaml
+          fi
+
+      - name: Validate Kyverno admission controls
+        run: |
+          if [ "${{ matrix.mode }}" = "strict" ]; then
+            python services/api/scripts/verify_kyverno_admission.py \
+              --repo-root artifacts/release-bundle \
+              --policy-file infra/policy/kyverno/verify-secplat-images.yaml \
+              --require-real-attestors
+          else
+            python services/api/scripts/verify_kyverno_admission.py \
+              --repo-root artifacts/release-bundle \
+              --policy-file infra/policy/kyverno/verify-secplat-images.yaml
+          fi
+
+      - name: Validate security disclosure configuration
+        run: |
+          if [ "${{ matrix.mode }}" = "strict" ] || [ "${SECPLAT_REQUIRE_REAL_SECURITY_CONTACTS}" = "true" ]; then
+            python services/api/scripts/check_security_disclosure_config.py --require-real
+          else
+            python services/api/scripts/check_security_disclosure_config.py
+          fi
+
+      - name: Validate DB runtime role posture
+        run: |
+          if [ "${{ matrix.mode }}" = "strict" ]; then
+            python services/api/scripts/check_db_runtime_role.py --require-dsn
+          elif [ "${SECPLAT_REQUIRE_RUNTIME_DB_ROLE_CHECK}" = "true" ]; then
+            python services/api/scripts/check_db_runtime_role.py --require-dsn
+          else
+            python services/api/scripts/check_db_runtime_role.py
+          fi
+
+      - name: Validate postmortem evidence pipeline
+        run: python services/api/scripts/check_postmortem_evidence.py
+
+  upgrade-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate upgrade contract and migration numbering
+        run: python services/api/scripts/check_upgrade_contract.py
+
+      - name: Validate migration compatibility guardrails
+        run: python services/api/scripts/check_upgrade_compatibility.py
+
+  sbom-and-provenance:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate SBOM (SPDX JSON)
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - name: Install Cosign
+        if: github.event_name == 'push'
+        uses: sigstore/cosign-installer@v3.8.1
+
+      - name: Sign SBOM (keyless)
+        if: github.event_name == 'push'
+        run: cosign sign-blob --yes --output-signature sbom.sig --output-certificate sbom.pem sbom.spdx.json
+
+      - name: Generate build provenance attestation
+        if: github.event_name == 'push'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: sbom.spdx.json
+
+      - name: Upload supply-chain artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: supply-chain-artifacts
+          path: |
+            sbom.spdx.json
+            sbom.sig
+            sbom.pem

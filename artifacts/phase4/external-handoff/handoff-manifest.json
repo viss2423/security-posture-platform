@@ -1,0 +1,77 @@
+{
+  "artifacts": [
+    {
+      "exists": true,
+      "path": "artifacts/phase4/ga-local-report.json",
+      "size_bytes": 6858
+    },
+    {
+      "exists": true,
+      "path": "artifacts/phase4/release-bundle/release-bundle.json",
+      "size_bytes": 1069
+    },
+    {
+      "exists": true,
+      "path": "docs/contracts/stability-contract.md",
+      "size_bytes": 1679
+    },
+    {
+      "exists": true,
+      "path": "docs/contracts/upgrade-policy.md",
+      "size_bytes": 1054
+    },
+    {
+      "exists": true,
+      "path": "docs/operations/backup-restore-verification.md",
+      "size_bytes": 1669
+    },
+    {
+      "exists": true,
+      "path": "docs/operations/design-partner-rollout-checklist.md",
+      "size_bytes": 498
+    },
+    {
+      "exists": true,
+      "path": "docs/operations/design-partner-signoff-template.md",
+      "size_bytes": 609
+    },
+    {
+      "exists": true,
+      "path": "docs/operations/external-security-assessment-runbook.md",
+      "size_bytes": 1841
+    },
+    {
+      "exists": true,
+      "path": "docs/operations/incident-severity-and-escalation.md",
+      "size_bytes": 759
+    },
+    {
+      "exists": true,
+      "path": "docs/security/vulnerability-disclosure.md",
+      "size_bytes": 1223
+    },
+    {
+      "exists": true,
+      "path": "docs/support/support-sla.md",
+      "size_bytes": 615
+    }
+  ],
+  "assessment_commands": [
+    "py services/api/scripts/verify_phase4_local_ga.py --namespace secplat-phase3 --api-service secplat-api --admin-password <admin-password>",
+    "py services/api/scripts/render_release_bundle.py --image-map-json services/api/examples/release-images.example.json --out-dir artifacts/phase4/release-bundle --github-repository acme/security-posture-platform",
+    "py services/api/scripts/verify_kyverno_admission.py --repo-root artifacts/phase4/release-bundle --policy-file infra/policy/kyverno/verify-secplat-images.yaml --require-real-attestors",
+    "py services/api/scripts/build_readiness_evidence.py --out artifacts/phase4/readiness-manifest.json"
+  ],
+  "generated_at": "2026-04-04T13:04:11.462976Z",
+  "manual_closeout_items": [
+    "Attach the final external security assessment or pen-test report and remediation status.",
+    "Record design-partner validation outcome against the signoff template and collect stakeholder approval."
+  ],
+  "missing": [],
+  "ok": true,
+  "target_audiences": [
+    "external security assessor",
+    "design partner",
+    "release manager"
+  ]
+}

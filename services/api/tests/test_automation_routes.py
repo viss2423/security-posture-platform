@@ -208,6 +208,15 @@ def test_automation_playbook_run_approval_and_rollback(client, admin_headers):
     assert execute_rollback.status_code == 200, execute_rollback.text
     assert execute_rollback.json()["rollback"]["status"] == "executed"
 
+    dashboard = client.get("/automation/dashboard?lookback_hours=72", headers=admin_headers)
+    assert dashboard.status_code == 200, dashboard.text
+    dashboard_body = dashboard.json()
+    assert int(dashboard_body["playbooks"]["enabled"]) >= 2
+    assert int(dashboard_body["runs"]["total"]) >= 2
+    assert int(dashboard_body["approvals"]["total"]) >= 1
+    assert int(dashboard_body["rollbacks"]["total"]) >= 1
+    assert isinstance(dashboard_body["runs"]["top_triggers"], list)
+
     asset = client.get(f"/assets/by-key/{asset_key}", headers=admin_headers)
     assert asset.status_code == 200, asset.text
     tags = asset.json().get("tags") or []

@@ -31,8 +31,11 @@ spec:
           type: RuntimeDefault
       containers:
         - name: notifier
-          image: ghcr.io/your-org/secplat-notifier:latest
+          image: ghcr.io/your-org/secplat-notifier@sha256:5555555555555555555555555555555555555555555555555555555555555555
           imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9103
+              name: metrics
           envFrom:
             - configMapRef:
                 name: secplat-config

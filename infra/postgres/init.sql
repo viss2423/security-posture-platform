@@ -1,5 +1,20 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+-- Local bootstrap: create a dedicated least-privilege runtime role used by API/worker DSNs.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'secplat_runtime') THEN
+    CREATE ROLE secplat_runtime LOGIN PASSWORD 'secplat_runtime';
+  END IF;
+  ALTER ROLE secplat_runtime NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION;
+END $$;
+
+GRANT USAGE ON SCHEMA public TO secplat_runtime;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO secplat_runtime;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO secplat_runtime;
+
 -- Single assets table matching API and migrations (asset_id for findings FK)
 CREATE TABLE IF NOT EXISTS assets (
   asset_id       SERIAL PRIMARY KEY,
@@ -100,3 +115,7 @@ CREATE TABLE IF NOT EXISTS alert_states (
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_alert_states_state ON alert_states(state);
+
+-- Ensure runtime role can operate on bootstrap-created tables and sequences.
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO secplat_runtime;
+GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO secplat_runtime;

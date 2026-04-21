@@ -1,0 +1,187 @@
+{{- if .Values.cronjobs.ingestion.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "secplat.fullname" . }}-ingestion-health
+  namespace: {{ include "secplat.namespace" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "secplat.fullname" . }}-ingestion-health
+    app.kubernetes.io/part-of: {{ include "secplat.name" . }}
+{{ include "secplat.labels" . | indent 4 }}
+spec:
+  schedule: {{ .Values.cronjobs.ingestion.schedule | quote }}
+  successfulJobsHistoryLimit: {{ .Values.cronjobs.ingestion.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.cronjobs.ingestion.failedJobsHistoryLimit }}
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: {{ .Values.cronjobs.ingestion.backoffLimit }}
+      activeDeadlineSeconds: {{ .Values.cronjobs.ingestion.activeDeadlineSeconds }}
+      ttlSecondsAfterFinished: {{ .Values.cronjobs.ingestion.ttlSecondsAfterFinished }}
+      template:
+        metadata:
+          annotations:
+            checksum/config-secret: {{ include (print .Template.BasePath "/config-secret.yaml") . | sha256sum }}
+          labels:
+            app.kubernetes.io/name: {{ include "secplat.fullname" . }}-ingestion-health
+            app.kubernetes.io/part-of: {{ include "secplat.name" . }}
+            secplat-role: ingestion
+        spec:
+          serviceAccountName: {{ include "secplat.serviceAccountName" . }}
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          securityContext:
+{{ toYaml .Values.podSecurityContext | indent 12 }}
+          containers:
+            - name: ingestion-health
+              image: {{ .Values.images.ingestion | quote }}
+              imagePullPolicy: IfNotPresent
+              command: ["/bin/bash", "-lc"]
+              args:
+                - |
+                  set -euo pipefail
+                  api_base="${API_URL%/}"
+                  token=""
+                  auth_user="${API_AUTH_USERNAME:-${INGESTION_SERVICE_USERNAME:-}}"
+                  auth_pass="${API_AUTH_PASSWORD:-${INGESTION_SERVICE_PASSWORD:-}}"
+                  if [ -n "${auth_user}" ] && [ -n "${auth_pass}" ]; then
+                    token="$(curl -sS --connect-timeout 5 --max-time 20 -X POST "${api_base}/auth/login" -H "Content-Type: application/x-www-form-urlencoded" --data-urlencode "username=${auth_user}" --data-urlencode "password=${auth_pass}" | jq -r '.access_token // empty')"
+                  fi
+                  if [ -z "${token}" ] && [ -n "${ADMIN_USERNAME:-}" ] && [ -n "${ADMIN_PASSWORD:-}" ]; then
+                    token="$(curl -sS --connect-timeout 5 --max-time 20 -X POST "${api_base}/auth/login" -H "Content-Type: application/x-www-form-urlencoded" --data-urlencode "username=${ADMIN_USERNAME}" --data-urlencode "password=${ADMIN_PASSWORD}" | jq -r '.access_token // empty')"
+                  fi
+                  if [ -n "${token}" ]; then
+                    export API_BEARER_TOKEN="${token}"
+                  fi
+                  INDEX=secplat-assets API_URL="${api_base}/assets/" OS_URL="${INGESTION_OS_URL}" /app/scripts/assets_to_opensearch.sh
+                  OPENSEARCH_URL="${OPENSEARCH_URL}" API_HEALTH_URL="${API_URL}/health" VERIFY_WEB_URL="${INGESTION_VERIFY_WEB_URL}" EXAMPLE_COM_URL="${INGESTION_EXAMPLE_COM_URL}" /app/scripts/health_to_opensearch.sh
+                  OPENSEARCH_URL="${OPENSEARCH_URL}" JUICE_URL="${INGESTION_JUICE_URL}" /app/scripts/juice_health_to_opensearch.sh
+              envFrom:
+                - configMapRef:
+                    name: {{ include "secplat.fullname" . }}-config
+                - secretRef:
+                    name: {{ include "secplat.fullname" . }}-secrets
+              env:
+                - name: API_AUTH_USERNAME
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "secplat.fullname" . }}-secrets
+                      key: INGESTION_SERVICE_USERNAME
+                - name: API_AUTH_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "secplat.fullname" . }}-secrets
+                      key: INGESTION_SERVICE_PASSWORD
+              resources:
+{{ toYaml .Values.cronjobs.ingestion.resources | indent 16 }}
+              securityContext:
+{{ toYaml .Values.containerSecurityContext | indent 16 }}
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}
+---
+{{- end }}
+{{- if .Values.cronjobs.snapshot.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "secplat.fullname" . }}-report-snapshot
+  namespace: {{ include "secplat.namespace" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "secplat.fullname" . }}-report-snapshot
+    app.kubernetes.io/part-of: {{ include "secplat.name" . }}
+{{ include "secplat.labels" . | indent 4 }}
+spec:
+  schedule: {{ .Values.cronjobs.snapshot.schedule | quote }}
+  successfulJobsHistoryLimit: {{ .Values.cronjobs.snapshot.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.cronjobs.snapshot.failedJobsHistoryLimit }}
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: {{ .Values.cronjobs.snapshot.backoffLimit }}
+      activeDeadlineSeconds: {{ .Values.cronjobs.snapshot.activeDeadlineSeconds }}
+      ttlSecondsAfterFinished: {{ .Values.cronjobs.snapshot.ttlSecondsAfterFinished }}
+      template:
+        metadata:
+          annotations:
+            checksum/config-secret: {{ include (print .Template.BasePath "/config-secret.yaml") . | sha256sum }}
+          labels:
+            app.kubernetes.io/name: {{ include "secplat.fullname" . }}-report-snapshot
+            app.kubernetes.io/part-of: {{ include "secplat.name" . }}
+        spec:
+          serviceAccountName: {{ include "secplat.serviceAccountName" . }}
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          securityContext:
+{{ toYaml .Values.podSecurityContext | indent 12 }}
+          containers:
+            - name: snapshot
+              image: {{ .Values.images.api | quote }}
+              imagePullPolicy: IfNotPresent
+              command: ["python", "-c"]
+              args:
+                - |
+                  import os, time, httpx
+                  base = os.environ["API_URL"].rstrip("/")
+                  user = os.environ["ADMIN_USERNAME"]
+                  pwd = os.environ["ADMIN_PASSWORD"]
+                  period = os.environ.get("SNAPSHOT_PERIOD", "24h")
+                  timeout = httpx.Timeout(60.0, connect=10.0)
+                  with httpx.Client(timeout=timeout) as client:
+                    token = None
+                    last_exc = None
+                    for attempt in range(1, 4):
+                      try:
+                        r = client.post(f"{base}/auth/login", data={"username": user, "password": pwd})
+                        r.raise_for_status()
+                        token = r.json().get("access_token")
+                        if not token:
+                          raise RuntimeError("access_token missing from /auth/login response")
+                        break
+                      except Exception as exc:
+                        last_exc = exc
+                        if attempt < 3:
+                          time.sleep(2 * attempt)
+                    if not token:
+                      raise last_exc or RuntimeError("login_failed")
+                    snap_resp = None
+                    for attempt in range(1, 4):
+                      try:
+                        snap_resp = client.post(
+                          f"{base}/posture/reports/snapshot",
+                          params={"period": period},
+                          headers={"Authorization": f"Bearer {token}"},
+                        )
+                        snap_resp.raise_for_status()
+                        break
+                      except Exception as exc:
+                        last_exc = exc
+                        if attempt < 3:
+                          time.sleep(2 * attempt)
+                    if snap_resp is None or snap_resp.is_error:
+                      raise last_exc or RuntimeError("snapshot_request_failed")
+                    print(snap_resp.text)
+              envFrom:
+                - configMapRef:
+                    name: {{ include "secplat.fullname" . }}-config
+                - secretRef:
+                    name: {{ include "secplat.fullname" . }}-secrets
+              env:
+                - name: SNAPSHOT_PERIOD
+                  value: {{ .Values.cronjobs.snapshot.snapshotPeriod | quote }}
+                - name: PYTHONDONTWRITEBYTECODE
+                  value: "1"
+              resources:
+{{ toYaml .Values.cronjobs.snapshot.resources | indent 16 }}
+              securityContext:
+{{ toYaml .Values.containerSecurityContext | indent 16 }}
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}
+{{- end }}

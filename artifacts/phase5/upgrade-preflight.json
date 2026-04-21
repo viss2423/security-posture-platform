@@ -1,0 +1,59 @@
+{
+  "api_base_url": null,
+  "checks": [
+    {
+      "check": "upgrade_contract",
+      "detail": {
+        "errors": [],
+        "migrations": {
+          "count": 29,
+          "first": 1,
+          "last": 29
+        },
+        "ok": true
+      },
+      "ok": true
+    },
+    {
+      "check": "upgrade_compatibility",
+      "detail": {
+        "findings": [],
+        "migration_count": 29,
+        "ok": true
+      },
+      "ok": true
+    },
+    {
+      "check": "runtime_role_posture",
+      "detail": {
+        "bypass_rls": false,
+        "checks": [
+          {
+            "check": "db_role_resolved",
+            "detail": "secplat_runtime",
+            "ok": true
+          },
+          {
+            "check": "db_role_not_superuser",
+            "detail": "superuser disabled",
+            "ok": true
+          },
+          {
+            "check": "db_role_no_bypass_rls",
+            "detail": "BYPASSRLS disabled",
+            "ok": true
+          }
+        ],
+        "current_user": "secplat_runtime",
+        "dsn_source": "arg:--dsn",
+        "errors": [],
+        "is_superuser": false,
+        "ok": true,
+        "skipped": false
+      },
+      "ok": true
+    }
+  ],
+  "ok": true,
+  "runtime_dsn_provided": true
+}

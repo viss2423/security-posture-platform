@@ -8,6 +8,7 @@ if [[ "${API_BASE_URL}" == "${API_URL}" ]]; then
 fi
 OS_URL="${OS_URL:-http://localhost:9200}"
 INDEX="${INDEX:-secplat-assets}"
+DEFAULT_ORG_ID="${DEFAULT_ORG_ID:-default}"
 API_AUTH_USERNAME="${API_AUTH_USERNAME:-${ADMIN_USERNAME:-}}"
 API_AUTH_PASSWORD="${API_AUTH_PASSWORD:-${ADMIN_PASSWORD:-}}"
 API_BEARER_TOKEN="${API_BEARER_TOKEN:-}"
@@ -54,12 +55,21 @@ echo "$assets_json" | jq -c '.[]' | while read -r asset; do
     continue
   fi
 
+  asset_org_id="$(echo "$asset" | jq -r '.org_id // empty')"
+  if [[ -z "$asset_org_id" || "$asset_org_id" == "null" ]]; then
+    asset_org_id="$DEFAULT_ORG_ID"
+  fi
+  doc_id="$asset_key"
+  if [[ -n "$asset_org_id" && "$asset_org_id" != "default" ]]; then
+    doc_id="${asset_org_id}::${asset_key}"
+  fi
+
   # Upsert using _id = asset_key
-  curl -sS -X PUT "$OS_URL/$INDEX/_doc/$asset_key" \
+  curl -sS -X PUT "$OS_URL/$INDEX/_doc/$doc_id" \
     -H "Content-Type: application/json" \
     -d "$asset" > /dev/null
 
-  echo "upserted asset_key=$asset_key"
+  echo "upserted asset_key=$asset_key org_id=$asset_org_id doc_id=$doc_id"
 done
 
 # Refresh so Grafana can see immediately

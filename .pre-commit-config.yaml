@@ -18,12 +18,15 @@ repos:
     hooks:
       - id: gitleaks
 
-  - repo: https://github.com/returntocorp/semgrep
-    rev: v1.91.0
+  - repo: local
     hooks:
       - id: semgrep
+        name: semgrep
+        entry: powershell -ExecutionPolicy Bypass -File scripts/run-semgrep.ps1
+        language: system
         args: ["--config=auto", "--error", "--disable-version-check", "--skip-unknown-extensions"]
         files: \.(py|js|ts|tsx)$
+        exclude: ^(services/api/scripts/|scripts/dev\.js)
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.6.9

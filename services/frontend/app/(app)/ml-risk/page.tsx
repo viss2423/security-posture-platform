@@ -334,14 +334,14 @@ export default function MlRiskPage() {
       <section className="page-hero animate-in">
         <div className="hero-grid">
           <div>
-            <h1 className="hero-title">ML Risk Operations Lab</h1>
+            <h1 className="hero-title">Scoring Studio</h1>
             <p className="hero-copy">
-              Train, calibrate, and continuously validate the live classifier with drift tracking,
-              threshold controls, and analyst feedback loops.
+              Tune the scoring model, review drift, and improve prioritization with analyst
+              feedback.
             </p>
             <div className="mt-4 flex flex-wrap gap-2">
               <Link href="/findings" className="btn-secondary text-sm">
-                Back to findings
+                Back to risk review
               </Link>
               {canMutate && (
                 <button
@@ -419,7 +419,7 @@ export default function MlRiskPage() {
 
       {loading && !status && !evaluation ? (
         <div className="card">
-          <p className="text-sm text-[var(--muted)]">Loading model operations view...</p>
+          <p className="text-sm text-[var(--muted)]">Loading scoring studio...</p>
         </div>
       ) : (
         <>

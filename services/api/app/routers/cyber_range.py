@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.attack_lab import launch_attack_lab_job
 from app.audit import log_audit
 from app.db import get_db
-from app.request_context import request_id_ctx
+from app.request_context import current_tenant_id, request_id_ctx
 from app.routers.auth import require_auth, require_role
 
 router = APIRouter(prefix="/cyber-range", tags=["cyber-range"])
@@ -195,8 +195,9 @@ def launch_cyber_range_mission(
         db.execute(
             text(
                 """
-                INSERT INTO scan_jobs(job_type, requested_by, status, job_params_json)
+                INSERT INTO scan_jobs(org_id, job_type, requested_by, status, job_params_json)
                 VALUES (
+                  :org_id,
                   'attack_lab_run',
                   :requested_by,
                   'queued',
@@ -214,7 +215,11 @@ def launch_cyber_range_mission(
                   job_params_json
                 """
             ),
-            {"requested_by": user, "job_params_json": json.dumps(params)},
+            {
+                "org_id": current_tenant_id(),
+                "requested_by": user,
+                "job_params_json": json.dumps(params),
+            },
         )
         .mappings()
         .first()

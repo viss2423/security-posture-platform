@@ -1,0 +1,43 @@
+groups:
+  - name: secplat-phase1-observability
+    rules:
+      - alert: SecPlatApiAvailabilityBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{status="5xx"}[5m]))
+            /
+            clamp_min(sum(rate(http_requests_total[5m])), 0.001)
+          ) > 0.005
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SecPlat API availability error budget is burning"
+          description: "The 5xx rate exceeded the GA error budget threshold over the last 10 minutes."
+
+      - alert: SecPlatApiLatencyP95High
+        expr: secplat_api_p95_latency_ms > 500
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SecPlat API p95 latency is above target"
+          description: "The exported API p95 latency metric stayed above 500 ms for 15 minutes."
+
+      - alert: SecPlatWorkerLoopErrors
+        expr: increase(secplat_worker_loop_errors_total[10m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SecPlat worker loop is erroring"
+          description: "The worker main loop emitted at least one error in the last 10 minutes."
+
+      - alert: SecPlatBackgroundServiceMissing
+        expr: up{job=~"secplat-worker-web|secplat-correlator|secplat-notifier|secplat-deriver"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "A SecPlat background service metrics endpoint is down"
+          description: "Prometheus could not scrape one of the background service metrics endpoints."

@@ -1,13 +1,28 @@
 import type { Metadata } from 'next';
-import { Manrope, Space_Grotesk } from 'next/font/google';
+import { Instrument_Sans, Instrument_Serif, JetBrains_Mono } from 'next/font/google';
 import './globals.css';
 
-const manrope = Manrope({ subsets: ['latin'], variable: '--font-sans' });
-const spaceGrotesk = Space_Grotesk({ subsets: ['latin'], variable: '--font-display' });
+const instrumentSans = Instrument_Sans({
+  subsets: ['latin'],
+  variable: '--font-sans',
+  display: 'swap',
+});
+const instrumentSerif = Instrument_Serif({
+  subsets: ['latin'],
+  variable: '--font-display',
+  display: 'swap',
+  weight: '400',
+});
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ['latin'],
+  variable: '--font-mono',
+  display: 'swap',
+});
 
 export const metadata: Metadata = {
-  title: 'SecPlat - Security Posture',
-  description: 'Security posture and asset overview',
+  title: 'SecPlat | Security Posture Platform',
+  description:
+    'Customer-ready security posture operations across exposure, detections, incidents, and governance.',
 };
 
 export default function RootLayout({
@@ -16,8 +31,13 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={`${manrope.variable} ${spaceGrotesk.variable}`}>
-      <body className="font-sans antialiased text-[var(--text)] selection:bg-[var(--green)]/20">{children}</body>
+    <html
+      lang="en"
+      className={`${instrumentSans.variable} ${instrumentSerif.variable} ${jetbrainsMono.variable}`}
+    >
+      <body className="font-sans antialiased text-[var(--text)] selection:bg-[var(--selection-bg)] selection:text-[var(--selection-text)]">
+        {children}
+      </body>
     </html>
   );
 }

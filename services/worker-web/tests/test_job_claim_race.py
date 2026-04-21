@@ -1,45 +1,26 @@
-"""
-Regression test for worker DB claim race:
-- concurrent fetch_job() calls must never claim the same queued row twice.
-
-Run:
-  POSTGRES_DSN=postgresql://secplat:secplat@localhost:5433/secplat ^
-  pytest services/worker-web/tests/test_job_claim_race.py -v
-"""
-
 from __future__ import annotations
 
 import importlib.util
 import os
-import threading
-import uuid
+import sys
 from pathlib import Path
 
-import psycopg
-import pytest
-from psycopg import sql
-from psycopg.rows import dict_row
+
+class _FakeResponse:
+    def __init__(self, status_code: int, payload: dict | None = None):
+        self.status_code = status_code
+        self._payload = payload or {}
+        self.content = b"{}" if payload is not None else b""
+
+    def json(self) -> dict:
+        return dict(self._payload)
 
 
-def _normalize_dsn(raw: str | None) -> str | None:
-    if not raw:
-        return None
-    return raw.replace("postgresql+psycopg://", "postgresql://")
-
-
-POSTGRES_DSN = _normalize_dsn(os.getenv("POSTGRES_DSN"))
-
-pytestmark = pytest.mark.skipif(
-    not POSTGRES_DSN,
-    reason="POSTGRES_DSN not set; worker race test requires Postgres",
-)
-
-
-@pytest.fixture(scope="module")
-def worker_module():
-    # worker.py reads POSTGRES_DSN at import time.
-    os.environ["POSTGRES_DSN"] = POSTGRES_DSN or ""
+def _load_worker_module():
     worker_path = Path(__file__).resolve().parents[1] / "worker.py"
+    worker_dir = str(worker_path.parent)
+    if worker_dir not in sys.path:
+        sys.path.insert(0, worker_dir)
     spec = importlib.util.spec_from_file_location("secplat_worker_web_worker", worker_path)
     assert spec and spec.loader, "Failed to load worker.py module spec"
     module = importlib.util.module_from_spec(spec)
@@ -47,103 +28,130 @@ def worker_module():
     return module
 
 
-def _set_search_path(conn: psycopg.Connection, schema_name: str) -> None:
-    with conn.cursor() as cur:
-        cur.execute(sql.SQL("SET search_path TO {}, public").format(sql.Identifier(schema_name)))
+def test_worker_control_plane_uses_claim_execute_complete_contract(monkeypatch):
+    os.environ.setdefault("API_URL", "http://api:8000")
+    os.environ.setdefault("WORKER_API_USERNAME", "scanner-service")
+    os.environ.setdefault("WORKER_API_PASSWORD", "scanner-local-strong")
+    worker = _load_worker_module()
+    calls: list[tuple[str, dict | None, dict | None]] = []
+
+    responses = iter(
+        [
+            _FakeResponse(200, {"access_token": "token-1"}),
+            _FakeResponse(
+                200,
+                {
+                    "claimed": True,
+                    "job_id": 42,
+                    "job_type": "web_exposure",
+                    "status": "running",
+                    "claim_token": "claim-42",
+                },
+            ),
+            _FakeResponse(
+                200,
+                {
+                    "ok": True,
+                    "job_id": 42,
+                    "job_type": "web_exposure",
+                    "status": "done",
+                },
+            ),
+            _FakeResponse(
+                200,
+                {
+                    "job_id": 42,
+                    "status": "done",
+                    "acknowledge": True,
+                },
+            ),
+        ]
+    )
+
+    def _fake_post(url, *, data=None, json=None, headers=None, timeout=None):
+        calls.append((url, data or json, headers))
+        return next(responses)
+
+    monkeypatch.setattr(worker.requests, "post", _fake_post)
+    monkeypatch.setattr(
+        worker,
+        "inject_context",
+        lambda carrier: carrier.__setitem__("traceparent", "00-worker-claim-01") or carrier,
+    )
+
+    claim = worker.claim_job_by_id(42, "worker-a", trace_id="trace-123")
+    assert claim["claimed"] is True
+    assert claim["claim_token"] == "claim-42"
+
+    executed = worker._execute_job_via_api(42, "web_exposure", trace_id="trace-123")
+    assert executed["status"] == "done"
+
+    completed = worker.complete_job(
+        42,
+        "claim-42",
+        "worker-a",
+        log_line="Done",
+        trace_id="trace-123",
+    )
+    assert completed["acknowledge"] is True
+
+    assert calls[0][0].endswith("/auth/login")
+    assert calls[1][0].endswith("/internal/jobs/42/claim")
+    assert calls[2][0].endswith("/jobs/42/execute")
+    assert calls[3][0].endswith("/internal/jobs/42/complete")
+    assert calls[1][1] == {"worker_id": "worker-a"}
+    assert calls[3][1]["claim_token"] == "claim-42"
+    assert calls[2][2]["x-request-id"] == "trace-123"
+    assert calls[2][2]["traceparent"] == "00-worker-claim-01"
 
 
-def _create_isolated_scan_jobs_table(dsn: str, schema_name: str) -> None:
-    with psycopg.connect(dsn, autocommit=True) as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema_name)))
-            cur.execute(
-                sql.SQL(
-                    """
-                    CREATE TABLE {}.scan_jobs (
-                      job_id BIGSERIAL PRIMARY KEY,
-                      job_type TEXT NOT NULL,
-                      target_asset_id INTEGER,
-                      requested_by TEXT,
-                      status TEXT NOT NULL DEFAULT 'queued',
-                      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                      started_at TIMESTAMPTZ,
-                      finished_at TIMESTAMPTZ,
-                      error TEXT,
-                      log_output TEXT,
-                      retry_count INTEGER NOT NULL DEFAULT 0
-                    )
-                    """
-                ).format(sql.Identifier(schema_name))
-            )
+def test_worker_control_plane_uses_fail_endpoint_for_retryable_errors(monkeypatch):
+    os.environ.setdefault("API_URL", "http://api:8000")
+    os.environ.setdefault("WORKER_API_USERNAME", "scanner-service")
+    os.environ.setdefault("WORKER_API_PASSWORD", "scanner-local-strong")
+    worker = _load_worker_module()
+    calls: list[tuple[str, dict | None, dict | None]] = []
 
+    responses = iter(
+        [
+            _FakeResponse(200, {"access_token": "token-2"}),
+            _FakeResponse(
+                200,
+                {
+                    "job_id": 52,
+                    "status": "queued",
+                    "requeued": True,
+                    "acknowledge": False,
+                    "existing_terminal": False,
+                },
+            ),
+        ]
+    )
 
-def _drop_schema(dsn: str, schema_name: str) -> None:
-    with psycopg.connect(dsn, autocommit=True) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema_name))
-            )
+    def _fake_post(url, *, data=None, json=None, headers=None, timeout=None):
+        calls.append((url, data or json, headers))
+        return next(responses)
 
+    monkeypatch.setattr(worker.requests, "post", _fake_post)
+    monkeypatch.setattr(
+        worker,
+        "inject_context",
+        lambda carrier: carrier.__setitem__("traceparent", "00-worker-fail-01") or carrier,
+    )
 
-def test_fetch_job_claim_is_single_winner_under_concurrency(worker_module):
-    schema_name = f"worker_race_{uuid.uuid4().hex[:8]}"
-    _create_isolated_scan_jobs_table(POSTGRES_DSN, schema_name)
+    failed = worker.fail_job(
+        52,
+        "claim-52",
+        "worker-a",
+        error="retryable=true error=upstream timeout",
+        retryable=True,
+        log_line="Retrying from stream after error",
+        trace_id="trace-456",
+    )
 
-    try:
-        with psycopg.connect(POSTGRES_DSN, row_factory=dict_row, autocommit=True) as conn:
-            _set_search_path(conn, schema_name)
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO scan_jobs(job_type, target_asset_id, requested_by, status)
-                    VALUES ('web_exposure', 123, 'pytest', 'queued')
-                    RETURNING job_id
-                    """
-                )
-                inserted_job_id = cur.fetchone()["job_id"]
-
-        barrier = threading.Barrier(2)
-        results: list[int | None] = []
-        lock = threading.Lock()
-
-        def _claim_once() -> None:
-            conn = psycopg.connect(POSTGRES_DSN, row_factory=dict_row, autocommit=True)
-            try:
-                _set_search_path(conn, schema_name)
-                barrier.wait(timeout=5)
-                row = worker_module.fetch_job(conn)
-                claimed = row["job_id"] if row else None
-                with lock:
-                    results.append(claimed)
-            finally:
-                conn.close()
-
-        t1 = threading.Thread(target=_claim_once)
-        t2 = threading.Thread(target=_claim_once)
-        t1.start()
-        t2.start()
-        t1.join(timeout=10)
-        t2.join(timeout=10)
-        assert not t1.is_alive() and not t2.is_alive(), "Threads did not complete"
-
-        assert len(results) == 2
-        assert results.count(inserted_job_id) == 1, f"expected single winner, got {results}"
-        assert results.count(None) == 1, f"expected one loser, got {results}"
-
-        with psycopg.connect(POSTGRES_DSN, row_factory=dict_row, autocommit=True) as conn:
-            _set_search_path(conn, schema_name)
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT status, started_at
-                    FROM scan_jobs
-                    WHERE job_id = %s
-                    """,
-                    (inserted_job_id,),
-                )
-                row = cur.fetchone()
-                assert row is not None
-                assert row["status"] == "running"
-                assert row["started_at"] is not None
-    finally:
-        _drop_schema(POSTGRES_DSN, schema_name)
+    assert failed["requeued"] is True
+    assert failed["status"] == "queued"
+    assert calls[1][0].endswith("/internal/jobs/52/fail")
+    assert calls[1][1]["retryable"] is True
+    assert calls[1][2]["x-request-id"] == "trace-456"
+    assert calls[1][2]["traceparent"] == "00-worker-fail-01"

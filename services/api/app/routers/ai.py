@@ -27,7 +27,7 @@ from app.ai_context_builder import (
 )
 from app.audit import log_audit
 from app.db import get_db
-from app.request_context import request_id_ctx
+from app.request_context import request_id_ctx, tenant_id_ctx
 from app.routers.alerts import _load_alert_enrichment
 from app.routers.auth import require_auth, require_role
 from app.routers.posture import (
@@ -85,6 +85,10 @@ def _iso(v):
     return v.isoformat() if hasattr(v, "isoformat") else v
 
 
+def _current_tenant_id() -> str:
+    return str(tenant_id_ctx.get("default") or "default").strip() or "default"
+
+
 def _serialize_row(row) -> dict:
     out = dict(row)
     for key, value in list(out.items()):
@@ -99,6 +103,7 @@ def _serialize_row(row) -> dict:
 
 
 def _incident_context(db: Session, incident_id: int) -> dict:
+    tenant_id = _current_tenant_id()
     row = (
         db.execute(
             text(
@@ -107,9 +112,10 @@ def _incident_context(db: Session, incident_id: int) -> dict:
                    created_at, updated_at, resolved_at, closed_at, sla_due_at, metadata
             FROM incidents
             WHERE id = :id
+              AND org_id = :org_id
             """
             ),
-            {"id": incident_id},
+            {"id": incident_id, "org_id": tenant_id},
         )
         .mappings()
         .first()
@@ -123,10 +129,11 @@ def _incident_context(db: Session, incident_id: int) -> dict:
             SELECT asset_key, added_at, added_by
             FROM incident_alerts
             WHERE incident_id = :id
+              AND org_id = :org_id
             ORDER BY added_at ASC
             """
             ),
-            {"id": incident_id},
+            {"id": incident_id, "org_id": tenant_id},
         )
         .mappings()
         .all()
@@ -138,11 +145,12 @@ def _incident_context(db: Session, incident_id: int) -> dict:
             SELECT event_type, author, body, details, created_at
             FROM incident_notes
             WHERE incident_id = :id
+              AND org_id = :org_id
             ORDER BY created_at ASC
             LIMIT 20
             """
             ),
-            {"id": incident_id},
+            {"id": incident_id, "org_id": tenant_id},
         )
         .mappings()
         .all()
@@ -191,6 +199,7 @@ def _finding_context(
     include_evidence: bool = True,
     evidence_limit: int = FINDING_EXPLAIN_EVIDENCE_LIMIT,
 ) -> dict:
+    tenant_id = _current_tenant_id()
     row = (
         db.execute(
             text(
@@ -203,11 +212,12 @@ def _finding_context(
               a.asset_key, a.name AS asset_name, a.type AS asset_type, a.environment, a.criticality,
               a.owner, a.verified
             FROM findings f
-            LEFT JOIN assets a ON a.asset_id = f.asset_id
+            LEFT JOIN assets a ON a.asset_id = f.asset_id AND a.org_id = f.org_id
             WHERE f.finding_id = :id
+              AND f.org_id = :org_id
             """
             ),
-            {"id": finding_id},
+            {"id": finding_id, "org_id": tenant_id},
         )
         .mappings()
         .first()
@@ -258,6 +268,7 @@ def _asset_diagnosis_context(
     event_limit: int = 20,
     findings_limit: int = 5,
 ) -> dict:
+    tenant_id = _current_tenant_id()
     try:
         data = _opensearch_get(f"/_doc/{asset_key}")
     except httpx.HTTPStatusError as e:
@@ -327,14 +338,15 @@ def _asset_diagnosis_context(
               f.last_seen,
               f.time
             FROM findings f
-            LEFT JOIN assets a ON a.asset_id = f.asset_id
+            LEFT JOIN assets a ON a.asset_id = f.asset_id AND a.org_id = f.org_id
             WHERE a.asset_key = :asset_key
+              AND f.org_id = :org_id
               AND COALESCE(f.status, 'open') IN ('open', 'in_progress', 'accepted_risk')
             ORDER BY COALESCE(f.risk_score, 0) DESC, COALESCE(f.last_seen, f.time) DESC
             LIMIT :limit
             """
             ),
-            {"asset_key": asset_key, "limit": findings_limit},
+            {"asset_key": asset_key, "limit": findings_limit, "org_id": tenant_id},
         )
         .mappings()
         .all()
@@ -466,6 +478,7 @@ def _policy_violation_evidence_preview(violation: dict) -> str:
 
 
 def _policy_evaluation_context(db: Session, evaluation_id: int) -> dict:
+    tenant_id = _current_tenant_id()
     row = (
         db.execute(
             text(
@@ -482,11 +495,12 @@ def _policy_evaluation_context(db: Session, evaluation_id: int) -> dict:
               pb.name AS bundle_name,
               pb.description AS bundle_description
             FROM policy_evaluation_runs per
-            JOIN policy_bundles pb ON pb.id = per.bundle_id
+            JOIN policy_bundles pb ON pb.id = per.bundle_id AND pb.org_id = per.org_id
             WHERE per.id = :evaluation_id
+              AND per.org_id = :org_id
             """
             ),
-            {"evaluation_id": evaluation_id},
+            {"evaluation_id": evaluation_id, "org_id": tenant_id},
         )
         .mappings()
         .first()
@@ -724,6 +738,7 @@ def _job_failure_signals(job: dict, asset: dict, log_excerpt: str, recent_jobs: 
 
 
 def _job_triage_context(db: Session, job_id: int) -> dict:
+    tenant_id = _current_tenant_id()
     row = (
         db.execute(
             text(
@@ -747,11 +762,12 @@ def _job_triage_context(db: Session, job_id: int) -> dict:
               a.criticality AS asset_criticality,
               a.verified AS asset_verified
             FROM scan_jobs j
-            LEFT JOIN assets a ON a.asset_id = j.target_asset_id
+            LEFT JOIN assets a ON a.asset_id = j.target_asset_id AND a.org_id = j.org_id
             WHERE j.job_id = :job_id
+              AND j.org_id = :org_id
             """
             ),
-            {"job_id": job_id},
+            {"job_id": job_id, "org_id": tenant_id},
         )
         .mappings()
         .first()
@@ -789,6 +805,7 @@ def _job_triage_context(db: Session, job_id: int) -> dict:
               finished_at
             FROM scan_jobs
             WHERE job_id <> :job_id
+              AND org_id = :org_id
               AND (
                 (:target_asset_id IS NOT NULL AND target_asset_id = :target_asset_id)
                 OR job_type = :job_type
@@ -801,6 +818,7 @@ def _job_triage_context(db: Session, job_id: int) -> dict:
                 "job_id": job_id,
                 "target_asset_id": row.get("target_asset_id"),
                 "job_type": row.get("job_type"),
+                "org_id": tenant_id,
             },
         )
         .mappings()
@@ -904,6 +922,7 @@ def _alert_timeline_signals(events: list[dict]) -> dict:
 
 
 def _alert_top_findings(db: Session, asset_key: str, *, limit: int = 5) -> list[dict]:
+    tenant_id = _current_tenant_id()
     rows = (
         db.execute(
             text(
@@ -913,14 +932,15 @@ def _alert_top_findings(db: Session, asset_key: str, *, limit: int = 5) -> list[
               f.title, f.severity, f.confidence, f.source, f.risk_score, f.risk_level,
               COALESCE(f.last_seen, f.time) AS last_seen
             FROM findings f
-            JOIN assets a ON a.asset_id = f.asset_id
+            JOIN assets a ON a.asset_id = f.asset_id AND a.org_id = f.org_id
             WHERE a.asset_key = :asset_key
+              AND f.org_id = :org_id
               AND COALESCE(f.status, 'open') <> 'remediated'
             ORDER BY COALESCE(f.risk_score, 0) DESC, COALESCE(f.last_seen, f.time) DESC
             LIMIT :limit
             """
             ),
-            {"asset_key": asset_key, "limit": limit},
+            {"asset_key": asset_key, "limit": limit, "org_id": tenant_id},
         )
         .mappings()
         .all()
@@ -943,6 +963,7 @@ def _alert_top_findings(db: Session, asset_key: str, *, limit: int = 5) -> list[
 
 
 def _alert_open_incidents(db: Session, asset_key: str, *, limit: int = 3) -> list[dict]:
+    tenant_id = _current_tenant_id()
     rows = (
         db.execute(
             text(
@@ -956,14 +977,15 @@ def _alert_open_incidents(db: Session, asset_key: str, *, limit: int = 3) -> lis
               i.assigned_to,
               i.created_at
             FROM incident_alerts ia
-            JOIN incidents i ON i.id = ia.incident_id
+            JOIN incidents i ON i.id = ia.incident_id AND i.org_id = ia.org_id
             WHERE ia.asset_key = :asset_key
+              AND ia.org_id = :org_id
               AND i.status NOT IN ('resolved', 'closed')
             ORDER BY i.created_at DESC
             LIMIT :limit
             """
             ),
-            {"asset_key": asset_key, "limit": limit},
+            {"asset_key": asset_key, "limit": limit, "org_id": tenant_id},
         )
         .mappings()
         .all()
@@ -1520,6 +1542,12 @@ def _normalize_alert_action(value: str | None) -> str | None:
     return None
 
 
+def _action_requires_human_approval(action: str | None) -> bool:
+    if not bool(getattr(settings, "AI_REQUIRE_HUMAN_APPROVAL_FOR_ACTIONS", True)):
+        return False
+    return str(action or "").strip().lower() in {"ack", "suppress", "assign", "escalate", "resolve"}
+
+
 def _normalize_alert_urgency(value: str | None) -> str | None:
     if not value:
         return None
@@ -1686,6 +1714,7 @@ def _fallback_job_triage(context: dict) -> str:
 
 
 def _existing_incident_summary(db: Session, incident_id: int):
+    tenant_id = _current_tenant_id()
     return (
         db.execute(
             text(
@@ -1693,9 +1722,10 @@ def _existing_incident_summary(db: Session, incident_id: int):
             SELECT incident_id, summary_text, provider, model, generated_by, generated_at, context_json
             FROM incident_ai_summaries
             WHERE incident_id = :id
+              AND org_id = :org_id
             """
             ),
-            {"id": incident_id},
+            {"id": incident_id, "org_id": tenant_id},
         )
         .mappings()
         .first()
@@ -1703,6 +1733,7 @@ def _existing_incident_summary(db: Session, incident_id: int):
 
 
 def _existing_policy_evaluation_summary(db: Session, evaluation_id: int):
+    tenant_id = _current_tenant_id()
     return (
         db.execute(
             text(
@@ -1710,9 +1741,10 @@ def _existing_policy_evaluation_summary(db: Session, evaluation_id: int):
             SELECT evaluation_id, summary_text, provider, model, generated_by, generated_at, context_json
             FROM policy_evaluation_ai_summaries
             WHERE evaluation_id = :evaluation_id
+              AND org_id = :org_id
             """
             ),
-            {"evaluation_id": evaluation_id},
+            {"evaluation_id": evaluation_id, "org_id": tenant_id},
         )
         .mappings()
         .first()
@@ -1720,6 +1752,7 @@ def _existing_policy_evaluation_summary(db: Session, evaluation_id: int):
 
 
 def _existing_finding_explanation(db: Session, finding_id: int):
+    tenant_id = _current_tenant_id()
     return (
         db.execute(
             text(
@@ -1727,9 +1760,10 @@ def _existing_finding_explanation(db: Session, finding_id: int):
             SELECT finding_id, explanation_text, remediation_patch, provider, model, generated_by, generated_at, context_json
             FROM finding_ai_explanations
             WHERE finding_id = :id
+              AND org_id = :org_id
             """
             ),
-            {"id": finding_id},
+            {"id": finding_id, "org_id": tenant_id},
         )
         .mappings()
         .first()
@@ -1737,6 +1771,7 @@ def _existing_finding_explanation(db: Session, finding_id: int):
 
 
 def _existing_asset_diagnosis(db: Session, asset_key: str):
+    tenant_id = _current_tenant_id()
     return (
         db.execute(
             text(
@@ -1744,9 +1779,10 @@ def _existing_asset_diagnosis(db: Session, asset_key: str):
             SELECT asset_key, diagnosis_text, provider, model, generated_by, generated_at, context_json
             FROM asset_ai_diagnoses
             WHERE asset_key = :asset_key
+              AND org_id = :org_id
             """
             ),
-            {"asset_key": asset_key},
+            {"asset_key": asset_key, "org_id": tenant_id},
         )
         .mappings()
         .first()
@@ -1754,6 +1790,7 @@ def _existing_asset_diagnosis(db: Session, asset_key: str):
 
 
 def _existing_job_triage(db: Session, job_id: int):
+    tenant_id = _current_tenant_id()
     return (
         db.execute(
             text(
@@ -1761,9 +1798,10 @@ def _existing_job_triage(db: Session, job_id: int):
             SELECT job_id, triage_text, provider, model, generated_by, generated_at, context_json
             FROM job_ai_triages
             WHERE job_id = :job_id
+              AND org_id = :org_id
             """
             ),
-            {"job_id": job_id},
+            {"job_id": job_id, "org_id": tenant_id},
         )
         .mappings()
         .first()
@@ -1771,6 +1809,7 @@ def _existing_job_triage(db: Session, job_id: int):
 
 
 def _existing_alert_guidance(db: Session, asset_key: str):
+    tenant_id = _current_tenant_id()
     return (
         db.execute(
             text(
@@ -1788,9 +1827,10 @@ def _existing_alert_guidance(db: Session, asset_key: str):
               context_json
             FROM alert_ai_guidance
             WHERE asset_key = :asset_key
+              AND org_id = :org_id
             """
             ),
-            {"asset_key": asset_key},
+            {"asset_key": asset_key, "org_id": tenant_id},
         )
         .mappings()
         .first()
@@ -1816,6 +1856,7 @@ def generate_incident_summary(
     db: Session = Depends(get_db),
     user: str = Depends(require_role(["admin", "analyst"])),
 ):
+    tenant_id = _current_tenant_id()
     existing = _existing_incident_summary(db, incident_id)
     if existing and not body.force:
         out = _serialize_row(existing)
@@ -1865,6 +1906,7 @@ def generate_incident_summary(
 
     params = {
         "incident_id": incident_id,
+        "org_id": tenant_id,
         "summary_text": summary.strip(),
         "provider": generated_provider,
         "model": generated_model,
@@ -1886,9 +1928,14 @@ def generate_incident_summary(
         db.execute(
             text(
                 """
-            INSERT INTO incident_ai_summaries (incident_id, summary_text, provider, model, generated_by, context_json)
-            VALUES (:incident_id, :summary_text, :provider, :model, :generated_by, CAST(:context_json AS jsonb))
+            INSERT INTO incident_ai_summaries (
+              incident_id, org_id, summary_text, provider, model, generated_by, context_json
+            )
+            VALUES (
+              :incident_id, :org_id, :summary_text, :provider, :model, :generated_by, CAST(:context_json AS jsonb)
+            )
             ON CONFLICT (incident_id) DO UPDATE SET
+              org_id = EXCLUDED.org_id,
               summary_text = EXCLUDED.summary_text,
               provider = EXCLUDED.provider,
               model = EXCLUDED.model,
@@ -1939,6 +1986,7 @@ def generate_policy_evaluation_summary(
     db: Session = Depends(get_db),
     user: str = Depends(require_role(["admin", "analyst"])),
 ):
+    tenant_id = _current_tenant_id()
     existing = _existing_policy_evaluation_summary(db, evaluation_id)
     if existing and not body.force:
         out = _serialize_row(existing)
@@ -2045,6 +2093,7 @@ def generate_policy_evaluation_summary(
 
     params = {
         "evaluation_id": evaluation_id,
+        "org_id": tenant_id,
         "summary_text": summary_text.strip(),
         "provider": generated_provider,
         "model": generated_model,
@@ -2068,12 +2117,13 @@ def generate_policy_evaluation_summary(
             text(
                 """
             INSERT INTO policy_evaluation_ai_summaries (
-              evaluation_id, summary_text, provider, model, generated_by, context_json
+              evaluation_id, org_id, summary_text, provider, model, generated_by, context_json
             )
             VALUES (
-              :evaluation_id, :summary_text, :provider, :model, :generated_by, CAST(:context_json AS jsonb)
+              :evaluation_id, :org_id, :summary_text, :provider, :model, :generated_by, CAST(:context_json AS jsonb)
             )
             ON CONFLICT (evaluation_id) DO UPDATE SET
+              org_id = EXCLUDED.org_id,
               summary_text = EXCLUDED.summary_text,
               provider = EXCLUDED.provider,
               model = EXCLUDED.model,
@@ -2115,6 +2165,9 @@ def get_alert_guidance(
     if not row:
         raise HTTPException(status_code=404, detail="AI guidance not found")
     out = _serialize_row(row)
+    requires_human_approval = _action_requires_human_approval(out.get("recommended_action"))
+    out["requires_human_approval"] = requires_human_approval
+    out["approval_mode"] = "manual_required" if requires_human_approval else "not_required"
     out["stale"] = False
     try:
         current_signature = _alert_context_signature(_alert_guidance_context(db, asset_key))
@@ -2131,6 +2184,7 @@ def generate_alert_guidance(
     db: Session = Depends(get_db),
     user: str = Depends(require_role(["admin", "analyst"])),
 ):
+    tenant_id = _current_tenant_id()
     existing = _existing_alert_guidance(db, asset_key)
     context = _alert_guidance_context(db, asset_key)
     context_signature = _alert_context_signature(context)
@@ -2274,6 +2328,7 @@ def generate_alert_guidance(
 
     params = {
         "asset_key": asset_key,
+        "org_id": tenant_id,
         "guidance_text": guidance_text.strip(),
         "recommended_action": recommended_action,
         "urgency": urgency,
@@ -2291,6 +2346,17 @@ def generate_alert_guidance(
                     "used_fallback_sections": used_fallback_sections,
                     "evidence_catalog": evidence_catalog,
                     "sections": sections,
+                    "action_controls": {
+                        "recommended_action": recommended_action,
+                        "requires_human_approval": _action_requires_human_approval(
+                            recommended_action
+                        ),
+                        "approval_mode": (
+                            "manual_required"
+                            if _action_requires_human_approval(recommended_action)
+                            else "not_required"
+                        ),
+                    },
                 },
             }
         ),
@@ -2301,6 +2367,7 @@ def generate_alert_guidance(
                 """
             INSERT INTO alert_ai_guidance (
               asset_key,
+              org_id,
               guidance_text,
               recommended_action,
               urgency,
@@ -2312,6 +2379,7 @@ def generate_alert_guidance(
             )
             VALUES (
               :asset_key,
+              :org_id,
               :guidance_text,
               :recommended_action,
               :urgency,
@@ -2322,6 +2390,7 @@ def generate_alert_guidance(
               CAST(:context_json AS jsonb)
             )
             ON CONFLICT (asset_key) DO UPDATE SET
+              org_id = EXCLUDED.org_id,
               guidance_text = EXCLUDED.guidance_text,
               recommended_action = EXCLUDED.recommended_action,
               urgency = EXCLUDED.urgency,
@@ -2364,6 +2433,9 @@ def generate_alert_guidance(
     )
     db.commit()
     out = _serialize_row(row)
+    requires_human_approval = _action_requires_human_approval(recommended_action)
+    out["requires_human_approval"] = requires_human_approval
+    out["approval_mode"] = "manual_required" if requires_human_approval else "not_required"
     out["cached"] = False
     out["stale"] = False
     return out
@@ -2388,6 +2460,7 @@ def generate_job_triage(
     db: Session = Depends(get_db),
     user: str = Depends(require_role(["admin", "analyst"])),
 ):
+    tenant_id = _current_tenant_id()
     existing = _existing_job_triage(db, job_id)
     if existing and not body.force:
         out = _serialize_row(existing)
@@ -2435,6 +2508,7 @@ def generate_job_triage(
 
     params = {
         "job_id": job_id,
+        "org_id": tenant_id,
         "triage_text": triage_text.strip(),
         "provider": generated_provider,
         "model": generated_model,
@@ -2456,12 +2530,13 @@ def generate_job_triage(
             text(
                 """
             INSERT INTO job_ai_triages (
-              job_id, triage_text, provider, model, generated_by, context_json
+              job_id, org_id, triage_text, provider, model, generated_by, context_json
             )
             VALUES (
-              :job_id, :triage_text, :provider, :model, :generated_by, CAST(:context_json AS jsonb)
+              :job_id, :org_id, :triage_text, :provider, :model, :generated_by, CAST(:context_json AS jsonb)
             )
             ON CONFLICT (job_id) DO UPDATE SET
+              org_id = EXCLUDED.org_id,
               triage_text = EXCLUDED.triage_text,
               provider = EXCLUDED.provider,
               model = EXCLUDED.model,
@@ -2512,6 +2587,7 @@ def generate_asset_diagnosis(
     db: Session = Depends(get_db),
     user: str = Depends(require_role(["admin", "analyst"])),
 ):
+    tenant_id = _current_tenant_id()
     existing = _existing_asset_diagnosis(db, asset_key)
     if existing and not body.force:
         out = _serialize_row(existing)
@@ -2559,6 +2635,7 @@ def generate_asset_diagnosis(
 
     params = {
         "asset_key": asset_key,
+        "org_id": tenant_id,
         "diagnosis_text": diagnosis.strip(),
         "provider": generated_provider,
         "model": generated_model,
@@ -2580,12 +2657,13 @@ def generate_asset_diagnosis(
             text(
                 """
             INSERT INTO asset_ai_diagnoses (
-              asset_key, diagnosis_text, provider, model, generated_by, context_json
+              asset_key, org_id, diagnosis_text, provider, model, generated_by, context_json
             )
             VALUES (
-              :asset_key, :diagnosis_text, :provider, :model, :generated_by, CAST(:context_json AS jsonb)
+              :asset_key, :org_id, :diagnosis_text, :provider, :model, :generated_by, CAST(:context_json AS jsonb)
             )
             ON CONFLICT (asset_key) DO UPDATE SET
+              org_id = EXCLUDED.org_id,
               diagnosis_text = EXCLUDED.diagnosis_text,
               provider = EXCLUDED.provider,
               model = EXCLUDED.model,
@@ -2636,6 +2714,7 @@ def generate_finding_explanation(
     db: Session = Depends(get_db),
     user: str = Depends(require_role(["admin", "analyst"])),
 ):
+    tenant_id = _current_tenant_id()
     existing = _existing_finding_explanation(db, finding_id)
     if existing and not body.force:
         out = _serialize_row(existing)
@@ -2728,6 +2807,7 @@ def generate_finding_explanation(
 
     params = {
         "finding_id": finding_id,
+        "org_id": tenant_id,
         "explanation_text": explanation.strip(),
         "provider": generated_provider,
         "model": generated_model,
@@ -2750,12 +2830,13 @@ def generate_finding_explanation(
             text(
                 """
             INSERT INTO finding_ai_explanations (
-              finding_id, explanation_text, provider, model, generated_by, context_json
+              finding_id, org_id, explanation_text, provider, model, generated_by, context_json
             )
             VALUES (
-              :finding_id, :explanation_text, :provider, :model, :generated_by, CAST(:context_json AS jsonb)
+              :finding_id, :org_id, :explanation_text, :provider, :model, :generated_by, CAST(:context_json AS jsonb)
             )
             ON CONFLICT (finding_id) DO UPDATE SET
+              org_id = EXCLUDED.org_id,
               explanation_text = EXCLUDED.explanation_text,
               provider = EXCLUDED.provider,
               model = EXCLUDED.model,
@@ -2792,7 +2873,7 @@ def _snapshot_series(db: Session, metric: str) -> list[SeriesPoint]:
         return []
     rows = (
         db.execute(
-            text(
+            text(  # nosemgrep
                 f"""
             SELECT created_at, {metric} AS value
             FROM posture_report_snapshots
@@ -2820,7 +2901,7 @@ def _daily_count_series(
 ) -> list[SeriesPoint]:
     rows = (
         db.execute(
-            text(
+            text(  # nosemgrep
                 f"""
             SELECT date_trunc('day', {time_expr}) AS day, COUNT(*) AS value
             FROM {table}

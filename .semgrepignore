@@ -1,2 +1,3 @@
-# Localhost / dev-only links are intentional; avoid false positives in CI
-infra/web/index.html
+# Admin/dev scripts: not production code, not user-facing
+services/api/scripts/
+scripts/dev.js

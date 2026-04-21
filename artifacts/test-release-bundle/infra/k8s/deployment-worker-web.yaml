@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: secplat-worker-web
+  namespace: secplat
+  labels:
+    app.kubernetes.io/name: secplat-worker-web
+    app.kubernetes.io/part-of: secplat
+    secplat-role: worker
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: secplat-worker-web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: secplat-worker-web
+        app.kubernetes.io/part-of: secplat
+        secplat-role: worker
+    spec:
+      serviceAccountName: secplat-workload
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker-web
+          image: ghcr.io/acme/secplat-worker-web@sha256:123456789abcdef00123456789abcdef00123456789abcdef00123456789abcde
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9101
+              name: metrics
+          envFrom:
+            - configMapRef:
+                name: secplat-config
+            - secretRef:
+                name: secplat-secrets
+          env:
+            - name: WORKER_API_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: secplat-secrets
+                  key: SCANNER_SERVICE_USERNAME
+            - name: WORKER_API_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: secplat-secrets
+                  key: SCANNER_SERVICE_PASSWORD
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+          resources:
+            requests:
+              cpu: 150m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

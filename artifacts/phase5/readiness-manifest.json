@@ -1,0 +1,62 @@
+{
+  "artifacts": [
+    {
+      "exists": true,
+      "path": "docs/contracts/stability-contract.md",
+      "size_bytes": 1679
+    },
+    {
+      "exists": true,
+      "path": "docs/security/vulnerability-disclosure.md",
+      "size_bytes": 1223
+    },
+    {
+      "exists": true,
+      "path": "docs/observability/otel-semantic-conventions.md",
+      "size_bytes": 1193
+    },
+    {
+      "exists": true,
+      "path": "docs/contracts/upgrade-policy.md",
+      "size_bytes": 1054
+    },
+    {
+      "exists": true,
+      "path": "docs/security/tenant-isolation-and-privacy.md",
+      "size_bytes": 1916
+    },
+    {
+      "exists": true,
+      "path": "docs/operations/backup-restore-verification.md",
+      "size_bytes": 1669
+    },
+    {
+      "exists": true,
+      "path": "docs/support/support-sla.md",
+      "size_bytes": 615
+    },
+    {
+      "exists": true,
+      "path": "docs/operations/design-partner-rollout-checklist.md",
+      "size_bytes": 498
+    },
+    {
+      "exists": true,
+      "path": "docs/operations/incident-severity-and-escalation.md",
+      "size_bytes": 759
+    },
+    {
+      "exists": true,
+      "path": "docs/operations/postmortems/README.md",
+      "size_bytes": 501
+    },
+    {
+      "exists": true,
+      "path": "docs/operations/postmortems/template.md",
+      "size_bytes": 466
+    }
+  ],
+  "generated_at": "2026-04-04T13:16:00.920820Z",
+  "missing": [],
+  "ok": true
+}

@@ -45,10 +45,14 @@ export default function ApiStatusBanner() {
 
   return (
     <div
-      className="sticky top-0 z-50 border-b border-[var(--red)] bg-[var(--red-bg)] px-4 py-2 text-center text-sm font-medium text-[var(--red)]"
+      className="sticky top-0 z-50 border-b border-rose-400/24 bg-[rgba(255,248,249,0.92)] px-4 py-3 text-center text-sm font-medium text-[var(--red)] backdrop-blur-xl"
       role="alert"
     >
-      API unavailable. Data may be stale or missing. Check the API is running and try again.
+      <span className="inline-flex items-center gap-2 rounded-full border border-rose-300/22 bg-rose-300/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--red)]">
+        API degraded
+      </span>{' '}
+      Live data is currently unavailable. Some metrics or lists may be stale until the API
+      recovers.
     </div>
   );
 }

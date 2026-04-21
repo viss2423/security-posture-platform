@@ -1,0 +1,114 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: secplat-report-snapshot
+  namespace: secplat
+  labels:
+    app.kubernetes.io/name: secplat-report-snapshot
+    app.kubernetes.io/part-of: secplat
+spec:
+  schedule: "0 */6 * * *"
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 300
+      ttlSecondsAfterFinished: 600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: secplat-report-snapshot
+            app.kubernetes.io/part-of: secplat
+        spec:
+          serviceAccountName: secplat-workload
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: snapshot
+              image: ghcr.io/acme/secplat-api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+              imagePullPolicy: IfNotPresent
+              command: ["python", "-c"]
+              args:
+                - |
+                  import os, time, httpx
+                  base = os.environ["API_URL"].rstrip("/")
+                  user = os.environ["ADMIN_USERNAME"]
+                  pwd = os.environ["ADMIN_PASSWORD"]
+                  period = os.environ.get("SNAPSHOT_PERIOD", "24h")
+                  timeout = httpx.Timeout(60.0, connect=10.0)
+                  with httpx.Client(timeout=timeout) as client:
+                    token = None
+                    last_exc = None
+                    for attempt in range(1, 4):
+                      try:
+                        r = client.post(
+                          f"{base}/auth/login",
+                          data={"username": user, "password": pwd},
+                        )
+                        r.raise_for_status()
+                        token = r.json().get("access_token")
+                        if not token:
+                          raise RuntimeError("access_token missing from /auth/login response")
+                        break
+                      except Exception as exc:
+                        last_exc = exc
+                        if attempt < 3:
+                          time.sleep(2 * attempt)
+                    if not token:
+                      raise last_exc or RuntimeError("login_failed")
+
+                    snap_resp = None
+                    for attempt in range(1, 4):
+                      try:
+                        snap_resp = client.post(
+                          f"{base}/posture/reports/snapshot",
+                          params={"period": period},
+                          headers={"Authorization": f"Bearer {token}"},
+                        )
+                        snap_resp.raise_for_status()
+                        break
+                      except Exception as exc:
+                        last_exc = exc
+                        if attempt < 3:
+                          time.sleep(2 * attempt)
+                    if snap_resp is None or snap_resp.is_error:
+                      raise last_exc or RuntimeError("snapshot_request_failed")
+                    print(snap_resp.text)
+              envFrom:
+                - configMapRef:
+                    name: secplat-config
+                - secretRef:
+                    name: secplat-secrets
+              env:
+                - name: SNAPSHOT_PERIOD
+                  value: "24h"
+                - name: PYTHONDONTWRITEBYTECODE
+                  value: "1"
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 250m
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}

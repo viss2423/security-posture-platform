@@ -16,9 +16,9 @@ function relationBadge(value: string): JSX.Element {
   const text = String(value || '').toLowerCase();
   const className =
     text.includes('target') || text.includes('contain')
-      ? 'bg-cyan-300/20 text-cyan-100 border-cyan-300/30'
+      ? 'bg-cyan-300/10 text-[var(--cyan-strong)] border-cyan-300/25'
       : text.includes('auth') || text.includes('execute')
-        ? 'bg-emerald-300/20 text-emerald-100 border-emerald-300/30'
+        ? 'bg-emerald-300/10 text-[var(--green)] border-emerald-300/25'
         : 'bg-[var(--surface-elevated)] text-[var(--muted)] border-[var(--border)]';
   return (
     <span className={`rounded-full border px-2 py-0.5 text-xs font-medium uppercase ${className}`}>
@@ -86,17 +86,23 @@ export default function AttackGraphPage() {
   };
 
   const summary = useMemo(() => graph?.summary || {}, [graph]);
+  const summaryEntries = useMemo(
+    () =>
+      Object.entries(summary)
+        .filter(([, value]) => value != null && String(value).trim() !== '')
+        .slice(0, 8),
+    [summary]
+  );
 
   return (
     <main className="page-shell view-stack">
       <section className="page-hero animate-in">
         <div className="hero-grid">
           <div>
-            <span className="stat-chip-strong">Attack Graph</span>
-            <h1 className="hero-title mt-3">Investigation Path Visualizer</h1>
+            <span className="stat-chip-strong">Path explorer</span>
+            <h1 className="hero-title mt-3">Path Explorer</h1>
             <p className="hero-copy">
-              Reconstruct attacker movement and pivot context from incidents, alerts, assets, and
-              observed communications.
+              Trace likely attacker movement from incidents, assets, and observed communications.
             </p>
           </div>
           <div className="hero-stat-grid">
@@ -128,6 +134,16 @@ export default function AttackGraphPage() {
           <ApiDownHint />
         </div>
       )}
+
+      <section className="command-lane animate-in">
+        <div className="command-lane-grid">
+          <span className="command-pill-strong">Graph nodes {graph?.nodes.length ?? 0}</span>
+          <span className="command-pill">Edges {graph?.edges.length ?? 0}</span>
+          <span className="command-pill">Kill-chain phases {graph?.kill_chain.length ?? 0}</span>
+          <span className="command-pill">Lookback {lookbackHours || '72'}h</span>
+          <span className="command-pill">{loading ? 'Query running...' : 'Query idle'}</span>
+        </div>
+      </section>
 
       <section className="grid gap-6 xl:grid-cols-2">
         <div className="section-panel animate-in">
@@ -207,6 +223,25 @@ export default function AttackGraphPage() {
         </div>
       </section>
 
+      {summaryEntries.length > 0 && (
+        <section className="section-panel animate-in">
+          <div className="section-head">
+            <div>
+              <h2 className="section-title">Graph diagnostics</h2>
+              <p className="section-head-copy">Runtime metadata from the current graph execution.</p>
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {summaryEntries.map(([key, value]) => (
+              <div key={key} className="signal-card">
+                <p className="text-[10px] uppercase tracking-[0.14em] text-[var(--muted)]">{key.replace(/_/g, ' ')}</p>
+                <p className="mt-2 break-all text-sm font-medium text-[var(--text)]">{String(value)}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       <section className="section-panel animate-in">
         <div className="section-head">
           <div>
@@ -240,7 +275,7 @@ export default function AttackGraphPage() {
           {!graph || graph.nodes.length === 0 ? (
             <p className="text-sm text-[var(--muted)]">Run an incident or asset query to load graph nodes.</p>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="table-shell overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-[var(--border)] text-left text-xs uppercase tracking-[0.16em] text-[var(--muted)]">
@@ -274,7 +309,7 @@ export default function AttackGraphPage() {
           {!graph || graph.edges.length === 0 ? (
             <p className="text-sm text-[var(--muted)]">Run an incident or asset query to load graph edges.</p>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="table-shell overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-[var(--border)] text-left text-xs uppercase tracking-[0.16em] text-[var(--muted)]">

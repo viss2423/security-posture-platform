@@ -2,7 +2,10 @@
   "name": "security-posture-platform",
   "private": true,
   "scripts": {
-    "dev": "node scripts/dev.js",
+    "dev": "powershell -ExecutionPolicy Bypass -File scripts/start-platform.ps1 -Lane compose -FollowLogs",
+    "dev:frontend": "node scripts/dev.js",
+    "start:compose": "powershell -ExecutionPolicy Bypass -File scripts/start-platform.ps1 -Lane compose",
+    "start:k8s": "powershell -ExecutionPolicy Bypass -File scripts/start-platform.ps1 -Lane k8s",
     "build": "npm run build --prefix services/frontend",
     "start": "npm run start --prefix services/frontend",
     "frontend:install": "npm install --prefix services/frontend",

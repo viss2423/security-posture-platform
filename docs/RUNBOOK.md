@@ -106,6 +106,18 @@ Guarded switches:
 3. Restart the API and run migrations if you use them: apply any SQL in `infra/postgres/migrations/` that are newer than the backup.
 4. Verify: `curl -s http://localhost:8000/ready` and log in to the UI.
 
+For an automated drill with measured timing:
+
+```bash
+python services/api/scripts/verify_phase2_hardening.py \
+  --runtime-dsn postgresql+psycopg://secplat_runtime:secplat_runtime@localhost:5433/secplat \
+  --admin-dsn postgresql+psycopg://secplat:secplat@localhost:5433/secplat \
+  --docker-postgres-container secplat-postgres \
+  --security-contact-email security@acme-security.io \
+  --security-policy-url https://acme-security.io/security \
+  --security-contact-url https://acme-security.io/report
+```
+
 ---
 
 ## Reset admin password
@@ -137,6 +149,52 @@ Retention prunes old OpenSearch events and Postgres report snapshots. Configure 
 
 - **Via API:** `curl -X POST -H "Authorization: Bearer <JWT>" http://localhost:8000/retention/apply`. Returns `events_deleted` and `snapshots_deleted`; 502 if OpenSearch or Postgres step failed.
 - **Cron:** Call the same endpoint daily, e.g. `0 2 * * * curl -s -X POST -H "Authorization: Bearer $TOKEN" $API_URL/retention/apply`. Obtain JWT from login or use a service-account token.
+
+---
+
+## DSAR operations (privacy)
+
+Privacy workflows are admin-only and audit-logged.
+
+- **Export subject data inventory:**
+  `curl -X POST -H "Authorization: Bearer <ADMIN_JWT>" -H "Content-Type: application/json" http://localhost:8000/privacy/dsar/export -d '{"username":"analyst1","include_samples":false}'`
+- **Dry-run delete/pseudonymization:**
+  `curl -X POST -H "Authorization: Bearer <ADMIN_JWT>" -H "Content-Type: application/json" http://localhost:8000/privacy/dsar/delete -d '{"username":"analyst1","execute":false}'`
+- **Execute delete/pseudonymization:**
+  `curl -X POST -H "Authorization: Bearer <ADMIN_JWT>" -H "Content-Type: application/json" http://localhost:8000/privacy/dsar/delete -d '{"username":"analyst1","execute":true}'`
+
+---
+
+## DB runtime role hardening
+
+- Provision least-privilege runtime role:
+  `python services/api/scripts/provision_runtime_db_role.py --admin-dsn postgresql+psycopg://<admin>:<password>@<host>:5432/<db> --runtime-user secplat_runtime --runtime-password <strong-password>`
+- Verify role posture:
+  `SECPLAT_RUNTIME_DB_DSN=postgresql+psycopg://secplat_runtime:<password>@<host>:5432/<db> python services/api/scripts/check_db_runtime_role.py --require-dsn`
+- Recommended runtime split:
+  - `POSTGRES_DSN` -> least-privilege runtime role
+  - `MIGRATIONS_POSTGRES_DSN` -> admin/migrator role for startup schema changes
+
+---
+
+## CI strict profile
+
+Enable strict release gates in GitHub Actions by setting:
+
+- `SECPLAT_STRICT_RELEASE_PROFILE=true` (repo/environment variable)
+- `SECPLAT_SLI_REPORT_JSON` or `SECPLAT_SLI_REPORT_PATH`
+- `SECPLAT_RUNTIME_DB_DSN` (secret)
+- `SECPLAT_RELEASE_IMAGE_MAP_PATH` (repo/environment variable)
+- `SECPLAT_RELEASE_GITHUB_REPOSITORY` (repo/environment variable)
+- `SECPLAT_SECURITY_CONTACT_EMAIL` / `SECPLAT_SECURITY_POLICY_URL`
+
+When strict profile is enabled, CI enforces:
+
+- release-gate input with no sample fallback,
+- runtime DB role check with `--require-dsn`,
+- rendered release bundles with real digests,
+- Kyverno admission policy validation,
+- real security disclosure contacts/policy values.
 
 ---
 

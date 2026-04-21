@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: secplat-deriver
+  namespace: secplat
+  labels:
+    app.kubernetes.io/name: secplat-deriver
+    app.kubernetes.io/part-of: secplat
+    secplat-role: deriver
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: secplat-deriver
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: secplat-deriver
+        app.kubernetes.io/part-of: secplat
+        secplat-role: deriver
+    spec:
+      serviceAccountName: secplat-workload
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: deriver
+          image: ghcr.io/acme/secplat-deriver@sha256:3456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef012
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9104
+              name: metrics
+          envFrom:
+            - configMapRef:
+                name: secplat-config
+            - secretRef:
+                name: secplat-secrets
+          env:
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

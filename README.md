@@ -127,7 +127,23 @@ Do not run Compose app services and SecPlat Kubernetes app workloads at the same
 
 On **Windows**, this is enough: the `ingestion` service runs the health and posture scripts inside Docker every 60 seconds, so you don't run any scripts on the host. On **Linux**, you can either use the same (recommended) or run the scripts via cron as in the [Continuous ingestion](#continuous-ingestion-cron) section.
 
----
+### Production release bundle
+
+The supported production path is a rendered release bundle, not the placeholder digests committed under `infra/k8s`.
+
+```bash
+python services/api/scripts/render_release_bundle.py \
+  --image-map-json services/api/examples/release-images.example.json \
+  --out-dir artifacts/release-bundle \
+  --github-repository acme/security-posture-platform
+
+python services/api/scripts/verify_kyverno_admission.py \
+  --repo-root artifacts/release-bundle \
+  --policy-file infra/policy/kyverno/verify-secplat-images.yaml \
+  --require-real-attestors
+```
+
+--- 
 
 ## Sanity checks
 
@@ -150,23 +166,23 @@ curl http://localhost:8081/.well-known/secplat-verification.txt
    ```bash
    docker compose --profile jobs up -d worker-web
    ```
-2. **Create a job** from the UI: open **Jobs** in the nav, use the **Enqueue job** form (analyst/admin only). Pick type `web_exposure`, optionally set an Asset ID (e.g. an asset with type `external_web`), click **Enqueue**.
-3. **Refresh the Jobs list** — the job appears as queued, then (once the worker picks it up) running, then done or failed. Click a job to see **logs**; use **Retry** on failed jobs.
+2. **Create a job** from the UI: open **Jobs** in the nav, use the **Enqueue job** form (analyst/admin only). Pick a supported async type such as `web_exposure`, optionally set an Asset ID (for `web_exposure`, use an asset with type `external_web`), click **Enqueue**.
+3. **Refresh the Jobs list** — the job appears as queued, then (once the worker claims it over the internal API) running, then done or failed. Click a job to see **logs**; use **Retry** on failed jobs.
 
 Without the worker running, jobs stay in **queued** until you start `worker-web`.
 
-### Worker race regression test (recommended)
+### Worker control-plane contract test (recommended)
 
-This checks a critical reliability rule: when multiple worker replicas run at the same time, only one worker should claim a queued DB job.
+This checks the supported worker topology: Redis delivery plus internal API claim/execute/complete/fail calls, without any direct worker Postgres dependency.
 
 Run this from repo root:
 
 ```powershell
 $repo = (Get-Location).Path
-docker run --rm -v "${repo}:/work" -w /work security-posture-platform-worker-web:latest sh -lc "pip install -q pytest && POSTGRES_DSN=postgresql://secplat:secplat@host.docker.internal:5433/secplat pytest services/worker-web/tests/test_job_claim_race.py -q"
+docker run --rm -v "${repo}:/work" -w /work security-posture-platform-worker-web:latest sh -lc "pip install -q pytest && pytest services/worker-web/tests/test_job_claim_race.py -q"
 ```
 
-Expected: `1 passed`.
+Expected: `2 passed`.
 
 More roadmap tests are in **[docs/TESTING-CORPORATE-ROADMAP.md](docs/TESTING-CORPORATE-ROADMAP.md)**.
 

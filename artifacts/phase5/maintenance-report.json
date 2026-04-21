@@ -1,0 +1,743 @@
+{
+  "checks": [
+    {
+      "check": "release_gate_evidence_primed",
+      "detail": {
+        "alert_id": 4,
+        "asset_key": "phase5-release-gate-1775308558",
+        "background_job_id": 7,
+        "event_id": 4
+      },
+      "ok": true
+    },
+    {
+      "check": "upgrade_preflight",
+      "detail": {
+        "api_base_url": null,
+        "checks": [
+          {
+            "check": "upgrade_contract",
+            "detail": {
+              "errors": [],
+              "migrations": {
+                "count": 29,
+                "first": 1,
+                "last": 29
+              },
+              "ok": true
+            },
+            "ok": true
+          },
+          {
+            "check": "upgrade_compatibility",
+            "detail": {
+              "findings": [],
+              "migration_count": 29,
+              "ok": true
+            },
+            "ok": true
+          },
+          {
+            "check": "runtime_role_posture",
+            "detail": {
+              "bypass_rls": false,
+              "checks": [
+                {
+                  "check": "db_role_resolved",
+                  "detail": "secplat_runtime",
+                  "ok": true
+                },
+                {
+                  "check": "db_role_not_superuser",
+                  "detail": "superuser disabled",
+                  "ok": true
+                },
+                {
+                  "check": "db_role_no_bypass_rls",
+                  "detail": "BYPASSRLS disabled",
+                  "ok": true
+                }
+              ],
+              "current_user": "secplat_runtime",
+              "dsn_source": "arg:--dsn",
+              "errors": [],
+              "is_superuser": false,
+              "ok": true,
+              "skipped": false
+            },
+            "ok": true
+          }
+        ],
+        "ok": true,
+        "runtime_dsn_provided": true
+      },
+      "ok": true
+    },
+    {
+      "check": "readiness_evidence",
+      "detail": {
+        "artifacts": [
+          {
+            "exists": true,
+            "path": "docs/contracts/stability-contract.md",
+            "size_bytes": 1679
+          },
+          {
+            "exists": true,
+            "path": "docs/security/vulnerability-disclosure.md",
+            "size_bytes": 1223
+          },
+          {
+            "exists": true,
+            "path": "docs/observability/otel-semantic-conventions.md",
+            "size_bytes": 1193
+          },
+          {
+            "exists": true,
+            "path": "docs/contracts/upgrade-policy.md",
+            "size_bytes": 1054
+          },
+          {
+            "exists": true,
+            "path": "docs/security/tenant-isolation-and-privacy.md",
+            "size_bytes": 1916
+          },
+          {
+            "exists": true,
+            "path": "docs/operations/backup-restore-verification.md",
+            "size_bytes": 1669
+          },
+          {
+            "exists": true,
+            "path": "docs/support/support-sla.md",
+            "size_bytes": 615
+          },
+          {
+            "exists": true,
+            "path": "docs/operations/design-partner-rollout-checklist.md",
+            "size_bytes": 498
+          },
+          {
+            "exists": true,
+            "path": "docs/operations/incident-severity-and-escalation.md",
+            "size_bytes": 759
+          },
+          {
+            "exists": true,
+            "path": "docs/operations/postmortems/README.md",
+            "size_bytes": 501
+          },
+          {
+            "exists": true,
+            "path": "docs/operations/postmortems/template.md",
+            "size_bytes": 466
+          }
+        ],
+        "generated_at": "2026-04-04T13:16:00.920820Z",
+        "missing": [],
+        "ok": true
+      },
+      "ok": true
+    },
+    {
+      "check": "postmortem_evidence",
+      "detail": {
+        "errors": [],
+        "files": [],
+        "ok": true,
+        "postmortem_count": 0,
+        "postmortems_dir": "C:\\Users\\visha\\Desktop\\security-posture-platform\\docs\\operations\\postmortems"
+      },
+      "ok": true
+    },
+    {
+      "check": "release_bundle_rendered",
+      "detail": {
+        "branch_ref": "refs/heads/main",
+        "generated_at": "2026-04-04T13:16:01.298974Z",
+        "github_repository": "acme/security-posture-platform",
+        "images": {
+          "api": "ghcr.io/acme/secplat-api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "correlator": "ghcr.io/acme/secplat-correlator@sha256:23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01",
+          "deriver": "ghcr.io/acme/secplat-deriver@sha256:3456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef012",
+          "ingestion": "ghcr.io/acme/secplat-ingestion@sha256:56789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234",
+          "notifier": "ghcr.io/acme/secplat-notifier@sha256:456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123",
+          "worker-web": "ghcr.io/acme/secplat-worker-web@sha256:123456789abcdef00123456789abcdef00123456789abcdef00123456789abcde"
+        },
+        "ok": true,
+        "out_dir": "C:\\Users\\visha\\Desktop\\security-posture-platform\\artifacts\\phase5\\release-bundle",
+        "registry_pattern": "ghcr.io/acme/secplat-*"
+      },
+      "ok": true
+    },
+    {
+      "check": "image_verification_posture",
+      "detail": {
+        "digest_rule": {
+          "checks": [
+            {
+              "check": "digest_rule_rejects_mutable_tag",
+              "detail": "\nApplying 3 policy rule(s) to 1 resource(s)...\npolicy secplat-digest-only -> resource default/Pod/bad-image failed:\n1 - require-image-digests validation error: Container images must be pinned to immutable sha256 digests. rule require-image-digests failed at path /spec/containers/0/image/\n\n\npass: 0, fail: 1, warn: 0, error: 0, skip: 0 \n",
+              "ok": true
+            },
+            {
+              "check": "digest_rule_accepts_digest_pin",
+              "detail": "\nApplying 3 policy rule(s) to 1 resource(s)...\n\npass: 1, fail: 0, warn: 0, error: 0, skip: 0 \n",
+              "ok": true
+            }
+          ],
+          "mode": "kyverno_cli",
+          "ok": true
+        },
+        "keyless_rule": {
+          "checks": [
+            {
+              "check": "keyless_verify_rule_present",
+              "detail": "verifyImages configured",
+              "ok": true
+            },
+            {
+              "check": "keyless_required_true",
+              "detail": "required=True",
+              "ok": true
+            },
+            {
+              "check": "keyless_mutate_digest_disabled",
+              "detail": "mutateDigest=False",
+              "ok": true
+            },
+            {
+              "check": "keyless_issuer_configured",
+              "detail": "https://token.actions.githubusercontent.com",
+              "ok": true
+            },
+            {
+              "check": "keyless_subject_configured",
+              "detail": "https://github.com/acme/security-posture-platform/.github/workflows/supply-chain.yml@refs/heads/main",
+              "ok": true
+            },
+            {
+              "check": "keyless_subject_not_placeholder",
+              "detail": "https://github.com/acme/security-posture-platform/.github/workflows/supply-chain.yml@refs/heads/main",
+              "ok": true
+            },
+            {
+              "check": "verify_images_pattern_not_placeholder",
+              "detail": "ghcr.io/acme/secplat-*",
+              "ok": true
+            }
+          ],
+          "ok": true
+        },
+        "ok": true,
+        "policy_file": "C:\\Users\\visha\\Desktop\\security-posture-platform\\artifacts\\phase5\\release-bundle\\infra\\policy\\kyverno\\verify-secplat-images.yaml"
+      },
+      "ok": true
+    },
+    {
+      "check": "api_health",
+      "detail": {
+        "status": "ok"
+      },
+      "ok": true,
+      "status": 200
+    },
+    {
+      "check": "api_ready",
+      "detail": {
+        "checks": {
+          "opensearch": "ok",
+          "postgres": "ok"
+        },
+        "status": "ok"
+      },
+      "ok": true,
+      "status": 200
+    },
+    {
+      "check": "release_gate_runtime_window",
+      "detail": {
+        "captured_after": "2026-04-04T13:16:03.627046Z",
+        "healthy_requests": 60,
+        "iterations": 20,
+        "measurements": {
+          "alert_creation_seconds": 0.0,
+          "api_availability": 1.0,
+          "api_p95_latency_ms": 70.844,
+          "background_job_freshness_minutes": 0.1821279,
+          "ingestion_visibility_seconds": 1.0
+        },
+        "source": "platform_sli_current_capture"
+      },
+      "ok": true
+    },
+    {
+      "check": "release_gate_direct",
+      "detail": {
+        "action": "ship_allowed",
+        "error_budget_exhausted": false,
+        "evaluated_at": "2026-04-04T13:16:13.382456Z",
+        "gate_passed": true,
+        "input_source": "file:C:\\Users\\visha\\Desktop\\security-posture-platform\\artifacts\\phase5\\release-gate-input.json",
+        "results": [
+          {
+            "comparator": "gte",
+            "error_budget_consumed": 0.0,
+            "name": "api_availability",
+            "observed": 1.0,
+            "passed": true,
+            "status": "ok",
+            "target": 0.995
+          },
+          {
+            "comparator": "lte",
+            "error_budget_consumed": null,
+            "name": "api_p95_latency_ms",
+            "observed": 70.844,
+            "passed": true,
+            "status": "ok",
+            "target": 500.0
+          },
+          {
+            "comparator": "lte",
+            "error_budget_consumed": null,
+            "name": "ingestion_visibility_seconds",
+            "observed": 1.0,
+            "passed": true,
+            "status": "ok",
+            "target": 120.0
+          },
+          {
+            "comparator": "lte",
+            "error_budget_consumed": null,
+            "name": "alert_creation_seconds",
+            "observed": 0.0,
+            "passed": true,
+            "status": "ok",
+            "target": 180.0
+          },
+          {
+            "comparator": "lte",
+            "error_budget_consumed": null,
+            "name": "background_job_freshness_minutes",
+            "observed": 0.1821279,
+            "passed": true,
+            "status": "ok",
+            "target": 30.0
+          }
+        ],
+        "strict_missing": true,
+        "window_days": 28
+      },
+      "ok": true
+    },
+    {
+      "check": "release_gate_endpoint_diagnostic",
+      "detail": {
+        "action": "ship_allowed",
+        "api_snapshot": {
+          "api_availability": 1.0,
+          "api_p95_latency_ms": 70.797,
+          "captured_at": "2026-04-04T13:16:09.410711+00:00",
+          "instance_count": 1,
+          "max_age_seconds": 300,
+          "request_count": 1068,
+          "server_error_count": 0,
+          "source": "durable_runtime_snapshots"
+        },
+        "error_budget_exhausted": false,
+        "evaluated_at": "2026-04-04T13:16:09.431406Z",
+        "gate_passed": true,
+        "latest_sample": {
+          "alert_creation_seconds": 0.0,
+          "api_availability": 1.0,
+          "api_p95_latency_ms": 70.797,
+          "background_job_freshness_minutes": 0.22539143333333334,
+          "captured_at": "2026-04-04T13:16:09.419139+00:00",
+          "ingestion_visibility_seconds": 1.0,
+          "sample_id": 31,
+          "source": "platform_release_gate_current",
+          "window_hours": 24
+        },
+        "measurements": {
+          "alert_creation_seconds": 0.0,
+          "api_availability": 1.0,
+          "api_p95_latency_ms": 70.797,
+          "background_job_freshness_minutes": 0.22539143333333334,
+          "ingestion_visibility_seconds": 1.0
+        },
+        "results": [
+          {
+            "comparator": "gte",
+            "error_budget_consumed": 0.0,
+            "name": "api_availability",
+            "observed": 1.0,
+            "passed": true,
+            "status": "ok",
+            "target": 0.995
+          },
+          {
+            "comparator": "lte",
+            "error_budget_consumed": null,
+            "name": "api_p95_latency_ms",
+            "observed": 70.797,
+            "passed": true,
+            "status": "ok",
+            "target": 500.0
+          },
+          {
+            "comparator": "lte",
+            "error_budget_consumed": null,
+            "name": "ingestion_visibility_seconds",
+            "observed": 1.0,
+            "passed": true,
+            "status": "ok",
+            "target": 120.0
+          },
+          {
+            "comparator": "lte",
+            "error_budget_consumed": null,
+            "name": "alert_creation_seconds",
+            "observed": 0.0,
+            "passed": true,
+            "status": "ok",
+            "target": 180.0
+          },
+          {
+            "comparator": "lte",
+            "error_budget_consumed": null,
+            "name": "background_job_freshness_minutes",
+            "observed": 0.22539143333333334,
+            "passed": true,
+            "status": "ok",
+            "target": 30.0
+          }
+        ],
+        "sample": {
+          "alert_creation_seconds": 0.0,
+          "api_availability": 1.0,
+          "api_p95_latency_ms": 70.797,
+          "background_job_freshness_minutes": 0.22539143333333334,
+          "captured_at": "2026-04-04T13:16:09.419139+00:00",
+          "ingestion_visibility_seconds": 1.0,
+          "sample_id": 31,
+          "source": "platform_release_gate_current",
+          "window_hours": 24
+        },
+        "strict_missing": true,
+        "window_days": 28
+      },
+      "ok": true,
+      "status": 200
+    },
+    {
+      "check": "queue_health",
+      "detail": {
+        "dlq_streams": {
+          "secplat.events.correlation.dlq": 0,
+          "secplat.events.notify.dlq": 0,
+          "secplat.jobs.scan.dlq": 0
+        },
+        "pending": {
+          "secplat.events.correlation": {
+            "correlators": {
+              "max_id": null,
+              "min_id": null,
+              "oldest_idle_ms": null,
+              "pending": 0
+            }
+          },
+          "secplat.events.notify": {
+            "notifiers": {
+              "max_id": null,
+              "min_id": null,
+              "oldest_idle_ms": null,
+              "pending": 0
+            }
+          },
+          "secplat.jobs.scan": {
+            "workers": {
+              "max_id": "1775308088015-0",
+              "min_id": "1775308088015-0",
+              "oldest_idle_ms": 481488,
+              "pending": 1
+            }
+          }
+        },
+        "redis": "ok",
+        "redis_version": "7.4.7",
+        "streams": {
+          "secplat.events.correlation": 0,
+          "secplat.events.notify": 0,
+          "secplat.jobs.scan": 4
+        }
+      },
+      "ok": true,
+      "status": 200
+    },
+    {
+      "check": "jobs_analytics",
+      "detail": {
+        "by_job_type": [
+          {
+            "avg_duration_seconds": 0.0,
+            "done_jobs": 4,
+            "failed_jobs": 0,
+            "failure_rate_pct": 0.0,
+            "job_type": "telemetry_import",
+            "max_duration_seconds": 0.0,
+            "p95_duration_seconds": 0.0,
+            "queued_jobs": 0,
+            "retried_jobs": 0,
+            "running_jobs": 0,
+            "success_rate_pct": 100.0,
+            "total_jobs": 4
+          },
+          {
+            "avg_duration_seconds": 0.011,
+            "done_jobs": 3,
+            "failed_jobs": 0,
+            "failure_rate_pct": 0.0,
+            "job_type": "score_recompute",
+            "max_duration_seconds": 0.017,
+            "p95_duration_seconds": 0.016,
+            "queued_jobs": 0,
+            "retried_jobs": 2,
+            "running_jobs": 0,
+            "success_rate_pct": 100.0,
+            "total_jobs": 3
+          }
+        ],
+        "totals": {
+          "avg_duration_seconds": 0.005,
+          "completed_jobs": 7,
+          "done_jobs": 7,
+          "failed_jobs": 0,
+          "failure_rate_pct": 0.0,
+          "max_duration_seconds": 0.017,
+          "oldest_queued_minutes": null,
+          "p95_duration_seconds": 0.014,
+          "queued_jobs": 0,
+          "retried_jobs": 2,
+          "running_jobs": 0,
+          "stale_running_jobs": 0,
+          "success_rate_pct": 100.0,
+          "total_jobs": 7
+        },
+        "window": {
+          "job_type": null,
+          "lookback_hours": 24,
+          "running_stale_minutes": 30
+        }
+      },
+      "ok": true,
+      "status": 200
+    },
+    {
+      "check": "recovery_contract",
+      "detail": {
+        "controls": [
+          "scheduled backups",
+          "restore verification reports",
+          "retention policy enforcement"
+        ],
+        "rpo_hours": 24,
+        "rto_hours": 4,
+        "verification": {
+          "script": "services/api/scripts/verify_backup_restore.py",
+          "supports_dry_run": true,
+          "supports_non_dry_run": true
+        }
+      },
+      "ok": true,
+      "status": 200
+    },
+    {
+      "check": "automation_dashboard",
+      "detail": {
+        "actions": {
+          "by_type": {},
+          "total": 0
+        },
+        "approvals": {
+          "by_status": {},
+          "total": 0
+        },
+        "generated_at": "2026-04-04T13:16:09.639255+00:00",
+        "lookback_hours": 24,
+        "playbooks": {
+          "disabled": 0,
+          "enabled": 0,
+          "total": 0
+        },
+        "rollbacks": {
+          "by_status": {},
+          "total": 0
+        },
+        "runs": {
+          "by_status": {},
+          "latest": [],
+          "top_triggers": [],
+          "total": 0
+        }
+      },
+      "ok": true,
+      "status": 200
+    },
+    {
+      "check": "fresh_backup_generated",
+      "detail": {
+        "backup_file": "C:\\Users\\visha\\Desktop\\security-posture-platform\\artifacts\\phase5\\maintenance-backup.sql",
+        "size_bytes": 194175
+      },
+      "ok": true
+    },
+    {
+      "check": "backup_freshness",
+      "detail": {
+        "checks": [
+          {
+            "check": "backup_file_freshness",
+            "detail": {
+              "max_age_hours": 24,
+              "modified_at": "2026-04-04T13:16:14.871081Z",
+              "path": "C:\\Users\\visha\\Desktop\\security-posture-platform\\artifacts\\phase5\\maintenance-backup.sql",
+              "size_bytes": 194175
+            },
+            "ok": true
+          },
+          {
+            "check": "restore_execution",
+            "detail": "Dry-run mode: restore command execution skipped",
+            "ok": true
+          }
+        ],
+        "dry_run": true,
+        "ok": true,
+        "verified_at": "2026-04-04T13:16:15.563911Z"
+      },
+      "ok": true
+    },
+    {
+      "check": "maintenance_job_seeded",
+      "detail": {
+        "job_id": 8,
+        "job_type": "score_recompute",
+        "source": "runtime_db_seed",
+        "status": "queued"
+      },
+      "ok": true
+    },
+    {
+      "check": "recover_stale_preview",
+      "detail": {
+        "dry_run": true,
+        "jobs": [
+          {
+            "claim_token": "a3be843c-2fcd-40fd-bea1-79dc197dcd81",
+            "claimed_by": "phase5-maintenance-worker",
+            "created_at": "2026-04-04T13:16:43.049459+00:00",
+            "error": null,
+            "finished_at": null,
+            "job_id": 8,
+            "job_params_json": {},
+            "job_type": "score_recompute",
+            "last_heartbeat_at": "2026-04-04T11:46:43.309647+00:00",
+            "requested_by": "phase5-maintenance",
+            "retry_count": 0,
+            "started_at": "2026-04-04T13:16:43.173161+00:00",
+            "status": "running",
+            "target_asset_id": null
+          }
+        ],
+        "ok": true,
+        "recovered_count": 0,
+        "running_stale_minutes": 30
+      },
+      "ok": true,
+      "status": 200
+    },
+    {
+      "check": "recover_stale_execute",
+      "detail": {
+        "dry_run": false,
+        "jobs": [
+          {
+            "claim_token": null,
+            "claimed_by": null,
+            "created_at": "2026-04-04T13:16:43.049459+00:00",
+            "error": "recovered_stale_running_job",
+            "finished_at": null,
+            "job_id": 8,
+            "job_params_json": {},
+            "job_type": "score_recompute",
+            "last_heartbeat_at": null,
+            "requested_by": "phase5-maintenance",
+            "retry_count": 1,
+            "started_at": null,
+            "status": "queued",
+            "target_asset_id": null
+          }
+        ],
+        "ok": true,
+        "recovered_count": 1,
+        "running_stale_minutes": 30
+      },
+      "ok": true,
+      "status": 200
+    },
+    {
+      "check": "recover_stale_requeued_detail",
+      "detail": {
+        "asset_criticality": null,
+        "asset_environment": null,
+        "asset_key": null,
+        "asset_name": null,
+        "asset_type": "app",
+        "asset_verified": null,
+        "created_at": "2026-04-04T13:16:43.049459+00:00",
+        "error": "recovered_stale_running_job",
+        "finished_at": null,
+        "job_id": 8,
+        "job_params_json": {},
+        "job_type": "score_recompute",
+        "log_output": "[2026-04-04 13:16:43] claimed by phase5-maintenance-worker timeout=960s\n[2026-04-04 13:16:43] recovered stale running job via maintenance runbook by admin\n",
+        "requested_by": "phase5-maintenance",
+        "retry_count": 1,
+        "started_at": null,
+        "status": "queued",
+        "target_asset_id": null
+      },
+      "ok": true,
+      "status": 200
+    },
+    {
+      "check": "recovered_job_drained",
+      "detail": {
+        "asset_criticality": null,
+        "asset_environment": null,
+        "asset_key": null,
+        "asset_name": null,
+        "asset_type": "app",
+        "asset_verified": null,
+        "created_at": "2026-04-04T13:16:43.049459+00:00",
+        "error": null,
+        "finished_at": "2026-04-04T13:16:47.577294+00:00",
+        "job_id": 8,
+        "job_params_json": {},
+        "job_type": "score_recompute",
+        "log_output": "[2026-04-04 13:16:43] claimed by phase5-maintenance-worker timeout=960s\n[2026-04-04 13:16:43] recovered stale running job via maintenance runbook by admin\n[2026-04-04 13:16:47] claimed by worker-secplat-worker-web-768f48b474-95b5f-1 timeout=960s\nRecomputed risk for all findings count=0\n",
+        "requested_by": "phase5-maintenance",
+        "retry_count": 1,
+        "started_at": "2026-04-04T13:16:47.570893+00:00",
+        "status": "done",
+        "target_asset_id": null
+      },
+      "ok": true
+    }
+  ],
+  "namespace": "secplat-phase3-verify",
+  "ok": true,
+  "runbook_job_id": 8,
+  "worker_original_replicas": 1
+}

@@ -210,11 +210,11 @@ export default function AttackSurfacePage() {
       <section className="page-hero animate-in">
         <div className="hero-grid">
           <div>
-            <span className="stat-chip-strong">Attack Surface</span>
-            <h1 className="hero-title mt-3">Discovery and Drift Workspace</h1>
+            <span className="stat-chip-strong">External exposure</span>
+            <h1 className="hero-title mt-3">Exposure Monitor</h1>
             <p className="hero-copy">
-              Track exposed hosts and services, monitor infrastructure drift, and maintain service
-              dependency relationships.
+              Track internet-facing hosts and services, surface recent changes, and map how
+              customer services connect.
             </p>
           </div>
           <div className="hero-stat-grid">
@@ -254,8 +254,8 @@ export default function AttackSurfacePage() {
         <div className="section-panel animate-in">
           <div className="section-head">
             <div>
-              <h2 className="section-title">Discovery control</h2>
-              <p className="section-head-copy">Run inventory discovery and certificate collection.</p>
+              <h2 className="section-title">Run exposure scan</h2>
+              <p className="section-head-copy">Start discovery for domains, hosts, and certificates.</p>
             </div>
           </div>
           <div className="grid gap-3">
@@ -293,7 +293,7 @@ export default function AttackSurfacePage() {
         <div className="section-panel animate-in">
           <div className="section-head">
             <div>
-              <h2 className="section-title">Asset relationship mapper</h2>
+              <h2 className="section-title">Service map builder</h2>
               <p className="section-head-copy">Capture service-to-service dependencies.</p>
             </div>
           </div>
@@ -353,7 +353,7 @@ export default function AttackSurfacePage() {
       <section className="section-panel animate-in">
         <div className="section-head">
           <div>
-            <h2 className="section-title">Exposure inventory</h2>
+            <h2 className="section-title">Exposure list</h2>
             <p className="section-head-copy">Prioritized by exposure score.</p>
           </div>
         </div>
@@ -403,7 +403,7 @@ export default function AttackSurfacePage() {
         <div className="section-panel animate-in">
           <div className="section-head">
             <div>
-              <h2 className="section-title">Drift timeline</h2>
+              <h2 className="section-title">Recent changes</h2>
               <p className="section-head-copy">Recent surface changes and certificate drift indicators.</p>
             </div>
           </div>
@@ -432,8 +432,8 @@ export default function AttackSurfacePage() {
         <div className="section-panel animate-in">
           <div className="section-head">
             <div>
-              <h2 className="section-title">Discovery run browser</h2>
-              <p className="section-head-copy">Inspect hosts, services, and certificates by run.</p>
+              <h2 className="section-title">Scan browser</h2>
+              <p className="section-head-copy">Inspect hosts, services, and certificates by scan.</p>
             </div>
           </div>
           <label className="text-sm text-[var(--muted)]">
@@ -486,7 +486,7 @@ export default function AttackSurfacePage() {
       <section className="section-panel animate-in">
         <div className="section-head">
           <div>
-            <h2 className="section-title">Asset relationships</h2>
+            <h2 className="section-title">Service relationships</h2>
             <p className="section-head-copy">Dependency map entries used for investigation and graph overlays.</p>
           </div>
         </div>
@@ -520,7 +520,7 @@ export default function AttackSurfacePage() {
         )}
       </section>
 
-      {loading && <p className="text-sm text-[var(--muted)]">Refreshing attack-surface data...</p>}
+      {loading && <p className="text-sm text-[var(--muted)]">Refreshing exposure data...</p>}
     </main>
   );
 }

@@ -6,6 +6,15 @@ ASSETS_INDEX="${ASSETS_INDEX:-secplat-assets}"
 EVENTS_INDEX="${EVENTS_INDEX:-secplat-events}"
 STATUS_INDEX="${STATUS_INDEX:-secplat-asset-status}"
 
+doc_id_for_asset() {
+  local asset_key="$1" org_id="$2"
+  if [[ -n "$org_id" && "$org_id" != "default" ]]; then
+    echo "${org_id}::${asset_key}"
+  else
+    echo "$asset_key"
+  fi
+}
+
 now_epoch() { date -u +%s; }
 
 # Convert ISO8601 (e.g. 2026-02-04T20:12:01Z) to epoch seconds
@@ -16,20 +25,32 @@ iso_to_epoch() {
 
 # Get current stored status_num for an asset from secplat-asset-status (if exists)
 get_prev_status_num() {
-  local asset_id="$1"
-  curl -s "$OS_URL/$STATUS_INDEX/_doc/$asset_id" \
+  local asset_id="$1" legacy_asset_key="$2"
+  local payload
+  payload="$(curl -s "$OS_URL/$STATUS_INDEX/_doc/$asset_id" \
     -H 'Content-Type: application/json' \
-    ${OS_AUTH:+-u "$OS_AUTH"} \
-  | jq -r '._source.status_num // empty'
+    ${OS_AUTH:+-u "$OS_AUTH"})"
+  if [[ -z "$(echo "$payload" | jq -r '._source.status_num // empty')" && "$asset_id" != "$legacy_asset_key" ]]; then
+    payload="$(curl -s "$OS_URL/$STATUS_INDEX/_doc/$legacy_asset_key" \
+      -H 'Content-Type: application/json' \
+      ${OS_AUTH:+-u "$OS_AUTH"})"
+  fi
+  echo "$payload" | jq -r '._source.status_num // empty'
 }
 
 # Get current stored last_status_change (if exists)
 get_prev_last_change() {
-  local asset_id="$1"
-  curl -s "$OS_URL/$STATUS_INDEX/_doc/$asset_id" \
+  local asset_id="$1" legacy_asset_key="$2"
+  local payload
+  payload="$(curl -s "$OS_URL/$STATUS_INDEX/_doc/$asset_id" \
     -H 'Content-Type: application/json' \
-    ${OS_AUTH:+-u "$OS_AUTH"} \
-  | jq -r '._source.last_status_change // empty'
+    ${OS_AUTH:+-u "$OS_AUTH"})"
+  if [[ -z "$(echo "$payload" | jq -r '._source.last_status_change // empty')" && "$asset_id" != "$legacy_asset_key" ]]; then
+    payload="$(curl -s "$OS_URL/$STATUS_INDEX/_doc/$legacy_asset_key" \
+      -H 'Content-Type: application/json' \
+      ${OS_AUTH:+-u "$OS_AUTH"})"
+  fi
+  echo "$payload" | jq -r '._source.last_status_change // empty'
 }
 
 
@@ -59,6 +80,7 @@ if curl -sS "$OS_URL/$STATUS_INDEX" | jq -e 'has("error")' >/dev/null 2>&1; then
       "mappings": {
         "properties": {
           "@timestamp": { "type": "date" },
+          "org_id": { "type": "keyword" },
           "asset_key": { "type": "keyword" },
           "name": { "type": "keyword" },
           "type": { "type": "keyword" },
@@ -93,12 +115,18 @@ echo "assets fetched: $(echo "$assets_json" | jq -r '.hits.total.value')"
 
 echo "$assets_json" | jq -c '.hits.hits[]?._source' | while read -r asset; do
   asset_key="$(echo "$asset" | jq -r '.asset_key')"
+  org_id="$(echo "$asset" | jq -r '.org_id // "default"')"
   name="$(echo "$asset" | jq -r '.name // ""')"
   atype="$(echo "$asset" | jq -r '.type // ""')"
   env="$(echo "$asset" | jq -r '.environment // "dev"')"
   crit="$(echo "$asset" | jq -r '.criticality // 3')"
   owner="$(echo "$asset" | jq -r '.owner // ""')"
   owner_team="$(echo "$asset" | jq -r '.owner_team // ""')"
+
+  event_org_filter=""
+  if [[ -n "$org_id" && "$org_id" != "null" && "$org_id" != "default" ]]; then
+    event_org_filter=",{\"term\":{\"org_id.keyword\":\"${org_id}\"}}"
+  fi
 
   # Latest health event that matches this asset.
   latest_event="$(curl -sS "$OS_URL/$EVENTS_INDEX/_search" \
@@ -109,7 +137,7 @@ echo "$assets_json" | jq -c '.hits.hits[]?._source' | while read -r asset; do
     \"query\": {
       \"bool\": {
         \"filter\": [
-          {\"term\": {\"level\": \"health\"}}
+          {\"term\": {\"level\": \"health\"}}${event_org_filter}
         ],
         \"should\": [
           {\"term\": {\"asset.keyword\": \"${asset_key}\"}},
@@ -154,7 +182,7 @@ echo "$assets_json" | jq -c '.hits.hits[]?._source' | while read -r asset; do
         if [[ "$asset_key" == "juice-shop" ]]; then
           other_event="$(curl -sS "$OS_URL/$EVENTS_INDEX/_search" \
             -H "Content-Type: application/json" \
-            -d '{"size":1,"sort":[{"@timestamp":"desc"}],"query":{"bool":{"filter":[{"term":{"level":"health"}},{"term":{"asset.keyword":"example-com"}}]}}}')"
+            -d "{\"size\":1,\"sort\":[{\"@timestamp\":\"desc\"}],\"query\":{\"bool\":{\"filter\":[{\"term\":{\"level\":\"health\"}},{\"term\":{\"asset.keyword\":\"example-com\"}}${event_org_filter}]}}}")"
           other_src="$(echo "$other_event" | jq -r '.hits.hits[0]._source // empty')"
           if [[ -n "$other_src" ]]; then
             other_status="$(echo "$other_src" | jq -r '.status // ""')"
@@ -210,8 +238,9 @@ echo "$assets_json" | jq -c '.hits.hits[]?._source' | while read -r asset; do
   fi
 
   # last_status_change (changes only when status flips)
-  PREV_STATUS_NUM="$(get_prev_status_num "$asset_key")"
-  PREV_LAST_CHANGE="$(get_prev_last_change "$asset_key")"
+  doc_id="$(doc_id_for_asset "$asset_key" "$org_id")"
+  PREV_STATUS_NUM="$(get_prev_status_num "$doc_id" "$asset_key")"
+  PREV_LAST_CHANGE="$(get_prev_last_change "$doc_id" "$asset_key")"
 
   LAST_STATUS_CHANGE="$PREV_LAST_CHANGE"
   if [[ -z "$LAST_STATUS_CHANGE" ]]; then
@@ -226,6 +255,7 @@ echo "$assets_json" | jq -c '.hits.hits[]?._source' | while read -r asset; do
   # Build doc safely (no --argjson surprises)
   doc="$(jq -n \
     --arg ts "$now_iso" \
+    --arg org_id "$org_id" \
     --arg asset_key "$asset_key" \
     --arg name "$name" \
     --arg type "$atype" \
@@ -245,6 +275,7 @@ echo "$assets_json" | jq -c '.hits.hits[]?._source' | while read -r asset; do
     --arg last_status_change "$LAST_STATUS_CHANGE" \
     '{
       "@timestamp": $ts,
+      org_id: $org_id,
       asset_key: $asset_key,
       name: $name,
       type: $type,
@@ -270,12 +301,12 @@ echo "$assets_json" | jq -c '.hits.hits[]?._source' | while read -r asset; do
     exit 1
   fi
 
-  resp="$(curl -sS -X PUT "$OS_URL/$STATUS_INDEX/_doc/$asset_key" \
+  resp="$(curl -sS -X PUT "$OS_URL/$STATUS_INDEX/_doc/$doc_id" \
     -H "Content-Type: application/json" \
     -d "$doc")"
 
   echo "$resp" | jq -c '{result, _id, _index, error}'
-  echo "status upserted asset_key=$asset_key status=$status status_num=$status_num"
+  echo "status upserted asset_key=$asset_key org_id=$org_id doc_id=$doc_id status=$status status_num=$status_num"
 done
 
 curl -sS -X POST "$OS_URL/$STATUS_INDEX/_refresh" >/dev/null

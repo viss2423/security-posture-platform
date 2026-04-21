@@ -6,9 +6,14 @@ const { spawn, spawnSync } = require('child_process');
 const repoRoot = path.resolve(__dirname, '..');
 const defaultApiUrl = 'http://127.0.0.1:8000';
 const apiUrl = process.env.API_URL || defaultApiUrl;
+const defaultFrontendUrl = 'http://127.0.0.1:3000';
+const frontendUrl = process.env.FRONTEND_URL || defaultFrontendUrl;
 const frontendCommand = ['run', 'dev', '--prefix', 'services/frontend'];
-const healthTimeoutMs = 120000;
-const healthPollIntervalMs = 2000;
+const skipFrontend = String(process.env.DEV_SKIP_FRONTEND || '').toLowerCase() === 'true';
+const defaultHealthTimeoutMs = 300000;
+const defaultHealthPollIntervalMs = 2000;
+const healthTimeoutMs = parsePositiveInt(process.env.DEV_API_HEALTH_TIMEOUT_MS, defaultHealthTimeoutMs);
+const healthPollIntervalMs = parsePositiveInt(process.env.DEV_API_POLL_INTERVAL_MS, defaultHealthPollIntervalMs);
 
 function log(message) {
   process.stdout.write(`[dev] ${message}\n`);
@@ -20,6 +25,13 @@ function logError(message) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parsePositiveInt(raw, fallback) {
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(String(raw), 10);
+  if (Number.isNaN(parsed) || parsed <= 0) return fallback;
+  return parsed;
 }
 
 function parseHealthUrl(rawApiUrl) {
@@ -66,6 +78,16 @@ async function isApiHealthy(healthUrl) {
   }
 }
 
+async function isFrontendReachable(rawFrontendUrl) {
+  try {
+    const url = new URL(rawFrontendUrl);
+    const statusCode = await requestStatus(url, 3000);
+    return statusCode >= 200 && statusCode < 500;
+  } catch {
+    return false;
+  }
+}
+
 function runSync(command, args) {
   return spawnSync(command, args, {
     cwd: repoRoot,
@@ -79,15 +101,34 @@ function dockerDesktopAvailable() {
   return result.status === 0 && result.stdout.trim().length > 0;
 }
 
-function runCommand(command, args) {
+function runCommand(command, args, options = {}) {
+  const inheritOutput = options.inheritOutput ?? true;
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       cwd: repoRoot,
       env: process.env,
       shell: process.platform === 'win32',
-      stdio: 'inherit',
+      stdio: inheritOutput ? 'inherit' : ['ignore', 'pipe', 'pipe'],
     });
-    child.on('exit', (code) => resolve(code ?? 0));
+
+    let stdout = '';
+    let stderr = '';
+    if (!inheritOutput) {
+      child.stdout?.on('data', (chunk) => {
+        stdout += String(chunk);
+      });
+      child.stderr?.on('data', (chunk) => {
+        stderr += String(chunk);
+      });
+    }
+
+    child.on('exit', (code) =>
+      resolve({
+        code: code ?? 0,
+        stdout,
+        stderr,
+      }),
+    );
   });
 }
 
@@ -111,16 +152,25 @@ async function ensureApiAvailable(healthUrl) {
     return false;
   }
 
-  log(`API not reachable at ${healthUrl.origin}; attempting to start the Dockerized API.`);
+  const forceBuild = String(process.env.DEV_API_BUILD || '').toLowerCase() === 'true';
+  const verboseDocker = String(process.env.DEV_VERBOSE_DOCKER || '').toLowerCase() === 'true';
+  const composeArgs = ['compose', 'up', '-d'];
+  if (forceBuild) composeArgs.push('--build');
+  composeArgs.push('api');
+
+  log(`API not reachable at ${healthUrl.origin}; attempting to start Docker API service (${forceBuild ? 'with build' : 'without rebuild'}).`);
 
   if (!dockerDesktopAvailable()) {
     logError('Docker Desktop is not running. Start Docker Desktop, then run `docker compose up -d --build api` or set API_URL to a reachable backend.');
     return false;
   }
 
-  const composeExitCode = await runCommand('docker', ['compose', 'up', '-d', '--build', 'api']);
-  if (composeExitCode !== 0) {
-    logError('Failed to start the API container. Check `docker compose logs api postgres opensearch redis`.');
+  const composeResult = await runCommand('docker', composeArgs, { inheritOutput: verboseDocker });
+  if (composeResult.code !== 0) {
+    logError('Failed to start the API container.');
+    const detail = `${composeResult.stderr || ''}\n${composeResult.stdout || ''}`.trim();
+    if (detail) logError(detail);
+    logError('Check `docker compose logs api postgres opensearch redis`.');
     return false;
   }
 
@@ -128,6 +178,7 @@ async function ensureApiAvailable(healthUrl) {
   const healthy = await waitForApi(healthUrl);
   if (!healthy) {
     logError('API did not become healthy in time. Check `docker compose logs api postgres opensearch redis`.');
+    await runCommand('docker', ['compose', 'logs', '--tail', '120', 'api', 'postgres', 'opensearch', 'redis']);
     return false;
   }
 
@@ -166,6 +217,18 @@ async function main() {
   const ready = await ensureApiAvailable(healthUrl);
   if (!ready) {
     process.exit(1);
+    return;
+  }
+
+  if (skipFrontend) {
+    log('DEV_SKIP_FRONTEND=true; backend is ready, skipping frontend startup.');
+    process.exit(0);
+    return;
+  }
+
+  if (await isFrontendReachable(frontendUrl)) {
+    log(`Frontend already reachable at ${frontendUrl}; skipping frontend dev server startup.`);
+    process.exit(0);
     return;
   }
 

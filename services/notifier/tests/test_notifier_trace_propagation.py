@@ -1,0 +1,58 @@
+from __future__ import annotations
+
+import importlib.util
+import os
+import sys
+from pathlib import Path
+
+
+class _FakeResponse:
+    def raise_for_status(self) -> None:
+        return None
+
+
+class _FakeClient:
+    def __init__(self, calls: list[tuple[str, dict | None, dict | None]]) -> None:
+        self._calls = calls
+
+    def __enter__(self) -> _FakeClient:
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+    def post(self, url, *, json=None, data=None, headers=None, auth=None):
+        self._calls.append((url, json or data, headers))
+        return _FakeResponse()
+
+
+def _load_module():
+    module_path = Path(__file__).resolve().parents[1] / "main.py"
+    module_dir = str(module_path.parent)
+    if module_dir not in sys.path:
+        sys.path.insert(0, module_dir)
+    spec = importlib.util.spec_from_file_location("secplat_notifier_main", module_path)
+    assert spec and spec.loader, "Failed to load notifier module spec"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_send_slack_injects_trace_context(monkeypatch):
+    os.environ.setdefault("SLACK_WEBHOOK_URL", "https://hooks.slack.test/services/demo")
+    notifier = _load_module()
+    notifier.SLACK_WEBHOOK_URL = "https://hooks.slack.test/services/demo"
+    calls: list[tuple[str, dict | None, dict | None]] = []
+
+    monkeypatch.setattr(notifier.httpx, "Client", lambda timeout=10.0: _FakeClient(calls))
+    monkeypatch.setattr(
+        notifier,
+        "inject_context",
+        lambda carrier: carrier.__setitem__("traceparent", "00-notifier-01") or carrier,
+    )
+
+    ok = notifier.send_slack(["asset-a", "asset-b"])
+
+    assert ok is True
+    assert calls[0][0] == notifier.SLACK_WEBHOOK_URL
+    assert calls[0][2]["traceparent"] == "00-notifier-01"

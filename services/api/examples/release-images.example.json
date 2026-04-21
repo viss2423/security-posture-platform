@@ -1,0 +1,8 @@
+{
+  "api": "ghcr.io/acme/secplat-api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "worker-web": "ghcr.io/acme/secplat-worker-web@sha256:123456789abcdef00123456789abcdef00123456789abcdef00123456789abcde",
+  "correlator": "ghcr.io/acme/secplat-correlator@sha256:23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01",
+  "deriver": "ghcr.io/acme/secplat-deriver@sha256:3456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef012",
+  "notifier": "ghcr.io/acme/secplat-notifier@sha256:456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123",
+  "ingestion": "ghcr.io/acme/secplat-ingestion@sha256:56789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234"
+}

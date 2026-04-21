@@ -117,21 +117,20 @@ Invoke-RestMethod -Uri "http://localhost:8000/queue/health" | ConvertTo-Json
 
 **Expected:** `redis: "ok"`, `streams` includes primary streams (scan/notify/correlation), `dlq_streams` includes `*.dlq` depths, and `pending` includes consumer-group details (e.g. pending count and oldest idle). If REDIS_URL is not set: `status: "not_configured"`.
 
-### 1.4 Worker claim race regression (single winner under concurrency)
+### 1.4 Worker control-plane contract regression
 
-This validates the `fetch_job` DB claim path in worker-web and protects against duplicate claims across replicas.
+This validates the supported worker path: Redis stream delivery plus internal API claim/execute/complete/fail calls, without a direct worker Postgres dependency.
 
 ```powershell
 $repo = (Get-Location).Path
-docker run --rm -v "${repo}:/work" -w /work security-posture-platform-worker-web:latest sh -lc "pip install -q pytest && POSTGRES_DSN=postgresql://secplat:secplat@host.docker.internal:5433/secplat pytest services/worker-web/tests/test_job_claim_race.py -q"
+docker run --rm -v "${repo}:/work" -w /work security-posture-platform-worker-web:latest sh -lc "pip install -q pytest && pytest services/worker-web/tests/test_job_claim_race.py -q"
 ```
 
-**Expected:** `1 passed` and no duplicate claim failures.
+**Expected:** `2 passed`.
 
 Optional local run (only if your local Python is 3.11+ and has worker deps installed):
 
 ```powershell
-$env:POSTGRES_DSN = "postgresql://secplat:secplat@localhost:5433/secplat"
 python -m pytest services/worker-web/tests/test_job_claim_race.py -q
 ```
 

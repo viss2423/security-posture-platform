@@ -1,0 +1,203 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "secplat.fullname" . }}-api
+  namespace: {{ include "secplat.namespace" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "secplat.fullname" . }}-api
+    app.kubernetes.io/part-of: {{ include "secplat.name" . }}
+    secplat-role: api
+{{ include "secplat.labels" . | indent 4 }}
+spec:
+  replicas: {{ .Values.api.replicaCount }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "secplat.fullname" . }}-api
+  template:
+    metadata:
+      annotations:
+        checksum/config-secret: {{ include (print .Template.BasePath "/config-secret.yaml") . | sha256sum }}
+      labels:
+        app.kubernetes.io/name: {{ include "secplat.fullname" . }}-api
+        app.kubernetes.io/part-of: {{ include "secplat.name" . }}
+        secplat-role: api
+    spec:
+      serviceAccountName: {{ include "secplat.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+{{ toYaml .Values.podSecurityContext | indent 8 }}
+      containers:
+        - name: api
+          image: {{ .Values.images.api | quote }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: {{ .Values.api.service.port }}
+              name: http
+          envFrom:
+            - configMapRef:
+                name: {{ include "secplat.fullname" . }}-config
+            - secretRef:
+                name: {{ include "secplat.fullname" . }}-secrets
+          env:
+            - name: POSTGRES_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "secplat.fullname" . }}-secrets
+                  key: API_POSTGRES_DSN
+            - name: MIGRATIONS_POSTGRES_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "secplat.fullname" . }}-secrets
+                  key: API_MIGRATIONS_POSTGRES_DSN
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+{{ toYaml .Values.api.resources | indent 12 }}
+          securityContext:
+{{ toYaml .Values.containerSecurityContext | indent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "secplat.fullname" . }}-worker-web
+  namespace: {{ include "secplat.namespace" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "secplat.fullname" . }}-worker-web
+    app.kubernetes.io/part-of: {{ include "secplat.name" . }}
+    secplat-role: worker
+{{ include "secplat.labels" . | indent 4 }}
+spec:
+  replicas: {{ .Values.workerWeb.replicaCount }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "secplat.fullname" . }}-worker-web
+  template:
+    metadata:
+      annotations:
+        checksum/config-secret: {{ include (print .Template.BasePath "/config-secret.yaml") . | sha256sum }}
+      labels:
+        app.kubernetes.io/name: {{ include "secplat.fullname" . }}-worker-web
+        app.kubernetes.io/part-of: {{ include "secplat.name" . }}
+        secplat-role: worker
+    spec:
+      serviceAccountName: {{ include "secplat.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+{{ toYaml .Values.podSecurityContext | indent 8 }}
+      containers:
+        - name: worker-web
+          image: {{ .Values.images.workerWeb | quote }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: {{ .Values.workerWeb.service.port }}
+              name: metrics
+          envFrom:
+            - configMapRef:
+                name: {{ include "secplat.fullname" . }}-config
+            - secretRef:
+                name: {{ include "secplat.fullname" . }}-secrets
+          env:
+            - name: WORKER_API_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "secplat.fullname" . }}-secrets
+                  key: SCANNER_SERVICE_USERNAME
+            - name: WORKER_API_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "secplat.fullname" . }}-secrets
+                  key: SCANNER_SERVICE_PASSWORD
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+          resources:
+{{ toYaml .Values.workerWeb.resources | indent 12 }}
+          securityContext:
+{{ toYaml .Values.containerSecurityContext | indent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+{{- range $name, $cfg := dict "correlator" .Values.correlator "notifier" .Values.notifier "deriver" .Values.deriver }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "secplat.fullname" $ }}-{{ $name }}
+  namespace: {{ include "secplat.namespace" $ }}
+  labels:
+    app.kubernetes.io/name: {{ include "secplat.fullname" $ }}-{{ $name }}
+    app.kubernetes.io/part-of: {{ include "secplat.name" $ }}
+    secplat-role: {{ $name }}
+{{ include "secplat.labels" $ | indent 4 }}
+spec:
+  replicas: {{ $cfg.replicaCount }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "secplat.fullname" $ }}-{{ $name }}
+  template:
+    metadata:
+      annotations:
+        checksum/config-secret: {{ include (print $.Template.BasePath "/config-secret.yaml") $ | sha256sum }}
+      labels:
+        app.kubernetes.io/name: {{ include "secplat.fullname" $ }}-{{ $name }}
+        app.kubernetes.io/part-of: {{ include "secplat.name" $ }}
+        secplat-role: {{ $name }}
+    spec:
+      serviceAccountName: {{ include "secplat.serviceAccountName" $ }}
+      automountServiceAccountToken: false
+      securityContext:
+{{ toYaml $.Values.podSecurityContext | indent 8 }}
+      containers:
+        - name: {{ $name }}
+          image: {{ index $.Values.images (camelcase $name) | default (index $.Values.images $name) | quote }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: {{ $cfg.service.port }}
+              name: metrics
+          envFrom:
+            - configMapRef:
+                name: {{ include "secplat.fullname" $ }}-config
+            - secretRef:
+                name: {{ include "secplat.fullname" $ }}-secrets
+          env:
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+          resources:
+{{ toYaml $cfg.resources | indent 12 }}
+          securityContext:
+{{ toYaml $.Values.containerSecurityContext | indent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+{{- end }}

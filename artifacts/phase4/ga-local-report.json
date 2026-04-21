@@ -1,0 +1,253 @@
+{
+  "api_service": "secplat-api",
+  "checks": [
+    {
+      "check": "baseline_health",
+      "ok": true,
+      "payload": {
+        "status": "ok"
+      },
+      "status": 200
+    },
+    {
+      "check": "baseline_ready",
+      "ok": true,
+      "payload": {
+        "checks": {
+          "opensearch": "ok",
+          "postgres": "ok"
+        },
+        "status": "ok"
+      },
+      "status": 200
+    },
+    {
+      "check": "baseline_queue_health",
+      "ok": true,
+      "payload": {
+        "dlq_streams": {
+          "secplat.events.correlation.dlq": 0,
+          "secplat.events.notify.dlq": 0,
+          "secplat.jobs.scan.dlq": 0
+        },
+        "pending": {
+          "secplat.events.correlation": {
+            "correlators": {
+              "max_id": null,
+              "min_id": null,
+              "oldest_idle_ms": null,
+              "pending": 0
+            }
+          },
+          "secplat.events.notify": {
+            "notifiers": {
+              "max_id": null,
+              "min_id": null,
+              "oldest_idle_ms": null,
+              "pending": 0
+            }
+          },
+          "secplat.jobs.scan": {
+            "workers": {
+              "max_id": null,
+              "min_id": null,
+              "oldest_idle_ms": null,
+              "pending": 0
+            }
+          }
+        },
+        "redis": "ok",
+        "redis_version": "7.4.7",
+        "streams": {
+          "secplat.events.correlation": 0,
+          "secplat.events.notify": 0,
+          "secplat.jobs.scan": 0
+        }
+      },
+      "status": 200
+    },
+    {
+      "check": "api_load_smoke",
+      "detail": [
+        {
+          "endpoint": "http://127.0.0.1:57329/health",
+          "failure_count": 0,
+          "max_ms": 195.023,
+          "ok": true,
+          "p50_ms": 67.798,
+          "p95_ms": 147.395,
+          "p99_ms": 174.417,
+          "success_count": 60,
+          "threshold_ms": 500.0,
+          "total_requests": 60
+        },
+        {
+          "endpoint": "http://127.0.0.1:57329/ready",
+          "failure_count": 0,
+          "max_ms": 257.634,
+          "ok": true,
+          "p50_ms": 76.836,
+          "p95_ms": 233.043,
+          "p99_ms": 250.42,
+          "success_count": 60,
+          "threshold_ms": 500.0,
+          "total_requests": 60
+        },
+        {
+          "endpoint": "http://127.0.0.1:57329/auth/config",
+          "failure_count": 0,
+          "max_ms": 272.933,
+          "ok": true,
+          "p50_ms": 64.033,
+          "p95_ms": 189.775,
+          "p99_ms": 256.445,
+          "success_count": 60,
+          "threshold_ms": 500.0,
+          "total_requests": 60
+        }
+      ],
+      "ok": true
+    },
+    {
+      "check": "opensearch_restart_recovery",
+      "deleted_pod": "secplat-opensearch-0",
+      "ok": true,
+      "outage": {
+        "ok": true,
+        "payload": {
+          "checks": {
+            "opensearch": "[Errno 111] Connection refused",
+            "postgres": "ok"
+          },
+          "status": "degraded"
+        },
+        "status": 503
+      },
+      "recovery": {
+        "ok": true,
+        "payload": {
+          "checks": {
+            "opensearch": "ok",
+            "postgres": "ok"
+          },
+          "status": "ok"
+        },
+        "status": 200
+      },
+      "replacement_pod": "secplat-opensearch-0"
+    },
+    {
+      "check": "redis_restart_recovery",
+      "deleted_pod": "secplat-redis-799b47f67c-tgrlt",
+      "ok": true,
+      "outage": {
+        "ok": true,
+        "payload": {
+          "error": "Error 111 connecting to secplat-redis:6379. Connection refused.",
+          "redis": "error"
+        },
+        "status": 503
+      },
+      "recovery": {
+        "ok": true,
+        "payload": {
+          "dlq_streams": {
+            "secplat.events.correlation.dlq": 0,
+            "secplat.events.notify.dlq": 0,
+            "secplat.jobs.scan.dlq": 0
+          },
+          "pending": {
+            "secplat.events.correlation": {
+              "correlators": {
+                "max_id": null,
+                "min_id": null,
+                "oldest_idle_ms": null,
+                "pending": 0
+              }
+            },
+            "secplat.events.notify": {
+              "notifiers": {
+                "max_id": null,
+                "min_id": null,
+                "oldest_idle_ms": null,
+                "pending": 0
+              }
+            },
+            "secplat.jobs.scan": {
+              "workers": {
+                "max_id": null,
+                "min_id": null,
+                "oldest_idle_ms": null,
+                "pending": 0
+              }
+            }
+          },
+          "redis": "ok",
+          "redis_version": "7.4.7",
+          "streams": {
+            "secplat.events.correlation": 0,
+            "secplat.events.notify": 0,
+            "secplat.jobs.scan": 0
+          }
+        },
+        "status": 200
+      },
+      "replacement_pod": "secplat-redis-799b47f67c-rsr78"
+    },
+    {
+      "check": "postgres_restart_recovery",
+      "deleted_pod": "secplat-postgres-0",
+      "ok": true,
+      "outage": {
+        "ok": true,
+        "payload": {
+          "checks": {
+            "opensearch": "ok",
+            "postgres": "(psycopg.OperationalError) connection failed: connection to server at \"10.101.86.11\", port 5432 failed: Connection refused\n\tIs the server running on that host and accepting TCP/IP connections?\n(Background on this error at: https://sqlalche.me/e/20/e3q8)"
+          },
+          "status": "degraded"
+        },
+        "status": 503
+      },
+      "recovery": {
+        "ok": true,
+        "payload": {
+          "checks": {
+            "opensearch": "ok",
+            "postgres": "ok"
+          },
+          "status": "ok"
+        },
+        "status": 200
+      },
+      "replacement_pod": "secplat-postgres-0"
+    },
+    {
+      "check": "post_recovery_api_smoke",
+      "ok": true,
+      "payload": {
+        "alerts": 0,
+        "asset_key": "cyberlab-demo-asset",
+        "assets": [],
+        "assets_present": 0,
+        "attack_lab_runs": 0,
+        "detection_rule": null,
+        "incidents": 0,
+        "ioc_source": "cyberlab-demo",
+        "latest_seed_at": null,
+        "latest_seed_details": null,
+        "repo_asset_key": "cyberlab-demo-repo",
+        "repository_findings": 0,
+        "rule_name": "cyberlab-demo-cowrie-login-failed-v1",
+        "seed_version": "v1",
+        "seeded": false,
+        "telemetry_events": 0
+      },
+      "status": 200
+    }
+  ],
+  "generated_at": "2026-04-04T13:04:02Z",
+  "load_iterations": 60,
+  "namespace": "secplat-phase3-verify",
+  "ok": true
+}

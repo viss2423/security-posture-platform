@@ -72,8 +72,8 @@ The API container already has `POSTGRES_DSN` and admin credentials from compose.
 1. Install API deps (from repo root): `cd services/api && pip install -e .` (or `uv sync`). This installs FastAPI, pytest, etc.
 2. Ensure Postgres is reachable and migrations have run (e.g. stack was started with `docker compose up`).
 3. Set env (adjust if your DSN differs):
-   - **Linux/macOS:** `export POSTGRES_DSN="postgresql://secplat:secplat@127.0.0.1:5432/secplat"` (and optionally API_SECRET_KEY, ADMIN_USERNAME, ADMIN_PASSWORD).
-   - **Windows PowerShell:** `$env:POSTGRES_DSN="postgresql://secplat:secplat@127.0.0.1:5432/secplat"`.
+   - **Linux/macOS:** `export POSTGRES_DSN="postgresql://secplat_runtime:secplat_runtime@127.0.0.1:5432/secplat"` (and optionally API_SECRET_KEY, ADMIN_USERNAME, ADMIN_PASSWORD).
+   - **Windows PowerShell:** `$env:POSTGRES_DSN="postgresql://secplat_runtime:secplat_runtime@127.0.0.1:5432/secplat"`.
 4. From `services/api`: `pytest tests/test_incidents.py -v`.
 
 If `POSTGRES_DSN` is not set, the incident tests are **skipped** (see `pytestmark` in `test_incidents.py`).

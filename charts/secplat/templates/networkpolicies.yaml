@@ -1,0 +1,251 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "secplat.fullname" . }}-api-egress
+  namespace: {{ include "secplat.namespace" . }}
+  labels:
+    app.kubernetes.io/part-of: {{ include "secplat.name" . }}
+{{ include "secplat.labels" . | indent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      secplat-role: api
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 9200
+        - protocol: TCP
+          port: 4318
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.kubeSystemNamespace | quote }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "secplat.fullname" . }}-worker-egress
+  namespace: {{ include "secplat.namespace" . }}
+  labels:
+    app.kubernetes.io/part-of: {{ include "secplat.name" . }}
+{{ include "secplat.labels" . | indent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      secplat-role: worker
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 4318
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443
+    - to:
+        - podSelector:
+            matchLabels:
+              secplat-role: api
+      ports:
+        - protocol: TCP
+          port: 8000
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.kubeSystemNamespace | quote }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "secplat.fullname" . }}-correlator-egress
+  namespace: {{ include "secplat.namespace" . }}
+  labels:
+    app.kubernetes.io/part-of: {{ include "secplat.name" . }}
+{{ include "secplat.labels" . | indent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      secplat-role: correlator
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 8000
+        - protocol: TCP
+          port: 4318
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.kubeSystemNamespace | quote }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "secplat.fullname" . }}-notifier-egress
+  namespace: {{ include "secplat.namespace" . }}
+  labels:
+    app.kubernetes.io/part-of: {{ include "secplat.name" . }}
+{{ include "secplat.labels" . | indent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      secplat-role: notifier
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 4318
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.kubeSystemNamespace | quote }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "secplat.fullname" . }}-deriver-egress
+  namespace: {{ include "secplat.namespace" . }}
+  labels:
+    app.kubernetes.io/part-of: {{ include "secplat.name" . }}
+{{ include "secplat.labels" . | indent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      secplat-role: deriver
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 9200
+        - protocol: TCP
+          port: 4318
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.kubeSystemNamespace | quote }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "secplat.fullname" . }}-ingestion-egress
+  namespace: {{ include "secplat.namespace" . }}
+  labels:
+    app.kubernetes.io/part-of: {{ include "secplat.name" . }}
+{{ include "secplat.labels" . | indent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      secplat-role: ingestion
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 8000
+        - protocol: TCP
+          port: 9200
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.kubeSystemNamespace | quote }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres-ingress-from-{{ include "secplat.fullname" . }}-api
+  namespace: {{ include "secplat.namespace" . }}
+  labels:
+    app.kubernetes.io/part-of: {{ include "secplat.name" . }}
+{{ include "secplat.labels" . | indent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              secplat-role: api
+      ports:
+        - protocol: TCP
+          port: 5432
+{{- end }}

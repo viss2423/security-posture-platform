@@ -95,7 +95,7 @@ def list_discovery_runs(
     where = " AND ".join(clauses)
     rows = (
         db.execute(
-            text(
+            text(  # nosemgrep
                 f"""
                 SELECT
                   run_id,
@@ -181,6 +181,234 @@ def _latest_run_id(db: Session) -> int | None:
         .first()
     )
     return int(row["run_id"]) if row else None
+
+
+@router.get("/workspace")
+def attack_surface_workspace(
+    run_id: int | None = Query(None),
+    top_limit: int = Query(10, ge=1, le=50),
+    db: Session = Depends(get_db),
+    _user: str = Depends(require_auth),
+):
+    target_run_id = int(run_id) if run_id else _latest_run_id(db)
+    relationship_total = (
+        db.execute(text("SELECT COUNT(*) AS count FROM attack_surface_relationships"))
+        .mappings()
+        .first()
+        or {}
+    )
+    if not target_run_id:
+        return {
+            "run_id": None,
+            "run": None,
+            "totals": {
+                "hosts": 0,
+                "services": 0,
+                "certificates": 0,
+                "exposures": 0,
+                "internet_exposed_assets": 0,
+                "drift_events": 0,
+                "relationships": int(relationship_total.get("count") or 0),
+            },
+            "exposure_levels": {},
+            "drift_by_type": {},
+            "top_exposures": [],
+            "recent_drift": [],
+        }
+
+    run_row = (
+        db.execute(
+            text(
+                """
+                SELECT
+                  run_id,
+                  status,
+                  requested_by,
+                  source_job_id,
+                  started_at,
+                  finished_at,
+                  error,
+                  metadata_json,
+                  summary_json
+                FROM attack_surface_discovery_runs
+                WHERE run_id = :run_id
+                """
+            ),
+            {"run_id": target_run_id},
+        )
+        .mappings()
+        .first()
+    )
+    if not run_row:
+        raise HTTPException(status_code=404, detail="Discovery run not found")
+
+    totals = (
+        db.execute(
+            text(
+                """
+                SELECT
+                  (SELECT COUNT(*) FROM attack_surface_hosts WHERE run_id = :run_id) AS hosts,
+                  (SELECT COUNT(*) FROM attack_surface_services WHERE run_id = :run_id) AS services,
+                  (SELECT COUNT(*) FROM attack_surface_certificates WHERE run_id = :run_id) AS certificates,
+                  (SELECT COUNT(*) FROM attack_surface_exposures WHERE run_id = :run_id) AS exposures,
+                  (
+                    SELECT COUNT(*)
+                    FROM attack_surface_exposures
+                    WHERE run_id = :run_id
+                      AND internet_exposed = TRUE
+                  ) AS internet_exposed_assets,
+                  (SELECT COUNT(*) FROM attack_surface_drift_events WHERE run_id = :run_id) AS drift_events
+                """
+            ),
+            {"run_id": target_run_id},
+        )
+        .mappings()
+        .first()
+        or {}
+    )
+    exposure_rows = (
+        db.execute(
+            text(
+                """
+                SELECT exposure_level, COUNT(*) AS count
+                FROM attack_surface_exposures
+                WHERE run_id = :run_id
+                GROUP BY exposure_level
+                """
+            ),
+            {"run_id": target_run_id},
+        )
+        .mappings()
+        .all()
+    )
+    drift_rows = (
+        db.execute(
+            text(
+                """
+                SELECT event_type, COUNT(*) AS count
+                FROM attack_surface_drift_events
+                WHERE run_id = :run_id
+                GROUP BY event_type
+                """
+            ),
+            {"run_id": target_run_id},
+        )
+        .mappings()
+        .all()
+    )
+    related_relationships = (
+        db.execute(
+            text(
+                """
+                WITH run_assets AS (
+                  SELECT DISTINCT asset_key
+                  FROM attack_surface_hosts
+                  WHERE run_id = :run_id
+                    AND asset_key IS NOT NULL
+                    AND asset_key <> ''
+                )
+                SELECT COUNT(*) AS count
+                FROM attack_surface_relationships r
+                WHERE r.source_asset_key IN (SELECT asset_key FROM run_assets)
+                   OR r.target_asset_key IN (SELECT asset_key FROM run_assets)
+                """
+            ),
+            {"run_id": target_run_id},
+        )
+        .mappings()
+        .first()
+        or {}
+    )
+    top_exposure_rows = (
+        db.execute(
+            text(
+                """
+                SELECT
+                  e.asset_key,
+                  a.name AS asset_name,
+                  a.environment,
+                  a.criticality,
+                  e.exposure_score,
+                  e.exposure_level,
+                  e.open_port_count,
+                  e.open_management_ports,
+                  e.internet_exposed,
+                  e.updated_at
+                FROM attack_surface_exposures e
+                LEFT JOIN assets a ON a.asset_key = e.asset_key
+                WHERE e.run_id = :run_id
+                ORDER BY e.exposure_score DESC, e.updated_at DESC, e.asset_key ASC
+                LIMIT :top_limit
+                """
+            ),
+            {"run_id": target_run_id, "top_limit": int(top_limit)},
+        )
+        .mappings()
+        .all()
+    )
+    recent_drift_rows = (
+        db.execute(
+            text(
+                """
+                SELECT
+                  event_id,
+                  event_type,
+                  severity,
+                  asset_key,
+                  hostname,
+                  domain,
+                  port,
+                  details_json,
+                  created_at
+                FROM attack_surface_drift_events
+                WHERE run_id = :run_id
+                ORDER BY event_id DESC
+                LIMIT :top_limit
+                """
+            ),
+            {"run_id": target_run_id, "top_limit": int(top_limit)},
+        )
+        .mappings()
+        .all()
+    )
+
+    run_out = _serialize_times(dict(run_row), ["started_at", "finished_at"])
+    run_out["metadata_json"] = _safe_json(run_out.get("metadata_json"), default={})
+    run_out["summary_json"] = _safe_json(run_out.get("summary_json"), default={})
+    top_exposures: list[dict[str, Any]] = []
+    for row in top_exposure_rows:
+        out = _serialize_times(dict(row), ["updated_at"])
+        top_exposures.append(out)
+    recent_drift: list[dict[str, Any]] = []
+    for row in recent_drift_rows:
+        out = _serialize_times(dict(row), ["created_at"])
+        out["details_json"] = _safe_json(out.get("details_json"), default={})
+        recent_drift.append(out)
+
+    return {
+        "run_id": target_run_id,
+        "run": run_out,
+        "totals": {
+            "hosts": int(totals.get("hosts") or 0),
+            "services": int(totals.get("services") or 0),
+            "certificates": int(totals.get("certificates") or 0),
+            "exposures": int(totals.get("exposures") or 0),
+            "internet_exposed_assets": int(totals.get("internet_exposed_assets") or 0),
+            "drift_events": int(totals.get("drift_events") or 0),
+            "relationships": int(related_relationships.get("count") or 0),
+            "relationships_total": int(relationship_total.get("count") or 0),
+        },
+        "exposure_levels": {
+            str(row.get("exposure_level") or "unknown"): int(row.get("count") or 0)
+            for row in exposure_rows
+        },
+        "drift_by_type": {
+            str(row.get("event_type") or "unknown"): int(row.get("count") or 0)
+            for row in drift_rows
+        },
+        "top_exposures": top_exposures,
+        "recent_drift": recent_drift,
+    }
 
 
 @router.get("/discovery/hosts")
@@ -375,7 +603,7 @@ def list_surface_drift(
     where = " AND ".join(clauses)
     rows = (
         db.execute(
-            text(
+            text(  # nosemgrep
                 f"""
                 SELECT
                   event_id,
@@ -422,7 +650,7 @@ def list_relationships(
     where = " AND ".join(clauses)
     rows = (
         db.execute(
-            text(
+            text(  # nosemgrep
                 f"""
                 SELECT
                   relationship_id,

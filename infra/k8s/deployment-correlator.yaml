@@ -31,8 +31,11 @@ spec:
           type: RuntimeDefault
       containers:
         - name: correlator
-          image: ghcr.io/your-org/secplat-correlator:latest
+          image: ghcr.io/your-org/secplat-correlator@sha256:3333333333333333333333333333333333333333333333333333333333333333
           imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9102
+              name: metrics
           envFrom:
             - configMapRef:
                 name: secplat-config

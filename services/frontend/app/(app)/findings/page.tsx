@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
   createAIFeedback,
@@ -202,6 +202,7 @@ export default function FindingsPage() {
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [sourceFilter, setSourceFilter] = useState<string>('');
   const [riskLevelFilter, setRiskLevelFilter] = useState<RiskLevelFilter>('');
+  const [textFilter, setTextFilter] = useState('');
   const [updatingId, setUpdatingId] = useState<number | null>(null);
   const [labelingKey, setLabelingKey] = useState<string | null>(null);
   const [acceptRiskId, setAcceptRiskId] = useState<number | null>(null);
@@ -452,14 +453,46 @@ export default function FindingsPage() {
     }
   };
 
-  const sources = Array.from(new Set(findings.map((f) => f.source).filter((s): s is string => !!s)));
-  const visibleRiskCounts = findings.reduce(
+  const normalizedTextFilter = textFilter.trim().toLowerCase();
+  const visibleFindings = useMemo(() => {
+    if (!normalizedTextFilter) return findings;
+    return findings.filter((finding) =>
+      [
+        finding.title,
+        finding.asset_key,
+        finding.asset_name,
+        finding.source,
+        finding.vulnerability_id,
+        finding.package_name,
+        finding.category,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+        .includes(normalizedTextFilter)
+    );
+  }, [findings, normalizedTextFilter]);
+
+  const sources = Array.from(
+    new Set(findings.map((finding) => finding.source).filter((source): source is string => !!source))
+  );
+  const visibleRiskCounts = visibleFindings.reduce(
     (acc, finding) => {
       const key = (finding.risk_level || 'unscored') as 'critical' | 'high' | 'medium' | 'low' | 'unscored';
       acc[key] += 1;
       return acc;
     },
     { critical: 0, high: 0, medium: 0, low: 0, unscored: 0 }
+  );
+  const statusCounts = visibleFindings.reduce<Record<FindingStatus, number>>(
+    (acc, finding) => {
+      const status = finding.status as FindingStatus;
+      if (status in acc) {
+        acc[status] += 1;
+      }
+      return acc;
+    },
+    { open: 0, in_progress: 0, remediated: 0, accepted_risk: 0 }
   );
   const activeFilters = [
     statusFilter ? `status: ${statusFilter.replace('_', ' ')}` : null,
@@ -472,14 +505,14 @@ export default function FindingsPage() {
       <section className="page-hero animate-in">
         <div className="hero-grid">
           <div>
-            <h1 className="hero-title">Findings Command Queue</h1>
+            <h1 className="hero-title">Risk Review</h1>
             <p className="hero-copy">
-              Risk-ranked vulnerability and detection findings with direct workflow control,
-              analyst labels, and AI-backed investigation context.
+              Review the exposures that matter most, understand why they rank highly, and move
+              them toward remediation.
             </p>
             <div className="mt-4 flex flex-wrap gap-2">
               <Link href="/ml-risk" className="btn-secondary text-sm">
-                Open ML lab
+                Open scoring studio
               </Link>
               <Link href="/incidents" className="btn-secondary text-sm">
                 Open incidents
@@ -492,7 +525,7 @@ export default function FindingsPage() {
           <div className="hero-stat-grid">
             <div className="hero-stat">
               <p className="hero-stat-label">Visible findings</p>
-              <p className="hero-stat-value">{findings.length}</p>
+              <p className="hero-stat-value">{visibleFindings.length}</p>
             </div>
             <div className="hero-stat">
               <p className="hero-stat-label">Critical</p>
@@ -527,7 +560,7 @@ export default function FindingsPage() {
         <details className="section-panel mb-6 animate-in disclosure">
           <summary className="flex cursor-pointer list-none flex-wrap items-start justify-between gap-4">
             <div>
-              <p className="section-title mb-2">ML risk model</p>
+              <p className="section-title mb-2">Scoring studio status</p>
               <div className="flex flex-wrap gap-2">
                 <span
                   className={`inline-block rounded px-2 py-0.5 text-xs font-semibold uppercase ${
@@ -596,7 +629,7 @@ export default function FindingsPage() {
                     </button>
                   )}
                   <Link href="/ml-risk" className="btn-secondary text-sm">
-                    Open ML lab
+                    Open scoring studio
                   </Link>
                 </div>
               )}
@@ -653,7 +686,7 @@ export default function FindingsPage() {
             )}
           </div>
         </div>
-        <div className="mt-4 grid gap-4 lg:grid-cols-[13rem_13rem_1fr]">
+        <div className="mt-4 grid gap-4 lg:grid-cols-[14rem_14rem_minmax(220px,1fr)_minmax(220px,1fr)]">
           <label className="text-sm text-[var(--muted)]">
             <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em]">
               Status
@@ -692,6 +725,17 @@ export default function FindingsPage() {
                 ))}
             </select>
           </label>
+          <label className="text-sm text-[var(--muted)]">
+            <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em]">
+              Queue search
+            </span>
+            <input
+              value={textFilter}
+              onChange={(event) => setTextFilter(event.target.value)}
+              className="input py-2.5"
+              placeholder="Search title, asset, CVE, package..."
+            />
+          </label>
           <div>
             <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
               Risk level
@@ -721,6 +765,26 @@ export default function FindingsPage() {
             </div>
           </div>
         </div>
+        <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-[var(--border)] pt-4">
+          <span className="command-pill-strong">Status lanes</span>
+          {STATUS_OPTIONS.map((status) => {
+            const selected = statusFilter === status;
+            return (
+              <button
+                key={status}
+                type="button"
+                onClick={() => setStatusFilter((current) => (current === status ? '' : status))}
+                className={`rounded-full border px-3 py-1.5 text-xs font-semibold uppercase transition ${
+                  selected
+                    ? 'border-cyan-300/20 bg-cyan-300/08 text-[var(--cyan-strong)]'
+                    : 'border-[var(--border)] bg-[var(--surface)] text-[var(--muted)] hover:border-cyan-300/30 hover:text-[var(--text)]'
+                }`}
+              >
+                {status.replace('_', ' ')} {statusCounts[status]}
+              </button>
+            );
+          })}
+        </div>
       </section>
 
       {loading ? (
@@ -730,9 +794,14 @@ export default function FindingsPage() {
           title="No findings"
           description="Run the scanner to generate TLS and security header findings, or wait for the scheduled scan."
         />
+      ) : visibleFindings.length === 0 ? (
+        <EmptyState
+          title="No findings in this slice"
+          description="Adjust queue search or filters to bring findings back into scope."
+        />
       ) : (
         <div className="space-y-5">
-          {findings.map((f) => {
+          {visibleFindings.map((f) => {
             const drivers = riskDrivers(f);
             const ai = aiByFindingId[f.finding_id];
             const guardrails = parseFindingGuardrails(ai);
@@ -1074,7 +1143,8 @@ export default function FindingsPage() {
 
       {findings.length > 0 && (
         <p className="mt-4 text-xs text-[var(--muted)]">
-          Showing {findings.length} finding{findings.length === 1 ? '' : 's'}
+          Showing {visibleFindings.length} of {findings.length} finding
+          {findings.length === 1 ? '' : 's'}
           {canMutate && '. Open a finding to change workflow state, add analyst labels, or request AI help.'}
         </p>
       )}

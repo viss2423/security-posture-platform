@@ -8,7 +8,7 @@ from typing import Any
 import bcrypt
 from sqlalchemy import text
 
-from app.db import engine
+from app.db import migration_engine
 from app.risk_scoring import backfill_finding_risk_scores
 from app.settings import settings
 
@@ -546,6 +546,9 @@ CREATE TABLE IF NOT EXISTS scan_jobs (
   error            TEXT,
   log_output       TEXT,
   retry_count      INTEGER NOT NULL DEFAULT 0,
+  claimed_by       TEXT,
+  claim_token      TEXT,
+  last_heartbeat_at TIMESTAMPTZ,
   job_params_json  JSONB NOT NULL DEFAULT '{}'::jsonb
 );
 CREATE INDEX IF NOT EXISTS idx_scan_jobs_status ON scan_jobs(status);
@@ -555,6 +558,19 @@ ALTER_SCAN_JOBS_LOG = "ALTER TABLE scan_jobs ADD COLUMN IF NOT EXISTS log_output
 ALTER_SCAN_JOBS_RETRY = (
     "ALTER TABLE scan_jobs ADD COLUMN IF NOT EXISTS retry_count INTEGER NOT NULL DEFAULT 0;"
 )
+ALTER_SCAN_JOBS_CLAIMED_BY = "ALTER TABLE scan_jobs ADD COLUMN IF NOT EXISTS claimed_by TEXT;"
+ALTER_SCAN_JOBS_CLAIM_TOKEN = "ALTER TABLE scan_jobs ADD COLUMN IF NOT EXISTS claim_token TEXT;"
+ALTER_SCAN_JOBS_LAST_HEARTBEAT = (
+    "ALTER TABLE scan_jobs ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ;"
+)
+SCAN_JOBS_CLAIM_TOKEN_INDEX = """
+CREATE UNIQUE INDEX IF NOT EXISTS idx_scan_jobs_claim_token
+  ON scan_jobs(claim_token) WHERE claim_token IS NOT NULL;
+"""
+SCAN_JOBS_LAST_HEARTBEAT_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_scan_jobs_last_heartbeat
+  ON scan_jobs(last_heartbeat_at DESC) WHERE last_heartbeat_at IS NOT NULL;
+"""
 ALTER_SCAN_JOBS_PARAMS = "ALTER TABLE scan_jobs ADD COLUMN IF NOT EXISTS job_params_json JSONB NOT NULL DEFAULT '{}'::jsonb;"
 
 # Phase B.2: policy bundles
@@ -1135,6 +1151,251 @@ CREATE INDEX IF NOT EXISTS idx_asset_anomaly_scores_asset_time
   ON asset_anomaly_scores(asset_key, computed_at DESC);
 """
 
+PLATFORM_SLI_SAMPLES_SQL = """
+CREATE TABLE IF NOT EXISTS platform_sli_samples (
+  sample_id                        BIGSERIAL PRIMARY KEY,
+  captured_at                      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  window_hours                     INTEGER NOT NULL DEFAULT 24,
+  source                           TEXT NOT NULL DEFAULT 'platform_runtime',
+  api_availability                 DOUBLE PRECISION,
+  api_p95_latency_ms               DOUBLE PRECISION,
+  ingestion_visibility_seconds     DOUBLE PRECISION,
+  alert_creation_seconds           DOUBLE PRECISION,
+  background_job_freshness_minutes DOUBLE PRECISION
+);
+CREATE INDEX IF NOT EXISTS idx_platform_sli_samples_captured
+  ON platform_sli_samples(captured_at DESC);
+CREATE INDEX IF NOT EXISTS idx_platform_sli_samples_source
+  ON platform_sli_samples(source, captured_at DESC);
+"""
+PLATFORM_API_RUNTIME_SNAPSHOTS_SQL = """
+CREATE TABLE IF NOT EXISTS platform_api_runtime_snapshots (
+  snapshot_id         BIGSERIAL PRIMARY KEY,
+  captured_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  source              TEXT NOT NULL DEFAULT 'api_runtime',
+  service_name        TEXT NOT NULL DEFAULT 'secplat-api',
+  service_instance_id TEXT NOT NULL,
+  request_count       BIGINT NOT NULL DEFAULT 0,
+  server_error_count  BIGINT NOT NULL DEFAULT 0,
+  api_availability    DOUBLE PRECISION,
+  api_p95_latency_ms  DOUBLE PRECISION
+);
+CREATE INDEX IF NOT EXISTS idx_platform_api_runtime_snapshots_captured
+  ON platform_api_runtime_snapshots(captured_at DESC);
+CREATE INDEX IF NOT EXISTS idx_platform_api_runtime_snapshots_instance
+  ON platform_api_runtime_snapshots(service_instance_id, captured_at DESC);
+"""
+
+TENANT_ENFORCEMENT_SQL = """
+ALTER TABLE assets ADD COLUMN IF NOT EXISTS org_id TEXT;
+UPDATE assets SET org_id = COALESCE(NULLIF(BTRIM(org_id), ''), COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default'));
+ALTER TABLE assets ALTER COLUMN org_id SET DEFAULT COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default');
+ALTER TABLE assets ALTER COLUMN org_id SET NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_assets_org_id ON assets(org_id);
+
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS org_id TEXT;
+UPDATE findings SET org_id = COALESCE(NULLIF(BTRIM(org_id), ''), COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default'));
+ALTER TABLE findings ALTER COLUMN org_id SET DEFAULT COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default');
+ALTER TABLE findings ALTER COLUMN org_id SET NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_findings_org_id ON findings(org_id);
+
+ALTER TABLE incidents ADD COLUMN IF NOT EXISTS org_id TEXT;
+UPDATE incidents SET org_id = COALESCE(NULLIF(BTRIM(org_id), ''), COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default'));
+ALTER TABLE incidents ALTER COLUMN org_id SET DEFAULT COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default');
+ALTER TABLE incidents ALTER COLUMN org_id SET NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_incidents_org_id ON incidents(org_id);
+
+ALTER TABLE incident_alerts ADD COLUMN IF NOT EXISTS org_id TEXT;
+UPDATE incident_alerts SET org_id = COALESCE(NULLIF(BTRIM(org_id), ''), COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default'));
+ALTER TABLE incident_alerts ALTER COLUMN org_id SET DEFAULT COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default');
+ALTER TABLE incident_alerts ALTER COLUMN org_id SET NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_incident_alerts_org_id ON incident_alerts(org_id);
+
+ALTER TABLE incident_notes ADD COLUMN IF NOT EXISTS org_id TEXT;
+UPDATE incident_notes SET org_id = COALESCE(NULLIF(BTRIM(org_id), ''), COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default'));
+ALTER TABLE incident_notes ALTER COLUMN org_id SET DEFAULT COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default');
+ALTER TABLE incident_notes ALTER COLUMN org_id SET NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_incident_notes_org_id ON incident_notes(org_id);
+
+ALTER TABLE scan_jobs ADD COLUMN IF NOT EXISTS org_id TEXT;
+UPDATE scan_jobs SET org_id = COALESCE(NULLIF(BTRIM(org_id), ''), COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default'));
+ALTER TABLE scan_jobs ALTER COLUMN org_id SET DEFAULT COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default');
+ALTER TABLE scan_jobs ALTER COLUMN org_id SET NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_scan_jobs_org_id ON scan_jobs(org_id);
+
+ALTER TABLE security_events ADD COLUMN IF NOT EXISTS org_id TEXT;
+UPDATE security_events SET org_id = COALESCE(NULLIF(BTRIM(org_id), ''), COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default'));
+ALTER TABLE security_events ALTER COLUMN org_id SET DEFAULT COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default');
+ALTER TABLE security_events ALTER COLUMN org_id SET NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_security_events_org_id ON security_events(org_id);
+
+ALTER TABLE security_alerts ADD COLUMN IF NOT EXISTS org_id TEXT;
+UPDATE security_alerts SET org_id = COALESCE(NULLIF(BTRIM(org_id), ''), COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default'));
+ALTER TABLE security_alerts ALTER COLUMN org_id SET DEFAULT COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default');
+ALTER TABLE security_alerts ALTER COLUMN org_id SET NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_security_alerts_org_id ON security_alerts(org_id);
+
+ALTER TABLE policy_bundles ADD COLUMN IF NOT EXISTS org_id TEXT;
+UPDATE policy_bundles SET org_id = COALESCE(NULLIF(BTRIM(org_id), ''), COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default'));
+ALTER TABLE policy_bundles ALTER COLUMN org_id SET DEFAULT COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default');
+ALTER TABLE policy_bundles ALTER COLUMN org_id SET NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_policy_bundles_org_id ON policy_bundles(org_id);
+
+ALTER TABLE policy_evaluation_runs ADD COLUMN IF NOT EXISTS org_id TEXT;
+UPDATE policy_evaluation_runs SET org_id = COALESCE(NULLIF(BTRIM(org_id), ''), COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default'));
+ALTER TABLE policy_evaluation_runs ALTER COLUMN org_id SET DEFAULT COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default');
+ALTER TABLE policy_evaluation_runs ALTER COLUMN org_id SET NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_policy_evaluation_runs_org_id ON policy_evaluation_runs(org_id);
+
+ALTER TABLE incident_ai_summaries ADD COLUMN IF NOT EXISTS org_id TEXT;
+UPDATE incident_ai_summaries SET org_id = COALESCE(NULLIF(BTRIM(org_id), ''), COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default'));
+ALTER TABLE incident_ai_summaries ALTER COLUMN org_id SET DEFAULT COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default');
+ALTER TABLE incident_ai_summaries ALTER COLUMN org_id SET NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_incident_ai_summaries_org_id ON incident_ai_summaries(org_id);
+
+ALTER TABLE policy_evaluation_ai_summaries ADD COLUMN IF NOT EXISTS org_id TEXT;
+UPDATE policy_evaluation_ai_summaries SET org_id = COALESCE(NULLIF(BTRIM(org_id), ''), COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default'));
+ALTER TABLE policy_evaluation_ai_summaries ALTER COLUMN org_id SET DEFAULT COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default');
+ALTER TABLE policy_evaluation_ai_summaries ALTER COLUMN org_id SET NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_policy_evaluation_ai_summaries_org_id ON policy_evaluation_ai_summaries(org_id);
+
+ALTER TABLE finding_ai_explanations ADD COLUMN IF NOT EXISTS org_id TEXT;
+UPDATE finding_ai_explanations SET org_id = COALESCE(NULLIF(BTRIM(org_id), ''), COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default'));
+ALTER TABLE finding_ai_explanations ALTER COLUMN org_id SET DEFAULT COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default');
+ALTER TABLE finding_ai_explanations ALTER COLUMN org_id SET NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_finding_ai_explanations_org_id ON finding_ai_explanations(org_id);
+
+ALTER TABLE asset_ai_diagnoses ADD COLUMN IF NOT EXISTS org_id TEXT;
+UPDATE asset_ai_diagnoses SET org_id = COALESCE(NULLIF(BTRIM(org_id), ''), COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default'));
+ALTER TABLE asset_ai_diagnoses ALTER COLUMN org_id SET DEFAULT COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default');
+ALTER TABLE asset_ai_diagnoses ALTER COLUMN org_id SET NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_asset_ai_diagnoses_org_id ON asset_ai_diagnoses(org_id);
+
+ALTER TABLE job_ai_triages ADD COLUMN IF NOT EXISTS org_id TEXT;
+UPDATE job_ai_triages SET org_id = COALESCE(NULLIF(BTRIM(org_id), ''), COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default'));
+ALTER TABLE job_ai_triages ALTER COLUMN org_id SET DEFAULT COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default');
+ALTER TABLE job_ai_triages ALTER COLUMN org_id SET NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_job_ai_triages_org_id ON job_ai_triages(org_id);
+
+ALTER TABLE alert_ai_guidance ADD COLUMN IF NOT EXISTS org_id TEXT;
+UPDATE alert_ai_guidance SET org_id = COALESCE(NULLIF(BTRIM(org_id), ''), COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default'));
+ALTER TABLE alert_ai_guidance ALTER COLUMN org_id SET DEFAULT COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default');
+ALTER TABLE alert_ai_guidance ALTER COLUMN org_id SET NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_alert_ai_guidance_org_id ON alert_ai_guidance(org_id);
+
+ALTER TABLE assets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE assets FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS secplat_tenant_assets ON assets;
+CREATE POLICY secplat_tenant_assets ON assets
+USING (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'))
+WITH CHECK (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'));
+
+ALTER TABLE findings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE findings FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS secplat_tenant_findings ON findings;
+CREATE POLICY secplat_tenant_findings ON findings
+USING (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'))
+WITH CHECK (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'));
+
+ALTER TABLE incidents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE incidents FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS secplat_tenant_incidents ON incidents;
+CREATE POLICY secplat_tenant_incidents ON incidents
+USING (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'))
+WITH CHECK (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'));
+
+ALTER TABLE incident_alerts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE incident_alerts FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS secplat_tenant_incident_alerts ON incident_alerts;
+CREATE POLICY secplat_tenant_incident_alerts ON incident_alerts
+USING (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'))
+WITH CHECK (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'));
+
+ALTER TABLE incident_notes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE incident_notes FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS secplat_tenant_incident_notes ON incident_notes;
+CREATE POLICY secplat_tenant_incident_notes ON incident_notes
+USING (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'))
+WITH CHECK (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'));
+
+ALTER TABLE scan_jobs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE scan_jobs FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS secplat_tenant_scan_jobs ON scan_jobs;
+CREATE POLICY secplat_tenant_scan_jobs ON scan_jobs
+USING (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'))
+WITH CHECK (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'));
+
+ALTER TABLE security_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE security_events FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS secplat_tenant_security_events ON security_events;
+CREATE POLICY secplat_tenant_security_events ON security_events
+USING (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'))
+WITH CHECK (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'));
+
+ALTER TABLE security_alerts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE security_alerts FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS secplat_tenant_security_alerts ON security_alerts;
+CREATE POLICY secplat_tenant_security_alerts ON security_alerts
+USING (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'))
+WITH CHECK (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'));
+
+ALTER TABLE policy_bundles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE policy_bundles FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS secplat_tenant_policy_bundles ON policy_bundles;
+CREATE POLICY secplat_tenant_policy_bundles ON policy_bundles
+USING (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'))
+WITH CHECK (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'));
+
+ALTER TABLE policy_evaluation_runs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE policy_evaluation_runs FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS secplat_tenant_policy_evaluation_runs ON policy_evaluation_runs;
+CREATE POLICY secplat_tenant_policy_evaluation_runs ON policy_evaluation_runs
+USING (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'))
+WITH CHECK (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'));
+
+ALTER TABLE incident_ai_summaries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE incident_ai_summaries FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS secplat_tenant_incident_ai_summaries ON incident_ai_summaries;
+CREATE POLICY secplat_tenant_incident_ai_summaries ON incident_ai_summaries
+USING (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'))
+WITH CHECK (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'));
+
+ALTER TABLE policy_evaluation_ai_summaries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE policy_evaluation_ai_summaries FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS secplat_tenant_policy_eval_ai_summaries ON policy_evaluation_ai_summaries;
+CREATE POLICY secplat_tenant_policy_eval_ai_summaries ON policy_evaluation_ai_summaries
+USING (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'))
+WITH CHECK (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'));
+
+ALTER TABLE finding_ai_explanations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE finding_ai_explanations FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS secplat_tenant_finding_ai_explanations ON finding_ai_explanations;
+CREATE POLICY secplat_tenant_finding_ai_explanations ON finding_ai_explanations
+USING (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'))
+WITH CHECK (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'));
+
+ALTER TABLE asset_ai_diagnoses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE asset_ai_diagnoses FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS secplat_tenant_asset_ai_diagnoses ON asset_ai_diagnoses;
+CREATE POLICY secplat_tenant_asset_ai_diagnoses ON asset_ai_diagnoses
+USING (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'))
+WITH CHECK (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'));
+
+ALTER TABLE job_ai_triages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE job_ai_triages FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS secplat_tenant_job_ai_triages ON job_ai_triages;
+CREATE POLICY secplat_tenant_job_ai_triages ON job_ai_triages
+USING (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'))
+WITH CHECK (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'));
+
+ALTER TABLE alert_ai_guidance ENABLE ROW LEVEL SECURITY;
+ALTER TABLE alert_ai_guidance FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS secplat_tenant_alert_ai_guidance ON alert_ai_guidance;
+CREATE POLICY secplat_tenant_alert_ai_guidance ON alert_ai_guidance
+USING (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'))
+WITH CHECK (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'));
+"""
+
 
 def _bcrypt_hash(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
@@ -1199,7 +1460,7 @@ def _column_exists(conn: Any, table_name: str, column_name: str) -> bool:
 
 def _run_startup_migrations_once() -> None:
     """Create audit_events and alert_states if missing (e.g. DB created before they were in init.sql)."""
-    with engine.begin() as conn:
+    with migration_engine.begin() as conn:
         _acquire_startup_migration_lock(conn)
         for name, sql in [("audit_events", AUDIT_EVENTS_SQL), ("alert_states", ALERT_STATES_SQL)]:
             try:
@@ -1330,7 +1591,9 @@ def _run_startup_migrations_once() -> None:
             )
             # Seed viewer account (password: viewer). Pre-computed hash to avoid passlib/bcrypt
             # backend detection bug (ValueError: password cannot be longer than 72 bytes) in some envs.
-            VIEWER_BCRYPT_HASH = "$2b$12$wITIujVXwHS5q4g/TLizOeTTDFWkpEC9/sAz6h20H5x4GXzz37WGW"
+            VIEWER_BCRYPT_HASH = (
+                "$2b$12$wITIujVXwHS5q4g/TLizOeTTDFWkpEC9/sAz6h20H5x4GXzz37WGW"  # nosemgrep
+            )
             _execute_with_deadlock_retry(
                 conn,
                 """
@@ -1389,7 +1652,7 @@ def _run_startup_migrations_once() -> None:
                     _execute_with_deadlock_retry(conn, stmt)
             logger.info("startup_migration: ensured auth_refresh_tokens table exists")
         except Exception as e:
-            logger.warning("startup_migration: auth_refresh_tokens failed: %s", e)
+            logger.warning("startup_migration: auth_refresh_tokens failed: %s", e)  # nosemgrep
             raise
         # scan_jobs (Phase B.3)
         try:
@@ -1401,8 +1664,16 @@ def _run_startup_migrations_once() -> None:
                 _execute_with_deadlock_retry(conn, ALTER_SCAN_JOBS_LOG)
             if not _column_exists(conn, "scan_jobs", "retry_count"):
                 _execute_with_deadlock_retry(conn, ALTER_SCAN_JOBS_RETRY)
+            if not _column_exists(conn, "scan_jobs", "claimed_by"):
+                _execute_with_deadlock_retry(conn, ALTER_SCAN_JOBS_CLAIMED_BY)
+            if not _column_exists(conn, "scan_jobs", "claim_token"):
+                _execute_with_deadlock_retry(conn, ALTER_SCAN_JOBS_CLAIM_TOKEN)
+            if not _column_exists(conn, "scan_jobs", "last_heartbeat_at"):
+                _execute_with_deadlock_retry(conn, ALTER_SCAN_JOBS_LAST_HEARTBEAT)
             if not _column_exists(conn, "scan_jobs", "job_params_json"):
                 _execute_with_deadlock_retry(conn, ALTER_SCAN_JOBS_PARAMS)
+            _execute_with_deadlock_retry(conn, SCAN_JOBS_CLAIM_TOKEN_INDEX)
+            _execute_with_deadlock_retry(conn, SCAN_JOBS_LAST_HEARTBEAT_INDEX)
             logger.info("startup_migration: ensured scan_jobs table exists")
         except Exception as e:
             logger.warning("startup_migration: scan_jobs failed: %s", e)
@@ -1454,6 +1725,9 @@ def _run_startup_migrations_once() -> None:
             ("threat_iocs", THREAT_IOCS_SQL),
             ("threat_intel_workspace", THREAT_INTEL_WORKSPACE_SQL),
             ("telemetry_security", TELEMETRY_SECURITY_SQL),
+            ("platform_sli_samples", PLATFORM_SLI_SAMPLES_SQL),
+            ("platform_api_runtime_snapshots", PLATFORM_API_RUNTIME_SNAPSHOTS_SQL),
+            ("tenant_enforcement", TENANT_ENFORCEMENT_SQL),
         ]:
             try:
                 for stmt in sql.strip().split(";"):

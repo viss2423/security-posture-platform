@@ -1,0 +1,103 @@
+name: Recovery Drill
+
+on:
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+jobs:
+  backup-restore-verification:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: secplat
+          POSTGRES_USER: secplat
+          POSTGRES_PASSWORD: secplat
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U secplat -d secplat"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      POSTGRES_DSN: postgresql+psycopg://secplat_runtime:secplat_runtime@127.0.0.1:5432/secplat
+      MIGRATIONS_POSTGRES_DSN: postgresql+psycopg://secplat:secplat@127.0.0.1:5432/secplat
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e services/api
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Provision runtime role and schema
+        run: |
+          python services/api/scripts/provision_runtime_db_role.py \
+            --admin-dsn "${MIGRATIONS_POSTGRES_DSN}" \
+            --runtime-user secplat_runtime \
+            --runtime-password secplat_runtime \
+            --database secplat
+          PYTHONPATH=services/api python -c "from app.db_migrate import run_startup_migrations; run_startup_migrations()"
+
+      - name: Generate fresh backup artifact
+        run: |
+          python services/api/scripts/generate_backup_artifact.py \
+            --dsn "${MIGRATIONS_POSTGRES_DSN}" \
+            --mode native \
+            --out recovery-drill-backup.sql \
+            --report-out recovery-drill-backup.json
+
+      - name: Validate backup freshness (dry-run)
+        run: |
+          python services/api/scripts/verify_backup_restore.py \
+            --backup-file recovery-drill-backup.sql \
+            --max-age-hours 24 \
+            --dry-run \
+            --report-out recovery-drill-dry-run.json
+
+      - name: Prepare restore target database
+        run: |
+          PGPASSWORD=secplat psql postgresql://secplat:secplat@127.0.0.1:5432/postgres -c "DROP DATABASE IF EXISTS secplat_restore_tmp;"
+          PGPASSWORD=secplat psql postgresql://secplat:secplat@127.0.0.1:5432/postgres -c "CREATE DATABASE secplat_restore_tmp;"
+          python services/api/scripts/provision_runtime_db_role.py \
+            --admin-dsn "${MIGRATIONS_POSTGRES_DSN}" \
+            --runtime-user secplat_runtime \
+            --runtime-password secplat_runtime \
+            --database secplat_restore_tmp
+
+      - name: Validate restore target DB runtime role
+        run: |
+          python services/api/scripts/check_db_runtime_role.py \
+            --dsn "postgresql+psycopg://secplat_runtime:secplat_runtime@127.0.0.1:5432/secplat_restore_tmp" \
+            --require-dsn \
+            --report-out recovery-drill-runtime-role.json
+
+      - name: Execute restore drill (non-dry-run)
+        run: |
+          python services/api/scripts/verify_backup_restore.py \
+            --backup-file recovery-drill-backup.sql \
+            --no-dry-run \
+            --restore-target-dsn "postgresql+psycopg://secplat:secplat@127.0.0.1:5432/secplat_restore_tmp" \
+            --expect-table assets \
+            --expect-table findings \
+            --report-out recovery-drill-restore.json
+
+      - name: Upload recovery drill reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: recovery-drill-reports
+          path: |
+            recovery-drill-dry-run.json
+            recovery-drill-runtime-role.json
+            recovery-drill-restore.json
+          if-no-files-found: ignore

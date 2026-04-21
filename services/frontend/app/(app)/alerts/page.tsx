@@ -155,14 +155,16 @@ function AlertRow({
   onAssign,
   loading,
   canMutate,
+  currentUsername,
 }: {
   item: AlertItem;
-  onAck: (item: AlertItem, reason?: string) => void;
-  onSuppress: (item: AlertItem, until: string) => void;
-  onResolve: (item: AlertItem) => void;
-  onAssign: (item: AlertItem, who: string) => void;
+  onAck: (item: AlertItem, reason?: string) => Promise<void> | void;
+  onSuppress: (item: AlertItem, until: string) => Promise<void> | void;
+  onResolve: (item: AlertItem) => Promise<void> | void;
+  onAssign: (item: AlertItem, who: string) => Promise<void> | void;
   loading: string | null;
   canMutate: boolean;
+  currentUsername: string | null;
 }) {
   const [actionMode, setActionMode] = useState<ActionMode>(null);
   const [guidanceOpen, setGuidanceOpen] = useState(false);
@@ -173,6 +175,7 @@ function AlertRow({
   const [guidanceLoading, setGuidanceLoading] = useState(false);
   const [guidanceGenerating, setGuidanceGenerating] = useState(false);
   const [guidanceMessage, setGuidanceMessage] = useState<string | null>(null);
+  const [guidanceAcknowledged, setGuidanceAcknowledged] = useState(false);
   const [savingVersion, setSavingVersion] = useState(false);
   const [feedbackBusy, setFeedbackBusy] = useState<AIFeedbackValue | null>(null);
   const key = item.asset_key;
@@ -183,6 +186,10 @@ function AlertRow({
   useEffect(() => {
     setAssignTo(item.assigned_to ?? '');
   }, [item.assigned_to]);
+
+  useEffect(() => {
+    setGuidanceAcknowledged(false);
+  }, [guidance?.generated_at, guidance?.recommended_action, key]);
 
   const defaultSuppress = () => {
     const d = new Date();
@@ -307,6 +314,46 @@ function AlertRow({
       ? `Suppression rule${item.suppression_reason ? `: ${item.suppression_reason}` : ''}`
       : null;
   const guardrails = useMemo(() => parseAlertGuardrails(guidance), [guidance]);
+  const recommendedAction = guidance?.recommended_action || null;
+  const requiresHumanApproval = Boolean(guidance?.requires_human_approval);
+  const canApplyGuidance =
+    recommendedAction != null &&
+    ['ack', 'suppress', 'assign', 'resolve'].includes(recommendedAction);
+
+  const handleApplyRecommendation = async () => {
+    if (!recommendedAction) return;
+    if (requiresHumanApproval && !guidanceAcknowledged) {
+      setGuidanceMessage('Confirm the operator acknowledgement before applying the AI recommendation.');
+      return;
+    }
+    if (recommendedAction === 'assign') {
+      const assignee = assignTo.trim() || currentUsername || '';
+      if (!assignee) {
+        setActionMode('assign');
+        setGuidanceMessage('Add an assignee before applying the AI recommendation.');
+        return;
+      }
+      await Promise.resolve(onAssign(item, assignee));
+      setGuidanceMessage(`Applied AI recommendation: assigned to ${assignee}.`);
+      return;
+    }
+    if (recommendedAction === 'suppress') {
+      const until = suppressUntil || defaultSuppress();
+      setSuppressUntil(until);
+      await Promise.resolve(onSuppress(item, until));
+      setGuidanceMessage(`Applied AI recommendation: suppressed until ${until}.`);
+      return;
+    }
+    if (recommendedAction === 'ack') {
+      await Promise.resolve(onAck(item, ackReason.trim() || 'AI-guided acknowledgement'));
+      setGuidanceMessage('Applied AI recommendation: alert acknowledged.');
+      return;
+    }
+    if (recommendedAction === 'resolve') {
+      await Promise.resolve(onResolve(item));
+      setGuidanceMessage('Applied AI recommendation: alert resolved.');
+    }
+  };
 
   return (
     <li className="section-panel-tight">
@@ -356,6 +403,11 @@ function AlertRow({
             {item.ai_recommended_action && (
               <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium uppercase ${badgeClass(item.ai_recommended_action)}`}>
                 AI {labelize(item.ai_recommended_action)}
+              </span>
+            )}
+            {item.ai_requires_human_approval && (
+              <span className="rounded-full border border-[var(--amber)]/30 bg-[var(--amber)]/15 px-2 py-0.5 text-[11px] font-medium uppercase text-[var(--amber)]">
+                Human review
               </span>
             )}
             {item.ai_urgency && (
@@ -613,8 +665,46 @@ function AlertRow({
               <p className="mt-3 text-xs text-[var(--muted)]">
                 Generated {formatDateTime(guidance.generated_at)} via {guidance.provider}/{guidance.model}
               </p>
+              {requiresHumanApproval && (
+                <div className="mt-3 rounded-xl border border-[var(--amber)]/30 bg-[var(--amber)]/10 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-[var(--amber)]">
+                    Human approval required
+                  </p>
+                  <p className="mt-1 text-xs text-[var(--text-muted)]">
+                    This recommendation changes alert state. Review the evidence-backed guidance,
+                    then confirm operator acknowledgement before applying it.
+                  </p>
+                  <label className="mt-3 flex items-start gap-2 text-xs text-[var(--text)]">
+                    <input
+                      type="checkbox"
+                      checked={guidanceAcknowledged}
+                      onChange={(e) => setGuidanceAcknowledged(e.target.checked)}
+                    />
+                    <span>
+                      I reviewed the AI recommendation and accept responsibility for the resulting
+                      alert-state change.
+                    </span>
+                  </label>
+                </div>
+              )}
               {canMutate && (
                 <div className="mt-3 flex flex-wrap gap-2">
+                  {canApplyGuidance && (
+                    <button
+                      type="button"
+                      onClick={() => void handleApplyRecommendation()}
+                      disabled={
+                        isBusy ||
+                        guidanceGenerating ||
+                        savingVersion ||
+                        feedbackBusy != null ||
+                        (requiresHumanApproval && !guidanceAcknowledged)
+                      }
+                      className="btn-primary text-xs"
+                    >
+                      Apply recommendation
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={saveGuidanceVersion}
@@ -640,6 +730,12 @@ function AlertRow({
                     {feedbackBusy === 'down' ? 'Saving...' : 'Thumbs down'}
                   </button>
                 </div>
+              )}
+              {recommendedAction && !canApplyGuidance && (
+                <p className="mt-3 text-xs text-[var(--muted)]">
+                  This AI recommendation is advisory and must be handled manually in the analyst
+                  workflow.
+                </p>
               )}
               {guardrails && (
                 <div className="mt-4 rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)]/40 p-3">
@@ -721,7 +817,7 @@ function AlertRow({
 }
 
 export default function AlertsPage() {
-  const { canMutate } = useAuth();
+  const { canMutate, user } = useAuth();
   const [data, setData] = useState<AlertsResponse | null>(null);
   const [clusters, setClusters] = useState<AlertCluster[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -779,23 +875,75 @@ export default function AlertsPage() {
 
   const grafanaUrl = process.env.NEXT_PUBLIC_GRAFANA_URL || 'http://localhost:3001';
   const list = data ? data[activeTab] : [];
+  const totalAlerts = data
+    ? data.firing.length + data.acked.length + data.suppressed.length + data.resolved.length
+    : 0;
+  const humanReviewAlerts = data
+    ? [
+        ...data.firing,
+        ...data.acked,
+        ...data.suppressed,
+        ...data.resolved,
+      ].filter((item) => item.ai_requires_human_approval).length
+    : 0;
 
   return (
-    <main className="page-shell">
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <p className="max-w-2xl text-sm text-[var(--text-muted)]">
-          Prioritized alert queue with response guidance, suppression context, and linked risk
-          signals.
-        </p>
-        {data && (
-          <div className="flex flex-wrap gap-2 text-xs">
-            <span className="stat-chip-strong">{data.firing.length} firing</span>
-            <span className="stat-chip">{data.suppressed.length} suppressed</span>
-            <span className="stat-chip">{data.acked.length} acknowledged</span>
-            <span className="stat-chip">{data.resolved.length} resolved</span>
+    <main className="page-shell view-stack">
+      <section className="page-hero animate-in">
+        <div className="hero-grid">
+          <div>
+            <h1 className="hero-title">Alerts &amp; Priorities</h1>
+            <p className="hero-copy">
+              Review live alerts with clearer priorities, AI guidance, and fast handoff into
+              incident response and risk review.
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Link href="/incidents" className="btn-secondary text-sm">
+                Open incidents
+              </Link>
+              <Link href="/findings" className="btn-secondary text-sm">
+                Open findings
+              </Link>
+              <a
+                href={`${grafanaUrl}/alerting/list`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn-secondary text-sm"
+              >
+                Open Grafana
+              </a>
+            </div>
           </div>
-        )}
-      </div>
+          <div className="hero-stat-grid">
+            <div className="hero-stat">
+              <p className="hero-stat-label">Live alerts</p>
+              <p className="hero-stat-value">{data?.firing.length ?? 0}</p>
+            </div>
+            <div className="hero-stat">
+              <p className="hero-stat-label">Current lane</p>
+              <p className="hero-stat-value">{list.length}</p>
+            </div>
+            <div className="hero-stat">
+              <p className="hero-stat-label">Human review</p>
+              <p className="hero-stat-value">{humanReviewAlerts}</p>
+            </div>
+            <div className="hero-stat">
+              <p className="hero-stat-label">Total tracked</p>
+              <p className="hero-stat-value">{totalAlerts}</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="command-lane animate-in">
+        <div className="command-lane-grid">
+          <span className="command-pill-strong">{data?.firing.length ?? 0} firing</span>
+          <span className="command-pill">{data?.suppressed.length ?? 0} suppressed</span>
+          <span className="command-pill">{data?.acked.length ?? 0} acknowledged</span>
+          <span className="command-pill">{data?.resolved.length ?? 0} resolved</span>
+          <span className="command-pill">{clusters.length} clusters ready</span>
+        </div>
+      </section>
 
       {error && (
         <div className="mb-6 alert-error animate-in" role="alert">
@@ -804,7 +952,7 @@ export default function AlertsPage() {
         </div>
       )}
 
-      <div className="mb-6 flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-2">
         {TABS.map(({ id, label }) => (
           <button
             key={id}
@@ -812,8 +960,8 @@ export default function AlertsPage() {
             onClick={() => setActiveTab(id)}
             className={`rounded-full px-4 py-2 text-sm font-medium transition ${
               activeTab === id
-                ? 'bg-[var(--green)] text-white shadow-lg shadow-[var(--green-glow)]'
-                : 'border border-[var(--border)] bg-[var(--surface-elevated)] text-[var(--muted)] hover:bg-[var(--surface)]'
+              ? 'bg-[var(--green)] text-white shadow-lg shadow-[var(--green-glow)]'
+              : 'border border-[var(--border)] bg-[var(--surface-elevated)] text-[var(--muted)] hover:bg-[var(--surface)]'
             }`}
           >
             {label}
@@ -826,7 +974,7 @@ export default function AlertsPage() {
         ))}
       </div>
 
-      <section className="mb-12 animate-in">
+      <section className="animate-in">
         {activeTab === 'firing' && clusters.length > 0 && (
           <div className="mb-6 section-panel">
             <h2 className="section-title">Firing clusters</h2>
@@ -879,27 +1027,11 @@ export default function AlertsPage() {
                 onAssign={handleAssign}
                 loading={loading}
                 canMutate={canMutate}
+                currentUsername={user?.username ?? null}
               />
             ))}
           </ul>
         )}
-      </section>
-
-      <section className="animate-in">
-        <div className="section-panel">
-          <h2 className="section-title">Grafana</h2>
-          <p className="mb-4 text-sm text-[var(--muted)]">
-            Use Grafana for raw alert rules and history. Use this page for response workflow and SecPlat context.
-          </p>
-          <a
-            href={`${grafanaUrl}/alerting/list`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="btn-secondary inline-flex"
-          >
-            Open Grafana alert rules
-          </a>
-        </div>
       </section>
     </main>
   );

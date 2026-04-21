@@ -1,0 +1,403 @@
+{{- if .Values.dependencies.postgres.enabled }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "secplat.fullname" . }}-postgres-auth
+  namespace: {{ include "secplat.namespace" . }}
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/instance: {{ include "secplat.fullname" . }}
+{{ include "secplat.labels" . | indent 4 }}
+type: Opaque
+stringData:
+  POSTGRES_DB: {{ .Values.dependencies.postgres.auth.database | quote }}
+  POSTGRES_USER: {{ .Values.dependencies.postgres.auth.username | quote }}
+  POSTGRES_PASSWORD: {{ .Values.dependencies.postgres.auth.password | quote }}
+  RUNTIME_USER: {{ .Values.dependencies.postgres.auth.runtimeUser | quote }}
+  RUNTIME_PASSWORD: {{ .Values.dependencies.postgres.auth.runtimePassword | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "secplat.fullname" . }}-postgres-init
+  namespace: {{ include "secplat.namespace" . }}
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/instance: {{ include "secplat.fullname" . }}
+{{ include "secplat.labels" . | indent 4 }}
+data:
+  00-secplat-init.sql: |
+    CREATE EXTENSION IF NOT EXISTS pgcrypto;
+    DO $$
+    DECLARE
+      runtime_user TEXT := '{{ .Values.dependencies.postgres.auth.runtimeUser | replace "'" "''" }}';
+      runtime_password TEXT := '{{ .Values.dependencies.postgres.auth.runtimePassword | replace "'" "''" }}';
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = runtime_user) THEN
+        EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L', runtime_user, runtime_password);
+      END IF;
+      EXECUTE format(
+        'ALTER ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION',
+        runtime_user,
+        runtime_password
+      );
+    END $$;
+    GRANT USAGE ON SCHEMA public TO "{{ .Values.dependencies.postgres.auth.runtimeUser }}";
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public
+      GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "{{ .Values.dependencies.postgres.auth.runtimeUser }}";
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public
+      GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO "{{ .Values.dependencies.postgres.auth.runtimeUser }}";
+    CREATE TABLE IF NOT EXISTS assets (
+      asset_id SERIAL PRIMARY KEY,
+      asset_key TEXT NOT NULL UNIQUE,
+      type TEXT NOT NULL,
+      name TEXT NOT NULL,
+      owner TEXT,
+      owner_team TEXT,
+      owner_email TEXT,
+      asset_type TEXT NOT NULL DEFAULT 'service',
+      environment TEXT NOT NULL DEFAULT 'dev',
+      criticality TEXT NOT NULL DEFAULT 'medium',
+      verified BOOLEAN DEFAULT FALSE,
+      verification_method TEXT,
+      verification_token TEXT,
+      address TEXT,
+      port INTEGER,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      tags TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_assets_env ON assets(environment);
+    CREATE INDEX IF NOT EXISTS idx_assets_type ON assets(asset_type);
+    CREATE INDEX IF NOT EXISTS idx_assets_criticality ON assets(criticality);
+    CREATE INDEX IF NOT EXISTS idx_assets_asset_key ON assets(asset_key);
+    CREATE INDEX IF NOT EXISTS idx_assets_tags ON assets USING GIN(tags);
+    CREATE INDEX IF NOT EXISTS idx_assets_metadata ON assets USING GIN(metadata);
+    CREATE OR REPLACE FUNCTION set_updated_at()
+    RETURNS TRIGGER AS $trigger$
+    BEGIN
+      NEW.updated_at = NOW();
+      RETURN NEW;
+    END;
+    $trigger$ LANGUAGE plpgsql;
+    DROP TRIGGER IF EXISTS trg_assets_updated_at ON assets;
+    CREATE TRIGGER trg_assets_updated_at
+    BEFORE UPDATE ON assets
+    FOR EACH ROW
+    EXECUTE FUNCTION set_updated_at();
+    CREATE TABLE IF NOT EXISTS findings (
+      finding_id SERIAL PRIMARY KEY,
+      asset_id INTEGER REFERENCES assets(asset_id),
+      time TIMESTAMPTZ DEFAULT NOW(),
+      category TEXT,
+      title TEXT NOT NULL,
+      severity TEXT NOT NULL,
+      confidence TEXT NOT NULL,
+      evidence TEXT,
+      remediation TEXT
+    );
+    CREATE TABLE IF NOT EXISTS posture_report_snapshots (
+      id SERIAL PRIMARY KEY,
+      period TEXT NOT NULL DEFAULT '24h',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      uptime_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+      posture_score_avg DOUBLE PRECISION,
+      avg_latency_ms DOUBLE PRECISION,
+      total_assets INTEGER NOT NULL DEFAULT 0,
+      green INTEGER NOT NULL DEFAULT 0,
+      amber INTEGER NOT NULL DEFAULT 0,
+      red INTEGER NOT NULL DEFAULT 0,
+      top_incidents JSONB NOT NULL DEFAULT '[]'::jsonb
+    );
+    CREATE INDEX IF NOT EXISTS idx_report_snapshots_created_at ON posture_report_snapshots(created_at DESC);
+    CREATE TABLE IF NOT EXISTS audit_events (
+      id SERIAL PRIMARY KEY,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      action TEXT NOT NULL,
+      user_name TEXT,
+      asset_key TEXT,
+      details JSONB NOT NULL DEFAULT '{}'::jsonb,
+      request_id TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_audit_events_created_at ON audit_events(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_audit_events_action ON audit_events(action);
+    CREATE INDEX IF NOT EXISTS idx_audit_events_user ON audit_events(user_name);
+    CREATE TABLE IF NOT EXISTS alert_states (
+      asset_key TEXT PRIMARY KEY,
+      state TEXT NOT NULL DEFAULT 'firing',
+      ack_reason TEXT,
+      acked_by TEXT,
+      acked_at TIMESTAMPTZ,
+      suppressed_until TIMESTAMPTZ,
+      assigned_to TEXT,
+      resolved_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_alert_states_state ON alert_states(state);
+    GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "{{ .Values.dependencies.postgres.auth.runtimeUser }}";
+    GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO "{{ .Values.dependencies.postgres.auth.runtimeUser }}";
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "secplat.postgresServiceName" . }}
+  namespace: {{ include "secplat.namespace" . }}
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/instance: {{ include "secplat.fullname" . }}
+{{ include "secplat.labels" . | indent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/instance: {{ include "secplat.fullname" . }}
+  ports:
+    - name: postgres
+      port: {{ .Values.dependencies.postgres.service.port }}
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "secplat.postgresServiceName" . }}
+  namespace: {{ include "secplat.namespace" . }}
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/instance: {{ include "secplat.fullname" . }}
+{{ include "secplat.labels" . | indent 4 }}
+spec:
+  serviceName: {{ include "secplat.postgresServiceName" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+      app.kubernetes.io/instance: {{ include "secplat.fullname" . }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/instance: {{ include "secplat.fullname" . }}
+    spec:
+      containers:
+        - name: postgres
+          image: {{ .Values.dependencies.postgres.image | quote }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: {{ .Values.dependencies.postgres.service.port }}
+              name: postgres
+          envFrom:
+            - secretRef:
+                name: {{ include "secplat.fullname" . }}-postgres-auth
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+{{ toYaml .Values.dependencies.postgres.resources | indent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+      volumes:
+        - name: init
+          configMap:
+            name: {{ include "secplat.fullname" . }}-postgres-init
+  {{- if .Values.dependencies.postgres.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.dependencies.postgres.persistence.storageClass }}
+        storageClassName: {{ .Values.dependencies.postgres.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.dependencies.postgres.persistence.size | quote }}
+  {{- end }}
+{{- end }}
+{{- if .Values.dependencies.redis.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "secplat.redisServiceName" . }}
+  namespace: {{ include "secplat.namespace" . }}
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/instance: {{ include "secplat.fullname" . }}
+{{ include "secplat.labels" . | indent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/instance: {{ include "secplat.fullname" . }}
+  ports:
+    - name: redis
+      port: {{ .Values.dependencies.redis.service.port }}
+      targetPort: redis
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "secplat.redisServiceName" . }}
+  namespace: {{ include "secplat.namespace" . }}
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/instance: {{ include "secplat.fullname" . }}
+{{ include "secplat.labels" . | indent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+      app.kubernetes.io/instance: {{ include "secplat.fullname" . }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis
+        app.kubernetes.io/instance: {{ include "secplat.fullname" . }}
+    spec:
+      containers:
+        - name: redis
+          image: {{ .Values.dependencies.redis.image | quote }}
+          imagePullPolicy: IfNotPresent
+          args: ["redis-server", "--appendonly", "no", "--save", ""]
+          ports:
+            - containerPort: {{ .Values.dependencies.redis.service.port }}
+              name: redis
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+{{ toYaml .Values.dependencies.redis.resources | indent 12 }}
+{{- end }}
+{{- if .Values.dependencies.opensearch.enabled }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "secplat.fullname" . }}-opensearch-auth
+  namespace: {{ include "secplat.namespace" . }}
+  labels:
+    app.kubernetes.io/name: opensearch
+    app.kubernetes.io/instance: {{ include "secplat.fullname" . }}
+{{ include "secplat.labels" . | indent 4 }}
+type: Opaque
+stringData:
+  OPENSEARCH_INITIAL_ADMIN_PASSWORD: {{ .Values.dependencies.opensearch.adminPassword | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "secplat.opensearchServiceName" . }}
+  namespace: {{ include "secplat.namespace" . }}
+  labels:
+    app.kubernetes.io/name: opensearch
+    app.kubernetes.io/instance: {{ include "secplat.fullname" . }}
+{{ include "secplat.labels" . | indent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/name: opensearch
+    app.kubernetes.io/instance: {{ include "secplat.fullname" . }}
+  ports:
+    - name: http
+      port: {{ .Values.dependencies.opensearch.service.port }}
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "secplat.opensearchServiceName" . }}
+  namespace: {{ include "secplat.namespace" . }}
+  labels:
+    app.kubernetes.io/name: opensearch
+    app.kubernetes.io/instance: {{ include "secplat.fullname" . }}
+{{ include "secplat.labels" . | indent 4 }}
+spec:
+  serviceName: {{ include "secplat.opensearchServiceName" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opensearch
+      app.kubernetes.io/instance: {{ include "secplat.fullname" . }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: opensearch
+        app.kubernetes.io/instance: {{ include "secplat.fullname" . }}
+    spec:
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: opensearch
+          image: {{ .Values.dependencies.opensearch.image | quote }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: {{ .Values.dependencies.opensearch.service.port }}
+              name: http
+          env:
+            - name: discovery.type
+              value: "single-node"
+            - name: plugins.security.disabled
+              value: "true"
+            - name: DISABLE_INSTALL_DEMO_CONFIG
+              value: "true"
+            - name: OPENSEARCH_JAVA_OPTS
+              value: "-Xms{{ .Values.dependencies.opensearch.heap }} -Xmx{{ .Values.dependencies.opensearch.heap }}"
+            - name: OPENSEARCH_INITIAL_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "secplat.fullname" . }}-opensearch-auth
+                  key: OPENSEARCH_INITIAL_ADMIN_PASSWORD
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 20
+          resources:
+{{ toYaml .Values.dependencies.opensearch.resources | indent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /usr/share/opensearch/data
+  {{- if .Values.dependencies.opensearch.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.dependencies.opensearch.persistence.storageClass }}
+        storageClassName: {{ .Values.dependencies.opensearch.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.dependencies.opensearch.persistence.size | quote }}
+  {{- end }}
+{{- end }}

@@ -3,6 +3,7 @@ set -euo pipefail
 
 OPENSEARCH_URL="${OPENSEARCH_URL:-http://localhost:9200}"
 INDEX="${INDEX:-secplat-events}"
+ORG_ID="${ORG_ID:-default}"
 HEALTH_URL="${JUICE_URL:-${EXAMPLE_COM_URL:-http://localhost:3000}}"
 ASSET="${JUICE_ASSET:-juice-shop}"
 SERVICE="${JUICE_SERVICE:-juice-shop}"
@@ -35,6 +36,7 @@ curl -sS -X POST "${OPENSEARCH_URL}/${INDEX}/_doc" \
     \"@timestamp\": \"${TS}\",
     \"service\": \"${SERVICE}\",
     \"asset\": \"${ASSET}\",
+    \"org_id\": \"${ORG_ID}\",
     \"level\": \"health\",
     \"message\": \"healthcheck\",
     \"status\": \"${STATUS}\",

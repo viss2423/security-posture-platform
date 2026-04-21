@@ -4,12 +4,15 @@ import hashlib
 import json
 import logging
 import os
+import socket
 import sys
 import time
+from contextlib import contextmanager
 from datetime import UTC, datetime
 
 import httpx
 import redis
+from simple_metrics import SimpleMetrics, start_metrics_server
 
 _STANDARD_ATTRS = {
     "name",
@@ -94,8 +97,106 @@ STREAM_MAX_RETRIES = int(
 STREAM_CLAIM_IDLE_MS = int(
     os.getenv("CORRELATOR_STREAM_CLAIM_IDLE_MS", os.getenv("STREAM_CLAIM_IDLE_MS", "120000"))
 )
+CORRELATOR_METRICS_PORT = int(os.getenv("CORRELATOR_METRICS_PORT", "9102"))
 
 _token: str | None = None
+_otel_configured = False
+_otel_enabled = False
+_tracer = None
+_propagator = None
+metrics = SimpleMetrics("secplat-correlator")
+
+
+class _NoopSpan:
+    def set_attribute(self, _key: str, _value: object) -> None:
+        return None
+
+    def record_exception(self, _exc: Exception) -> None:
+        return None
+
+
+def configure_otel() -> bool:
+    global _otel_configured, _otel_enabled, _tracer, _propagator
+    if _otel_configured:
+        return _otel_enabled
+    _otel_configured = True
+    if str(os.getenv("OTEL_ENABLED", "false")).strip().lower() != "true":
+        return False
+    endpoint = str(os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "") or "").strip()
+    if not endpoint:
+        return False
+    try:
+        from opentelemetry import propagate, trace
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    except Exception:
+        logger.debug("correlator otel dependencies unavailable", exc_info=True)
+        return False
+    try:
+        resource = Resource.create(
+            {
+                "service.name": "secplat-correlator",
+                "service.instance.id": f"{socket.gethostname()}:{os.getpid()}",
+                "deployment.environment": str(os.getenv("ENV", "dev") or "dev"),
+            }
+        )
+        provider = TracerProvider(resource=resource)
+        exporter = OTLPSpanExporter(endpoint=endpoint)
+        provider.add_span_processor(BatchSpanProcessor(exporter))
+        trace.set_tracer_provider(provider)
+        _tracer = trace.get_tracer("secplat-correlator")
+        _propagator = propagate
+        _otel_enabled = True
+        return True
+    except Exception:
+        logger.debug("correlator otel initialization failed", exc_info=True)
+        _tracer = None
+        _propagator = None
+        _otel_enabled = False
+        return False
+
+
+def inject_context(carrier: dict[str, object]) -> dict[str, object]:
+    if not carrier or not _otel_enabled or _propagator is None:
+        return carrier
+    try:
+        _propagator.inject(carrier=carrier)
+    except Exception:
+        logger.debug("correlator otel inject failed", exc_info=True)
+    return carrier
+
+
+def _extract_context(context_carrier: dict[str, object] | None = None):
+    if not context_carrier or not _otel_enabled or _propagator is None:
+        return None
+    try:
+        return _propagator.extract(carrier=context_carrier)
+    except Exception:
+        logger.debug("correlator otel extract failed", exc_info=True)
+        return None
+
+
+@contextmanager
+def start_span(
+    name: str,
+    *,
+    attributes: dict[str, object] | None = None,
+    context_carrier: dict[str, object] | None = None,
+):
+    if not _otel_enabled or _tracer is None:
+        yield _NoopSpan()
+        return
+    span_kwargs: dict[str, object] = {}
+    extracted = _extract_context(context_carrier)
+    if extracted is not None:
+        span_kwargs["context"] = extracted
+    with _tracer.start_as_current_span(name, **span_kwargs) as span:
+        for key, value in (attributes or {}).items():
+            if value is not None:
+                span.set_attribute(str(key), value)
+        yield span
 
 
 def _event_hour_bucket(ts_raw: str | None) -> str:
@@ -135,7 +236,7 @@ def _normalize_down_assets(raw: object) -> list[str]:
 def _incident_key_for_alert(down_assets: list[str], ts_raw: str | None) -> str:
     bucket = _event_hour_bucket(ts_raw)
     normalized = sorted({a.strip() for a in down_assets if a.strip()})
-    digest = hashlib.sha1(",".join(normalized).encode("utf-8")).hexdigest()[:16]
+    digest = hashlib.sha256(",".join(normalized).encode("utf-8")).hexdigest()[:16]
     return f"alert:{bucket}:{digest}"
 
 
@@ -144,11 +245,21 @@ def get_token(*, force_refresh: bool = False) -> str | None:
     if _token and not force_refresh:
         return _token
     try:
-        r = httpx.post(
-            f"{API_URL}/auth/login",
-            data={"username": CORRELATOR_USER, "password": CORRELATOR_PASSWORD},
-            timeout=10.0,
-        )
+        headers: dict[str, object] = {}
+        inject_context(headers)
+        with start_span(
+            "http.client.request",
+            attributes={
+                "http.request.method": "POST",
+                "url.full": f"{API_URL}/auth/login",
+            },
+        ):
+            r = httpx.post(
+                f"{API_URL}/auth/login",
+                data={"username": CORRELATOR_USER, "password": CORRELATOR_PASSWORD},
+                headers=headers,
+                timeout=10.0,
+            )
         r.raise_for_status()
         data = r.json()
         _token = data.get("access_token")
@@ -180,13 +291,22 @@ def create_incident(
     headers = {"Authorization": f"Bearer {token}"}
     if trace_id:
         headers["x-request-id"] = trace_id
+    inject_context(headers)
 
-    r = httpx.post(
-        f"{API_URL}/incidents",
-        json=payload,
-        headers=headers,
-        timeout=10.0,
-    )
+    with start_span(
+        "http.client.request",
+        attributes={
+            "http.request.method": "POST",
+            "url.full": f"{API_URL}/incidents",
+            "secplat.request_id": trace_id,
+        },
+    ):
+        r = httpx.post(
+            f"{API_URL}/incidents",
+            json=payload,
+            headers=headers,
+            timeout=10.0,
+        )
     if r.status_code in (401, 403):
         logger.info("incident create auth failed status=%s refreshing token", r.status_code)
         _token = None
@@ -196,12 +316,22 @@ def create_incident(
         headers = {"Authorization": f"Bearer {fresh}"}
         if trace_id:
             headers["x-request-id"] = trace_id
-        r = httpx.post(
-            f"{API_URL}/incidents",
-            json=payload,
-            headers=headers,
-            timeout=10.0,
-        )
+        inject_context(headers)
+        with start_span(
+            "http.client.request",
+            attributes={
+                "http.request.method": "POST",
+                "url.full": f"{API_URL}/incidents",
+                "secplat.request_id": trace_id,
+                "auth.retry": True,
+            },
+        ):
+            r = httpx.post(
+                f"{API_URL}/incidents",
+                json=payload,
+                headers=headers,
+                timeout=10.0,
+            )
     try:
         r.raise_for_status()
     except httpx.HTTPStatusError as e:
@@ -298,6 +428,7 @@ def _publish_dlq(
         }
     )
     r.xadd(STREAM_DLQ, payload, maxlen=10_000)
+    metrics.inc_counter("secplat_correlator_events_dlq_total")
 
 
 def handle_event(payload: dict) -> dict:
@@ -378,6 +509,8 @@ def handle_event(payload: dict) -> dict:
 
 
 def main() -> None:
+    configure_otel()
+    start_metrics_server(metrics, port=CORRELATOR_METRICS_PORT, logger=logger)
     logger.info(
         "secplat-correlator started stream=%s group=%s consumer=%s api=%s dlq=%s claim_idle_ms=%s max_retries=%s",
         STREAM,
@@ -400,7 +533,19 @@ def main() -> None:
             attempts = _parse_attempts(fields)
             trace_id = (fields.get("trace_id") or "").strip() or None
             try:
-                result = handle_event(fields)
+                started = time.monotonic()
+                with start_span(
+                    "messaging.process",
+                    attributes={
+                        "messaging.system": "redis",
+                        "messaging.destination.name": STREAM,
+                        "messaging.operation": "process",
+                        "messaging.message.id": mid,
+                        "secplat.request_id": trace_id,
+                    },
+                    context_carrier=fields,
+                ):
+                    result = handle_event(fields)
                 logger.info(
                     "correlation_processed",
                     extra={
@@ -415,7 +560,14 @@ def main() -> None:
                         "trace_id": trace_id,
                     },
                 )
+                metrics.inc_counter("secplat_correlator_events_processed_total")
+                metrics.set_gauge("secplat_correlator_last_processed_timestamp", time.time())
+                metrics.set_gauge(
+                    "secplat_correlator_last_duration_seconds",
+                    max(0.0, time.monotonic() - started),
+                )
             except NonRetryableMessageError as e:
+                metrics.inc_counter("secplat_correlator_events_failed_total")
                 logger.warning(
                     "correlation_non_retryable",
                     extra={
@@ -464,6 +616,7 @@ def main() -> None:
                             attempts=attempts,
                         )
                     else:
+                        metrics.inc_counter("secplat_correlator_events_requeued_total")
                         logger.warning(
                             "correlation_requeued",
                             extra={
@@ -478,6 +631,7 @@ def main() -> None:
                             },
                         )
                 else:
+                    metrics.inc_counter("secplat_correlator_events_failed_total")
                     _publish_dlq(
                         r,
                         mid,
@@ -502,9 +656,11 @@ def main() -> None:
             finally:
                 _ack_stream(r, mid)
         except redis.ConnectionError as e:
+            metrics.inc_counter("secplat_correlator_loop_errors_total")
             logger.warning("redis connection error: %s", e)
             time.sleep(5)
         except redis.ResponseError as e:
+            metrics.inc_counter("secplat_correlator_loop_errors_total")
             if "NOGROUP" in str(e):
                 try:
                     _ensure_stream_group(r)

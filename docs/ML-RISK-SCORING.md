@@ -39,7 +39,7 @@ The website and API contract stay unchanged. Only the scorer behind them changes
 
 ```powershell
 python services/api/scripts/ml/export_finding_risk_dataset.py `
-  --dsn "postgresql+psycopg://secplat:secplat@localhost:5433/secplat" `
+  --dsn "postgresql+psycopg://secplat_runtime:secplat_runtime@localhost:5433/secplat" `
   --output services/api/exports/finding-risk-dataset.jsonl
 ```
 
@@ -48,7 +48,7 @@ python services/api/scripts/ml/export_finding_risk_dataset.py `
 
 ```powershell
 python services/api/scripts/ml/check_risk_model_readiness.py `
-  --dsn "postgresql+psycopg://secplat:secplat@localhost:5433/secplat"
+  --dsn "postgresql+psycopg://secplat_runtime:secplat_runtime@localhost:5433/secplat"
 ```
 
 Minimum practical baseline:

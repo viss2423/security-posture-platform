@@ -26,6 +26,7 @@ infra/k8s/secret.yaml
 *.pdf
 *.zip
 exports/
+artifacts/**/*.sql
 services/api/models/*.joblib
 services/api/exports/
 

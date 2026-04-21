@@ -11,9 +11,72 @@ type TokenPayload = {
   access_token?: string;
   refresh_token?: string;
 };
+type LoginPayload = Record<string, string>;
+
+function isTruthy(value: string | undefined): boolean {
+  return value === '1' || value?.toLowerCase() === 'true';
+}
+
+function resolveCookieSecure(request: NextRequest): boolean {
+  const forced = process.env.SESSION_COOKIE_SECURE;
+  if (forced != null) {
+    return isTruthy(forced);
+  }
+  const forwardedProto = request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase();
+  if (forwardedProto) {
+    return forwardedProto === 'https';
+  }
+  return request.nextUrl.protocol === 'https:';
+}
+
+function sessionCookieOptionsForRequest(request: NextRequest) {
+  return {
+    ...sessionCookieOptions(),
+    secure: resolveCookieSecure(request),
+  };
+}
+
+function refreshCookieOptionsForRequest(request: NextRequest) {
+  return {
+    ...refreshSessionCookieOptions(),
+    secure: resolveCookieSecure(request),
+  };
+}
 
 function errorResponse(message: string, status: number) {
   return NextResponse.json({ error: message }, { status });
+}
+
+function parseLoginPayloadFromForm(raw: string): LoginPayload {
+  const params = new URLSearchParams(raw);
+  return Object.fromEntries(params.entries());
+}
+
+function parseLoginPayloadFromJson(raw: string): LoginPayload | null {
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(parsed).map(([key, value]) => [key, value == null ? '' : String(value)])
+    );
+  } catch {
+    return null;
+  }
+}
+
+async function parseLoginPayload(request: NextRequest): Promise<LoginPayload | null> {
+  const raw = (await request.text()).trim();
+  if (!raw) return {};
+
+  const contentType = request.headers.get('content-type')?.toLowerCase() ?? '';
+  if (contentType.includes('application/json')) {
+    return parseLoginPayloadFromJson(raw);
+  }
+  if (contentType.includes('application/x-www-form-urlencoded')) {
+    return parseLoginPayloadFromForm(raw);
+  }
+
+  // Be permissive: try JSON first, then form-encoded.
+  return parseLoginPayloadFromJson(raw) ?? parseLoginPayloadFromForm(raw);
 }
 
 function parseErrorMessage(text: string, fallback: string): string {
@@ -28,13 +91,13 @@ function parseErrorMessage(text: string, fallback: string): string {
   return fallback;
 }
 
-function clearSessionCookies(response: NextResponse) {
+function clearSessionCookies(request: NextRequest, response: NextResponse) {
   response.cookies.set(SESSION_COOKIE_NAME, '', {
-    ...sessionCookieOptions(),
+    ...sessionCookieOptionsForRequest(request),
     maxAge: 0,
   });
   response.cookies.set(REFRESH_SESSION_COOKIE_NAME, '', {
-    ...refreshSessionCookieOptions(),
+    ...refreshCookieOptionsForRequest(request),
     maxAge: 0,
   });
 }
@@ -42,22 +105,32 @@ function clearSessionCookies(response: NextResponse) {
 export async function POST(request: NextRequest) {
   let accessToken: string | null = null;
   let refreshToken: string | null = null;
+  let body: LoginPayload | null;
 
   try {
-    const body = await request.json();
-    if (typeof body?.access_token === 'string' && body.access_token.trim()) {
-      accessToken = body.access_token.trim();
-      if (typeof body?.refresh_token === 'string' && body.refresh_token.trim()) {
-        refreshToken = body.refresh_token.trim();
-      }
-    } else {
-      const username = String(body?.username || '').trim();
-      const password = String(body?.password || '');
-      if (!username || !password) {
-        return errorResponse('Username and password are required', 400);
-      }
+    body = await parseLoginPayload(request);
+  } catch {
+    return errorResponse('Invalid login payload', 400);
+  }
+  if (!body) {
+    return errorResponse('Invalid login payload', 400);
+  }
 
-      const response = await fetch(`${API_URL}/auth/login`, {
+  if (typeof body?.access_token === 'string' && body.access_token.trim()) {
+    accessToken = body.access_token.trim();
+    if (typeof body?.refresh_token === 'string' && body.refresh_token.trim()) {
+      refreshToken = body.refresh_token.trim();
+    }
+  } else {
+    const username = String(body?.username || '').trim();
+    const password = String(body?.password || '');
+    if (!username || !password) {
+      return errorResponse('Username and password are required', 400);
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(`${API_URL}/auth/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
@@ -66,19 +139,26 @@ export async function POST(request: NextRequest) {
         body: new URLSearchParams({ username, password }),
         cache: 'no-store',
       });
-      const text = await response.text();
-      if (!response.ok) {
-        return errorResponse(
-          parseErrorMessage(text, response.statusText || 'Login failed'),
-          response.status
-        );
-      }
-      const payload = JSON.parse(text) as TokenPayload;
-      accessToken = payload.access_token?.trim() || null;
-      refreshToken = payload.refresh_token?.trim() || null;
+    } catch {
+      return errorResponse('API unreachable. Check API service and API_URL.', 502);
     }
-  } catch {
-    return errorResponse('Invalid login payload', 400);
+
+    const text = await response.text();
+    if (!response.ok) {
+      return errorResponse(
+        parseErrorMessage(text, response.statusText || 'Login failed'),
+        response.status
+      );
+    }
+
+    let payload: TokenPayload;
+    try {
+      payload = JSON.parse(text) as TokenPayload;
+    } catch {
+      return errorResponse('Invalid auth response from API', 502);
+    }
+    accessToken = payload.access_token?.trim() || null;
+    refreshToken = payload.refresh_token?.trim() || null;
   }
 
   if (!accessToken) {
@@ -86,16 +166,20 @@ export async function POST(request: NextRequest) {
   }
 
   const response = NextResponse.json({ ok: true });
-  response.cookies.set(SESSION_COOKIE_NAME, accessToken, sessionCookieOptions());
+  response.cookies.set(
+    SESSION_COOKIE_NAME,
+    accessToken,
+    sessionCookieOptionsForRequest(request)
+  );
   if (refreshToken) {
     response.cookies.set(
       REFRESH_SESSION_COOKIE_NAME,
       refreshToken,
-      refreshSessionCookieOptions()
+      refreshCookieOptionsForRequest(request)
     );
   } else {
     response.cookies.set(REFRESH_SESSION_COOKIE_NAME, '', {
-      ...refreshSessionCookieOptions(),
+      ...refreshCookieOptionsForRequest(request),
       maxAge: 0,
     });
   }
@@ -106,7 +190,7 @@ export async function PATCH(request: NextRequest) {
   const refreshToken = request.cookies.get(REFRESH_SESSION_COOKIE_NAME)?.value?.trim();
   if (!refreshToken) {
     const response = errorResponse('Not authenticated', 401);
-    clearSessionCookies(response);
+    clearSessionCookies(request, response);
     return response;
   }
 
@@ -131,7 +215,7 @@ export async function PATCH(request: NextRequest) {
       parseErrorMessage(text, response.statusText || 'Session refresh failed'),
       response.status
     );
-    clearSessionCookies(error);
+    clearSessionCookies(request, error);
     return error;
   }
 
@@ -148,17 +232,21 @@ export async function PATCH(request: NextRequest) {
   }
 
   const out = NextResponse.json({ ok: true });
-  out.cookies.set(SESSION_COOKIE_NAME, accessToken, sessionCookieOptions());
+  out.cookies.set(
+    SESSION_COOKIE_NAME,
+    accessToken,
+    sessionCookieOptionsForRequest(request)
+  );
   out.cookies.set(
     REFRESH_SESSION_COOKIE_NAME,
     nextRefreshToken,
-    refreshSessionCookieOptions()
+    refreshCookieOptionsForRequest(request)
   );
   return out;
 }
 
-export async function DELETE() {
+export async function DELETE(request: NextRequest) {
   const response = NextResponse.json({ ok: true });
-  clearSessionCookies(response);
+  clearSessionCookies(request, response);
   return response;
 }

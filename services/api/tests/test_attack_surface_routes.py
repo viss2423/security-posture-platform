@@ -210,3 +210,16 @@ def test_attack_surface_discovery_and_drift(client: TestClient, admin_headers: d
         and str(item.get("target_asset_key") or "") == target_asset
         for item in relationship_list.json().get("items") or []
     )
+
+    workspace = client.get(
+        f"/attack-surface/workspace?run_id={run_two_id}&top_limit=5",
+        headers=admin_headers,
+    )
+    assert workspace.status_code == 200, workspace.text
+    workspace_body = workspace.json()
+    assert int(workspace_body.get("run_id") or 0) == run_two_id
+    assert int(workspace_body.get("totals", {}).get("hosts") or 0) >= 2
+    assert int(workspace_body.get("totals", {}).get("services") or 0) >= 2
+    assert int(workspace_body.get("totals", {}).get("exposures") or 0) >= 1
+    assert isinstance(workspace_body.get("top_exposures"), list)
+    assert isinstance(workspace_body.get("recent_drift"), list)

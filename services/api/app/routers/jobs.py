@@ -1,8 +1,11 @@
 """Job runner: scan_jobs table, list/get/retry, logs. Phase B.3. Phase 1: publish to Redis stream."""
 
 import json
+import time
+from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import requests
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -22,7 +25,7 @@ from app.detections import (
 )
 from app.queue import publish_scan_job
 from app.repository_scan import launch_repository_scan_job, run_repository_scan_job
-from app.request_context import request_id_ctx
+from app.request_context import current_tenant_id, request_id_ctx
 from app.risk_scoring import backfill_finding_risk_scores, recompute_asset_findings_risk
 from app.routers.auth import require_auth, require_role
 from app.settings import settings
@@ -35,6 +38,7 @@ from app.telemetry import (
 from app.threat_intel import launch_threat_intel_refresh_job, run_threat_intel_refresh_job
 
 router = APIRouter()
+internal_router = APIRouter(prefix="/internal/jobs", tags=["internal-jobs"])
 
 ASYNC_JOB_TYPES = {
     "web_exposure",
@@ -50,6 +54,7 @@ ASYNC_JOB_TYPES = {
     "correlation_pass",
 }
 WORKER_EXECUTABLE_JOB_TYPES = {
+    "web_exposure",
     "score_recompute",
     "repository_scan",
     "threat_intel_refresh",
@@ -61,6 +66,15 @@ WORKER_EXECUTABLE_JOB_TYPES = {
     "detection_rule_schedule",
     "correlation_pass",
 }
+
+SAFE_HEADERS_TO_CHECK = [
+    "strict-transport-security",
+    "content-security-policy",
+    "x-frame-options",
+    "x-content-type-options",
+    "referrer-policy",
+    "permissions-policy",
+]
 
 
 def _is_worker_executor(user: str) -> bool:
@@ -74,6 +88,339 @@ def _is_worker_executor(user: str) -> bool:
         settings.INGESTION_SERVICE_USERNAME,
         settings.CORRELATOR_SERVICE_USERNAME,
     }
+
+
+def _require_worker_executor(user: str) -> str:
+    if not _is_worker_executor(user):
+        raise HTTPException(status_code=403, detail="Worker executor access required")
+    return user
+
+
+def _job_claim_timeout_seconds() -> int:
+    return max(int(getattr(settings, "MAX_SCAN_DURATION_SECONDS", 900)) + 60, 300)
+
+
+def _append_job_log(db: Session, job_id: int, log_line: str) -> None:
+    db.execute(
+        text(
+            """
+            UPDATE scan_jobs
+            SET log_output = COALESCE(log_output, '') || :log_line || E'\n'
+            WHERE job_id = :job_id
+            """
+        ),
+        {"job_id": job_id, "log_line": log_line},
+    )
+
+
+def _mark_job_terminal(
+    db: Session,
+    job_id: int,
+    *,
+    status: str,
+    error: str | None = None,
+    log_line: str | None = None,
+    clear_claim: bool = False,
+) -> None:
+    if log_line:
+        db.execute(
+            text(
+                """
+                UPDATE scan_jobs
+                SET status = :status,
+                    finished_at = NOW(),
+                    error = :error,
+                    log_output = COALESCE(log_output, '') || :log_line || E'\n',
+                    claimed_by = CASE WHEN :clear_claim THEN NULL ELSE claimed_by END,
+                    claim_token = CASE WHEN :clear_claim THEN NULL ELSE claim_token END,
+                    last_heartbeat_at = CASE WHEN :clear_claim THEN NULL ELSE last_heartbeat_at END
+                WHERE job_id = :job_id
+                """
+            ),
+            {
+                "job_id": job_id,
+                "status": status,
+                "error": error,
+                "log_line": log_line,
+                "clear_claim": clear_claim,
+            },
+        )
+    else:
+        db.execute(
+            text(
+                """
+                UPDATE scan_jobs
+                SET status = :status,
+                    finished_at = NOW(),
+                    error = :error,
+                    claimed_by = CASE WHEN :clear_claim THEN NULL ELSE claimed_by END,
+                    claim_token = CASE WHEN :clear_claim THEN NULL ELSE claim_token END,
+                    last_heartbeat_at = CASE WHEN :clear_claim THEN NULL ELSE last_heartbeat_at END
+                WHERE job_id = :job_id
+                """
+            ),
+            {
+                "job_id": job_id,
+                "status": status,
+                "error": error,
+                "clear_claim": clear_claim,
+            },
+        )
+
+
+def _clear_job_claim(db: Session, job_id: int) -> None:
+    db.execute(
+        text(
+            """
+            UPDATE scan_jobs
+            SET claimed_by = NULL,
+                claim_token = NULL,
+                last_heartbeat_at = NULL
+            WHERE job_id = :job_id
+            """
+        ),
+        {"job_id": job_id},
+    )
+
+
+def _scan_external_web(asset_name: str) -> dict[str, object]:
+    http_url = f"http://{asset_name}/"
+    https_url = f"https://{asset_name}/"
+    results: dict[str, object] = {
+        "reachable_http": False,
+        "reachable_https": False,
+        "missing_headers": [],
+    }
+
+    try:
+        requests.get(http_url, timeout=6, allow_redirects=True)  # nosemgrep
+        results["reachable_http"] = True
+    except Exception:
+        pass
+
+    try:
+        response = requests.get(https_url, timeout=8, allow_redirects=True)
+        results["reachable_https"] = True
+        headers_lower = {k.lower(): v for k, v in response.headers.items()}
+        missing_headers: list[str] = []
+        for header_name in SAFE_HEADERS_TO_CHECK:
+            if header_name not in headers_lower:
+                missing_headers.append(header_name)
+        results["missing_headers"] = missing_headers
+    except Exception:
+        pass
+
+    return results
+
+
+def _run_web_exposure_job(job_id: int) -> None:
+    db = SessionLocal()
+    try:
+        db.execute(
+            text(
+                """
+                UPDATE scan_jobs
+                SET status = 'running',
+                    started_at = COALESCE(started_at, NOW()),
+                    finished_at = NULL,
+                    error = NULL
+                WHERE job_id = :job_id
+                """
+            ),
+            {"job_id": job_id},
+        )
+        db.commit()
+
+        job_row = (
+            db.execute(
+                text(
+                    """
+                    SELECT
+                      j.target_asset_id,
+                      a.asset_id,
+                      a.name,
+                      a.type,
+                      a.verified
+                    FROM scan_jobs j
+                    LEFT JOIN assets a ON a.asset_id = j.target_asset_id
+                    WHERE j.job_id = :job_id
+                    """
+                ),
+                {"job_id": job_id},
+            )
+            .mappings()
+            .first()
+        )
+        asset_id = (job_row or {}).get("asset_id")
+        if asset_id is None:
+            _mark_job_terminal(
+                db,
+                job_id,
+                status="failed",
+                error="Asset not found",
+                log_line="Asset not found",
+            )
+            db.commit()
+            return
+
+        asset_type = str((job_row or {}).get("type") or "")
+        if asset_type != "external_web":
+            _mark_job_terminal(
+                db,
+                job_id,
+                status="failed",
+                error="Target is not external_web",
+                log_line="Target is not external_web",
+            )
+            db.commit()
+            return
+
+        if settings.REQUIRE_DOMAIN_VERIFICATION and not bool((job_row or {}).get("verified")):
+            _mark_job_terminal(
+                db,
+                job_id,
+                status="failed",
+                error="Domain not verified",
+                log_line="Domain not verified",
+            )
+            db.commit()
+            return
+
+        asset_name = str((job_row or {}).get("name") or "").strip()
+        _append_job_log(
+            db,
+            job_id,
+            f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Started web exposure scan for asset_id={asset_id}",
+        )
+        _append_job_log(db, job_id, f"Scanning {asset_name} ...")
+        db.commit()
+
+        started_at = time.time()
+        scan = _scan_external_web(asset_name)
+        elapsed = time.time() - started_at
+        _append_job_log(
+            db,
+            job_id,
+            (
+                "Scan completed in "
+                f"{elapsed:.1f}s: HTTPS={scan['reachable_https']}, "
+                f"missing_headers={len(scan['missing_headers'])}"
+            ),
+        )
+
+        evidence = json.dumps({"scan": scan, "elapsed_seconds": elapsed}, indent=2)
+        if not bool(scan["reachable_https"]):
+            db.execute(
+                text(
+                    """
+                    INSERT INTO findings(
+                      asset_id,
+                      category,
+                      title,
+                      severity,
+                      confidence,
+                      evidence,
+                      remediation
+                    )
+                    VALUES(
+                      :asset_id,
+                      'transport',
+                      'HTTPS not reachable',
+                      'high',
+                      'high',
+                      :evidence,
+                      'Ensure HTTPS is enabled and reachable. Configure TLS and redirect HTTP to HTTPS.'
+                    )
+                    """
+                ),
+                {"asset_id": int(asset_id), "evidence": evidence},
+            )
+            _append_job_log(db, job_id, "Finding: HTTPS not reachable")
+        missing_headers = scan["missing_headers"]
+        if isinstance(missing_headers, list) and missing_headers:
+            db.execute(
+                text(
+                    """
+                    INSERT INTO findings(
+                      asset_id,
+                      category,
+                      title,
+                      severity,
+                      confidence,
+                      evidence,
+                      remediation
+                    )
+                    VALUES(
+                      :asset_id,
+                      'headers',
+                      :title,
+                      'medium',
+                      'high',
+                      :evidence,
+                      'Add recommended security headers (HSTS, CSP, X-Frame-Options, etc.) via your web server/CDN configuration.'
+                    )
+                    """
+                ),
+                {
+                    "asset_id": int(asset_id),
+                    "title": f"Missing security headers: {', '.join(str(item) for item in missing_headers)}",
+                    "evidence": evidence,
+                },
+            )
+            _append_job_log(db, job_id, f"Finding: Missing headers {missing_headers}")
+
+        _mark_job_terminal(db, job_id, status="done", log_line="Done")
+        db.commit()
+    except Exception as exc:
+        _mark_job_terminal(
+            db,
+            job_id,
+            status="failed",
+            error=str(exc),
+            log_line=f"Web exposure job failed: {exc}",
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+def _load_internal_job_state(db: Session, job_id: int) -> dict | None:
+    row = (
+        db.execute(
+            text(
+                """
+                SELECT
+                  j.job_id,
+                  j.job_type,
+                  j.target_asset_id,
+                  j.requested_by,
+                  j.status,
+                  j.retry_count,
+                  j.created_at,
+                  j.started_at,
+                  j.finished_at,
+                  j.error,
+                  j.claimed_by,
+                  j.claim_token,
+                  j.last_heartbeat_at,
+                  j.job_params_json
+                FROM scan_jobs j
+                WHERE j.job_id = :job_id
+                """
+            ),
+            {"job_id": job_id},
+        )
+        .mappings()
+        .first()
+    )
+    if not row:
+        return None
+    out = dict(row)
+    for key in ("created_at", "started_at", "finished_at", "last_heartbeat_at"):
+        value = out.get(key)
+        if hasattr(value, "isoformat"):
+            out[key] = value.isoformat()
+    return out
 
 
 def _run_score_recompute_job(job_id: int) -> None:
@@ -150,7 +497,7 @@ def _run_score_recompute_job(job_id: int) -> None:
 def _serialize_job(r) -> dict:
     # RowMapping (SQLAlchemy 2) doesn't convert to dict with column names; use _mapping or keys()
     out = dict(r._mapping) if hasattr(r, "_mapping") else dict(r)
-    for k in ("created_at", "started_at", "finished_at"):
+    for k in ("created_at", "started_at", "finished_at", "last_heartbeat_at"):
         v = out.get(k)
         if hasattr(v, "isoformat"):
             out[k] = v.isoformat()
@@ -160,6 +507,35 @@ def _serialize_job(r) -> dict:
         except json.JSONDecodeError:
             out["job_params_json"] = {}
     return out
+
+
+def _dispatch_queued_job(
+    *,
+    job_id: int,
+    job_type: str,
+    target_asset_id: int | None,
+    requested_by: str,
+) -> None:
+    if job_type == "repository_scan":
+        launch_repository_scan_job(job_id)
+    elif job_type == "threat_intel_refresh":
+        launch_threat_intel_refresh_job(job_id)
+    elif job_type == "telemetry_import":
+        launch_telemetry_import_job(job_id)
+    elif job_type == "network_anomaly_score":
+        launch_network_anomaly_job(job_id)
+    elif job_type == "attack_lab_run":
+        launch_attack_lab_job(job_id)
+    elif job_type == "attack_surface_discovery":
+        launch_attack_surface_discovery_job(job_id)
+    elif job_type == "detection_rule_test":
+        launch_detection_rule_job(job_id)
+    elif job_type == "detection_rule_schedule":
+        launch_detection_rule_scheduled_job(job_id)
+    elif job_type == "correlation_pass":
+        launch_correlation_pass_job(job_id)
+    else:
+        publish_scan_job(job_id, job_type, target_asset_id, requested_by or "")
 
 
 def _as_float(value: object) -> float | None:
@@ -229,7 +605,7 @@ def jobs_analytics(
 
     totals = (
         db.execute(
-            text(
+            text(  # nosemgrep
                 f"""
                 WITH recent_jobs AS (
                   SELECT *
@@ -265,7 +641,7 @@ def jobs_analytics(
 
     duration_stats = (
         db.execute(
-            text(
+            text(  # nosemgrep
                 f"""
                 WITH recent_jobs AS (
                   SELECT *
@@ -295,7 +671,7 @@ def jobs_analytics(
 
     queue_age_row = (
         db.execute(
-            text(
+            text(  # nosemgrep
                 f"""
                 WITH recent_jobs AS (
                   SELECT *
@@ -317,7 +693,7 @@ def jobs_analytics(
 
     by_type_rows = (
         db.execute(
-            text(
+            text(  # nosemgrep
                 f"""
                 WITH recent_jobs AS (
                   SELECT *
@@ -488,6 +864,150 @@ def get_job(
     return _serialize_job(row)
 
 
+@router.post("/maintenance/recover-stale")
+def recover_stale_jobs(
+    payload: dict | None = Body(default=None),
+    db: Session = Depends(get_db),
+    user: str = Depends(require_role(["admin"])),
+):
+    """Requeue stale running jobs whose heartbeat has expired."""
+    request = payload or {}
+    running_stale_minutes = max(int(request.get("running_stale_minutes") or 30), 1)
+    limit = max(min(int(request.get("limit") or 50), 200), 1)
+    dry_run = bool(request.get("dry_run", False))
+    stale_where = """
+        status = 'running'
+        AND (
+          last_heartbeat_at IS NULL
+          OR last_heartbeat_at <= NOW() - (:running_stale_minutes * INTERVAL '1 minute')
+        )
+    """
+    select_sql = text(  # nosemgrep
+        f"""
+        SELECT
+          job_id,
+          job_type,
+          target_asset_id,
+          requested_by,
+          status,
+          retry_count,
+          created_at,
+          started_at,
+          finished_at,
+          error,
+          claimed_by,
+          claim_token,
+          last_heartbeat_at,
+          job_params_json
+        FROM scan_jobs
+        WHERE {stale_where}
+        ORDER BY COALESCE(last_heartbeat_at, started_at, created_at) ASC
+        LIMIT :limit
+        """
+    )
+    stale_rows = [
+        _serialize_job(row)
+        for row in db.execute(
+            select_sql,
+            {
+                "running_stale_minutes": running_stale_minutes,
+                "limit": limit,
+            },
+        )
+        .mappings()
+        .all()
+    ]
+    if dry_run or not stale_rows:
+        return {
+            "ok": True,
+            "dry_run": dry_run,
+            "running_stale_minutes": running_stale_minutes,
+            "recovered_count": 0 if dry_run else len(stale_rows),
+            "jobs": stale_rows,
+        }
+
+    recovered_rows = [
+        _serialize_job(row)
+        for row in db.execute(
+            text(  # nosemgrep
+                f"""
+                WITH stale AS (
+                  SELECT job_id
+                  FROM scan_jobs
+                  WHERE {stale_where}
+                  ORDER BY COALESCE(last_heartbeat_at, started_at, created_at) ASC
+                  LIMIT :limit
+                )
+                UPDATE scan_jobs j
+                SET status = 'queued',
+                    started_at = NULL,
+                    finished_at = NULL,
+                    error = COALESCE(NULLIF(j.error, ''), 'recovered_stale_running_job'),
+                    retry_count = j.retry_count + 1,
+                    log_output = COALESCE(j.log_output, '') || :log_line || E'\\n',
+                    claimed_by = NULL,
+                    claim_token = NULL,
+                    last_heartbeat_at = NULL
+                FROM stale
+                WHERE j.job_id = stale.job_id
+                RETURNING
+                  j.job_id,
+                  j.job_type,
+                  j.target_asset_id,
+                  j.requested_by,
+                  j.status,
+                  j.retry_count,
+                  j.created_at,
+                  j.started_at,
+                  j.finished_at,
+                  j.error,
+                  j.claimed_by,
+                  j.claim_token,
+                  j.last_heartbeat_at,
+                  j.job_params_json
+                """
+            ),
+            {
+                "running_stale_minutes": running_stale_minutes,
+                "limit": limit,
+                "log_line": (
+                    f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
+                    f"recovered stale running job via maintenance runbook by {user}"
+                ),
+            },
+        )
+        .mappings()
+        .all()
+    ]
+    db.commit()
+    for row in recovered_rows:
+        _dispatch_queued_job(
+            job_id=int(row["job_id"]),
+            job_type=str(row["job_type"] or ""),
+            target_asset_id=row.get("target_asset_id"),
+            requested_by=str(row.get("requested_by") or ""),
+        )
+    log_audit(
+        db,
+        "job.recover_stale",
+        user_name=user,
+        details={
+            "running_stale_minutes": running_stale_minutes,
+            "recovered_count": len(recovered_rows),
+            "job_ids": [int(row["job_id"]) for row in recovered_rows],
+        },
+        request_id=request_id_ctx.get(None),
+    )
+    db.commit()
+    return {
+        "ok": True,
+        "dry_run": False,
+        "running_stale_minutes": running_stale_minutes,
+        "recovered_count": len(recovered_rows),
+        "jobs": recovered_rows,
+    }
+
+
 @router.post("")
 def create_job(
     payload: dict,
@@ -613,14 +1133,15 @@ def create_job(
                 raise HTTPException(status_code=400, detail="correlation_rule_id must be positive")
 
     q = text("""
-      INSERT INTO scan_jobs(job_type, target_asset_id, requested_by, status, job_params_json)
-      VALUES (:t, :aid, :rb, 'queued', CAST(:job_params_json AS jsonb))
+      INSERT INTO scan_jobs(org_id, job_type, target_asset_id, requested_by, status, job_params_json)
+      VALUES (:org_id, :t, :aid, :rb, 'queued', CAST(:job_params_json AS jsonb))
       RETURNING job_id, job_type, target_asset_id, status, created_at, job_params_json
     """)
     row = (
         db.execute(
             q,
             {
+                "org_id": current_tenant_id(),
                 "t": job_type,
                 "aid": asset_id,
                 "rb": requested_by,
@@ -687,7 +1208,16 @@ def retry_job(
         raise HTTPException(status_code=400, detail="Only failed or completed jobs can be retried")
     db.execute(
         text("""
-          UPDATE scan_jobs SET status = 'queued', error = NULL, log_output = NULL, started_at = NULL, finished_at = NULL, retry_count = retry_count + 1
+          UPDATE scan_jobs
+          SET status = 'queued',
+              error = NULL,
+              log_output = NULL,
+              started_at = NULL,
+              finished_at = NULL,
+              retry_count = retry_count + 1,
+              claimed_by = NULL,
+              claim_token = NULL,
+              last_heartbeat_at = NULL
           WHERE job_id = :id
         """),
         {"id": job_id},
@@ -712,32 +1242,329 @@ def retry_job(
         .first()
     )
     if job_row:
-        if job_row["job_type"] == "repository_scan":
-            launch_repository_scan_job(job_id)
-        elif job_row["job_type"] == "threat_intel_refresh":
-            launch_threat_intel_refresh_job(job_id)
-        elif job_row["job_type"] == "telemetry_import":
-            launch_telemetry_import_job(job_id)
-        elif job_row["job_type"] == "network_anomaly_score":
-            launch_network_anomaly_job(job_id)
-        elif job_row["job_type"] == "attack_lab_run":
-            launch_attack_lab_job(job_id)
-        elif job_row["job_type"] == "attack_surface_discovery":
-            launch_attack_surface_discovery_job(job_id)
-        elif job_row["job_type"] == "detection_rule_test":
-            launch_detection_rule_job(job_id)
-        elif job_row["job_type"] == "detection_rule_schedule":
-            launch_detection_rule_scheduled_job(job_id)
-        elif job_row["job_type"] == "correlation_pass":
-            launch_correlation_pass_job(job_id)
-        else:
-            publish_scan_job(
-                job_id,
-                job_row["job_type"],
-                job_row["target_asset_id"],
-                job_row["requested_by"] or "",
-            )
+        _dispatch_queued_job(
+            job_id=job_id,
+            job_type=str(job_row["job_type"] or ""),
+            target_asset_id=job_row["target_asset_id"],
+            requested_by=str(job_row["requested_by"] or ""),
+        )
     return {"ok": True, "status": "queued"}
+
+
+@internal_router.post("/{job_id}/claim")
+def claim_job(
+    job_id: int,
+    payload: dict | None = Body(default=None),
+    db: Session = Depends(get_db),
+    user: str = Depends(require_role(["admin", "analyst"])),
+):
+    worker_user = _require_worker_executor(user)
+    request = payload or {}
+    worker_id = str(request.get("worker_id") or worker_user).strip() or worker_user
+    claim_token = str(uuid4())
+    timeout_seconds = _job_claim_timeout_seconds()
+    claim_log = (
+        f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] claimed by {worker_id}"
+        f" timeout={timeout_seconds}s"
+    )
+
+    claimed_row = (
+        db.execute(
+            text(
+                """
+                UPDATE scan_jobs j
+                SET status = 'running',
+                    started_at = CASE
+                      WHEN j.status = 'queued' OR j.started_at IS NULL THEN NOW()
+                      ELSE j.started_at
+                    END,
+                    finished_at = NULL,
+                    error = NULL,
+                    retry_count = CASE WHEN j.status = 'running' THEN j.retry_count + 1 ELSE j.retry_count END,
+                    claimed_by = :worker_id,
+                    claim_token = :claim_token,
+                    last_heartbeat_at = NOW(),
+                    log_output = COALESCE(j.log_output, '') || :claim_log || E'\n'
+                WHERE j.job_id = :job_id
+                  AND j.job_type IN (
+                    'web_exposure',
+                    'score_recompute',
+                    'repository_scan',
+                    'threat_intel_refresh',
+                    'telemetry_import',
+                    'network_anomaly_score',
+                    'attack_lab_run',
+                    'attack_surface_discovery',
+                    'detection_rule_test',
+                    'detection_rule_schedule',
+                    'correlation_pass'
+                  )
+                  AND (
+                    j.status = 'queued'
+                    OR (
+                      j.status = 'running'
+                      AND (
+                        j.last_heartbeat_at IS NULL
+                        OR j.last_heartbeat_at <= NOW() - (:timeout_seconds * INTERVAL '1 second')
+                      )
+                    )
+                  )
+                RETURNING
+                  j.job_id,
+                  j.job_type,
+                  j.target_asset_id,
+                  j.requested_by,
+                  j.status,
+                  j.retry_count,
+                  j.claimed_by,
+                  j.claim_token,
+                  j.last_heartbeat_at,
+                  j.job_params_json
+                """
+            ),
+            {
+                "job_id": job_id,
+                "worker_id": worker_id,
+                "claim_token": claim_token,
+                "timeout_seconds": timeout_seconds,
+                "claim_log": claim_log,
+            },
+        )
+        .mappings()
+        .first()
+    )
+    if claimed_row:
+        db.commit()
+        body = _serialize_job(claimed_row)
+        body["claimed"] = True
+        body["acknowledge"] = False
+        return body
+
+    state = _load_internal_job_state(db, job_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Job not found")
+    state.pop("claim_token", None)
+    state["claimed"] = False
+    state["acknowledge"] = state.get("status") in {"done", "failed"}
+    return state
+
+
+@internal_router.post("/{job_id}/heartbeat")
+def heartbeat_job(
+    job_id: int,
+    payload: dict | None = Body(default=None),
+    db: Session = Depends(get_db),
+    user: str = Depends(require_role(["admin", "analyst"])),
+):
+    worker_user = _require_worker_executor(user)
+    request = payload or {}
+    claim_token = str(request.get("claim_token") or "").strip()
+    if not claim_token:
+        raise HTTPException(status_code=400, detail="claim_token required")
+    worker_id = str(request.get("worker_id") or worker_user).strip() or worker_user
+    log_line = str(request.get("log_line") or "").strip()
+
+    updated = (
+        db.execute(
+            text(
+                """
+                UPDATE scan_jobs
+                SET last_heartbeat_at = NOW(),
+                    log_output = CASE
+                      WHEN :log_line = '' THEN log_output
+                      ELSE COALESCE(log_output, '') || :log_line || E'\n'
+                    END
+                WHERE job_id = :job_id
+                  AND status = 'running'
+                  AND claim_token = :claim_token
+                  AND claimed_by = :worker_id
+                RETURNING job_id, job_type, status, last_heartbeat_at
+                """
+            ),
+            {
+                "job_id": job_id,
+                "claim_token": claim_token,
+                "worker_id": worker_id,
+                "log_line": log_line,
+            },
+        )
+        .mappings()
+        .first()
+    )
+    if updated:
+        db.commit()
+        body = _serialize_job(updated)
+        body["acknowledge"] = False
+        return body
+
+    state = _load_internal_job_state(db, job_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if state.get("status") in {"done", "failed"}:
+        state.pop("claim_token", None)
+        state["acknowledge"] = True
+        return state
+    raise HTTPException(status_code=409, detail="Job claim is no longer valid")
+
+
+@internal_router.post("/{job_id}/complete")
+def complete_job(
+    job_id: int,
+    payload: dict | None = Body(default=None),
+    db: Session = Depends(get_db),
+    user: str = Depends(require_role(["admin", "analyst"])),
+):
+    worker_user = _require_worker_executor(user)
+    request = payload or {}
+    claim_token = str(request.get("claim_token") or "").strip()
+    if not claim_token:
+        raise HTTPException(status_code=400, detail="claim_token required")
+    worker_id = str(request.get("worker_id") or worker_user).strip() or worker_user
+    log_line = str(request.get("log_line") or "").strip()
+
+    updated = (
+        db.execute(
+            text(
+                """
+                UPDATE scan_jobs
+                SET status = 'done',
+                    finished_at = NOW(),
+                    error = NULL,
+                    log_output = CASE
+                      WHEN :log_line = '' THEN log_output
+                      ELSE COALESCE(log_output, '') || :log_line || E'\n'
+                    END,
+                    claimed_by = NULL,
+                    claim_token = NULL,
+                    last_heartbeat_at = NULL
+                WHERE job_id = :job_id
+                  AND status IN ('queued', 'running', 'done')
+                  AND claim_token = :claim_token
+                  AND claimed_by = :worker_id
+                RETURNING job_id, job_type, status, finished_at
+                """
+            ),
+            {
+                "job_id": job_id,
+                "claim_token": claim_token,
+                "worker_id": worker_id,
+                "log_line": log_line,
+            },
+        )
+        .mappings()
+        .first()
+    )
+    if updated:
+        db.commit()
+        body = _serialize_job(updated)
+        body["acknowledge"] = True
+        return body
+
+    state = _load_internal_job_state(db, job_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Job not found")
+    state.pop("claim_token", None)
+    if state.get("status") in {"done", "failed"}:
+        state["acknowledge"] = True
+        return state
+    raise HTTPException(status_code=409, detail="Job claim is no longer valid")
+
+
+@internal_router.post("/{job_id}/fail")
+def fail_job(
+    job_id: int,
+    payload: dict | None = Body(default=None),
+    db: Session = Depends(get_db),
+    user: str = Depends(require_role(["admin", "analyst"])),
+):
+    worker_user = _require_worker_executor(user)
+    request = payload or {}
+    claim_token = str(request.get("claim_token") or "").strip()
+    if not claim_token:
+        raise HTTPException(status_code=400, detail="claim_token required")
+    worker_id = str(request.get("worker_id") or worker_user).strip() or worker_user
+    error = str(request.get("error") or "worker_execution_failed").strip()
+    retryable = bool(request.get("retryable"))
+    log_line = str(request.get("log_line") or error).strip()
+
+    state = _load_internal_job_state(db, job_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if state.get("status") in {"done", "failed"}:
+        state.pop("claim_token", None)
+        state["acknowledge"] = True
+        state["requeued"] = False
+        state["existing_terminal"] = True
+        return state
+    if state.get("claim_token") != claim_token or state.get("claimed_by") != worker_id:
+        raise HTTPException(status_code=409, detail="Job claim is no longer valid")
+
+    if retryable:
+        updated = (
+            db.execute(
+                text(
+                    """
+                    UPDATE scan_jobs
+                    SET status = 'queued',
+                        started_at = NULL,
+                        finished_at = NULL,
+                        error = :error,
+                        retry_count = retry_count + 1,
+                        log_output = COALESCE(log_output, '') || :log_line || E'\n',
+                        claimed_by = NULL,
+                        claim_token = NULL,
+                        last_heartbeat_at = NULL
+                    WHERE job_id = :job_id
+                    RETURNING job_id, job_type, status, retry_count
+                    """
+                ),
+                {
+                    "job_id": job_id,
+                    "error": error,
+                    "log_line": log_line,
+                },
+            )
+            .mappings()
+            .first()
+        )
+        db.commit()
+        body = _serialize_job(updated)
+        body["acknowledge"] = False
+        body["requeued"] = True
+        body["existing_terminal"] = False
+        return body
+
+    updated = (
+        db.execute(
+            text(
+                """
+                UPDATE scan_jobs
+                SET status = 'failed',
+                    finished_at = NOW(),
+                    error = :error,
+                    log_output = COALESCE(log_output, '') || :log_line || E'\n',
+                    claimed_by = NULL,
+                    claim_token = NULL,
+                    last_heartbeat_at = NULL
+                WHERE job_id = :job_id
+                RETURNING job_id, job_type, status, finished_at, error
+                """
+            ),
+            {
+                "job_id": job_id,
+                "error": error,
+                "log_line": log_line,
+            },
+        )
+        .mappings()
+        .first()
+    )
+    db.commit()
+    body = _serialize_job(updated)
+    body["acknowledge"] = True
+    body["requeued"] = False
+    body["existing_terminal"] = False
+    return body
 
 
 @router.post("/{job_id}/execute")
@@ -750,8 +1577,7 @@ def execute_job(
     Worker execution endpoint for queued/running jobs that are executed in the API runtime.
     This is intended for service identities; human use is restricted to admin.
     """
-    if not _is_worker_executor(user):
-        raise HTTPException(status_code=403, detail="Worker executor access required")
+    _require_worker_executor(user)
 
     row = (
         db.execute(
@@ -784,6 +1610,7 @@ def execute_job(
         }
 
     dispatchers = {
+        "web_exposure": _run_web_exposure_job,
         "score_recompute": _run_score_recompute_job,
         "repository_scan": run_repository_scan_job,
         "threat_intel_refresh": run_threat_intel_refresh_job,
@@ -830,12 +1657,16 @@ def execute_job(
     )
     if not updated:
         raise HTTPException(status_code=500, detail="Job disappeared after execution")
+    updated_status = str(updated.get("status") or "")
+    if updated_status in {"done", "failed"}:
+        _clear_job_claim(db, int(row["job_id"]))
+        db.commit()
 
     return {
         "ok": True,
         "job_id": int(row["job_id"]),
         "job_type": job_type,
-        "status": str(updated.get("status") or ""),
+        "status": updated_status,
         "error": updated.get("error"),
         "finished_at": (
             updated.get("finished_at").isoformat()

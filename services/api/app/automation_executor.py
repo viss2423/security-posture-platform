@@ -15,6 +15,7 @@ from .alert_enricher import (
     get_security_alert_by_id,
 )
 from .notification_service import send_slack_notification
+from .request_context import current_tenant_id
 
 
 def _safe_json(value: Any, *, default: Any) -> Any:
@@ -387,12 +388,13 @@ def _action_run_job(
         db.execute(
             text(
                 """
-                INSERT INTO scan_jobs(job_type, target_asset_id, requested_by, status, job_params_json)
-                VALUES (:job_type, :target_asset_id, :requested_by, 'queued', CAST(:job_params_json AS jsonb))
+                INSERT INTO scan_jobs(org_id, job_type, target_asset_id, requested_by, status, job_params_json)
+                VALUES (:org_id, :job_type, :target_asset_id, :requested_by, 'queued', CAST(:job_params_json AS jsonb))
                 RETURNING job_id, job_type, target_asset_id, requested_by, status, created_at, job_params_json
                 """
             ),
             {
+                "org_id": current_tenant_id(),
                 "job_type": job_type,
                 "target_asset_id": target_asset_id,
                 "requested_by": actor,

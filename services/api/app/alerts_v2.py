@@ -10,6 +10,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from .request_context import current_tenant_id
+
 VALID_ALERT_STATUSES = {"firing", "acked", "suppressed", "resolved"}
 VALID_ALERT_SEVERITIES = {"critical", "high", "medium", "low", "info"}
 
@@ -55,7 +57,7 @@ def _safe_json(value: Any, *, default: Any) -> Any:
 def alert_key_for(source: str, dedupe_key: str) -> str:
     source_text = (source or "unknown").strip().lower()
     dedupe_text = (dedupe_key or "").strip().lower()
-    digest = hashlib.sha1(f"{source_text}:{dedupe_text}".encode()).hexdigest()
+    digest = hashlib.sha256(f"{source_text}:{dedupe_text}".encode()).hexdigest()
     return f"alrt-{digest}"
 
 
@@ -144,12 +146,14 @@ def upsert_security_alert(
             text(
                 """
                 INSERT INTO security_alerts(
+                  org_id,
                   alert_key, dedupe_key, source, alert_type, asset_id, asset_key, severity, status,
                   title, description, event_count, first_seen_at, last_seen_at,
                   ti_match, ti_source, mitre_techniques, payload_json, context_json,
                   created_at, updated_at
                 )
                 VALUES (
+                  :org_id,
                   :alert_key, :dedupe_key, :source, :alert_type, :asset_id, :asset_key, :severity, 'firing',
                   :title, :description, 1, :observed_at, :observed_at,
                   :ti_match, :ti_source, CAST(:mitre_techniques AS jsonb),
@@ -183,6 +187,7 @@ def upsert_security_alert(
                 """
             ),
             {
+                "org_id": current_tenant_id(),
                 "alert_key": alert_key,
                 "dedupe_key": normalized_dedupe,
                 "source": normalized_source,

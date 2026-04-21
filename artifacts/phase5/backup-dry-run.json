@@ -1,0 +1,22 @@
+{
+  "verified_at": "2026-04-04T13:16:15.563911Z",
+  "dry_run": true,
+  "ok": true,
+  "checks": [
+    {
+      "check": "backup_file_freshness",
+      "ok": true,
+      "detail": {
+        "path": "C:\\Users\\visha\\Desktop\\security-posture-platform\\artifacts\\phase5\\maintenance-backup.sql",
+        "size_bytes": 194175,
+        "modified_at": "2026-04-04T13:16:14.871081Z",
+        "max_age_hours": 24
+      }
+    },
+    {
+      "check": "restore_execution",
+      "ok": true,
+      "detail": "Dry-run mode: restore command execution skipped"
+    }
+  ]
+}

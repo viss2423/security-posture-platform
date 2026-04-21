@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.audit import log_audit
 from app.db import get_db
 from app.queue import publish_correlation_event, publish_notify
-from app.request_context import request_id_ctx
+from app.request_context import current_tenant_id, request_id_ctx
 from app.routers.auth import require_auth, require_role
 from app.schemas.posture import (
     AssetDetailResponse,
@@ -33,8 +33,14 @@ from app.suppression import is_asset_suppressed
 
 router = APIRouter(prefix="/posture", tags=["posture"])
 
-STATUS_INDEX = "secplat-asset-status"
-EVENTS_INDEX = "secplat-events"
+STATUS_INDEX = (
+    str(getattr(settings, "OPENSEARCH_STATUS_INDEX", "secplat-asset-status") or "").strip()
+    or "secplat-asset-status"
+)
+EVENTS_INDEX = (
+    str(getattr(settings, "OPENSEARCH_EVENTS_INDEX", "secplat-events") or "").strip()
+    or "secplat-events"
+)
 OPENSEARCH_BASE = lambda idx: f"{settings.OPENSEARCH_URL.rstrip('/')}/{idx}"
 _POSTURE_CACHE_LOCK = Lock()
 _POSTURE_CACHE = {
@@ -46,6 +52,45 @@ _POSTURE_ITEMS_CACHE = {
     "expires_at": 0.0,
     "items": [],
 }
+
+
+def _multi_tenant_mode() -> bool:
+    return (getattr(settings, "TENANCY_MODE", "single") or "single").strip().lower() == "multi"
+
+
+def _keyword_term(field: str, value: str) -> dict[str, dict[str, str]]:
+    return {"term": {f"{field}.keyword": value}}
+
+
+def _tenant_filters() -> list[dict[str, dict[str, str]]]:
+    if not _multi_tenant_mode():
+        return []
+    return [_keyword_term("org_id", current_tenant_id())]
+
+
+def _fetch_status_doc(asset_key: str) -> dict | None:
+    if not _multi_tenant_mode():
+        try:
+            data = _opensearch_get(f"/_doc/{asset_key}")
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return None
+            raise
+        return data.get("_source") if data.get("found") else None
+    body = {
+        "size": 1,
+        "query": {
+            "bool": {
+                "filter": [
+                    *_tenant_filters(),
+                    _keyword_term("asset_key", asset_key),
+                ]
+            }
+        },
+    }
+    data = _opensearch_post("/_search", body, STATUS_INDEX)
+    hits = data.get("hits", {}).get("hits", [])
+    return hits[0].get("_source", {}) if hits else None
 
 
 def _criticality_text(v) -> str | None:
@@ -70,7 +115,7 @@ def _get_asset_metadata_batch(db: Session, asset_keys: list[str]) -> dict[str, d
         return {}
     placeholders = ", ".join(f":k{i}" for i in range(len(asset_keys)))
     params = {f"k{i}": k for i, k in enumerate(asset_keys)}
-    q = text(f"""
+    q = text(f"""  # nosemgrep
       SELECT asset_key, name, owner, environment, criticality
       FROM assets
       WHERE asset_key IN ({placeholders})
@@ -170,12 +215,13 @@ def _opensearch_post(path: str, body: dict, index: str = STATUS_INDEX):
 def _events_for_asset(asset_key: str, hours: int = 24, size: int = 50) -> list[dict]:
     """Query secplat-events for this asset (health events), newest first."""
     # time range: now - hours
+    filters: list[dict] = [{"term": {"level": "health"}}, *_tenant_filters()]
     body = {
         "size": size,
         "sort": [{"@timestamp": "desc"}],
         "query": {
             "bool": {
-                "filter": [{"term": {"level": "health"}}],
+                "filter": filters,
                 "should": [
                     {"term": {"asset.keyword": asset_key}},
                     {"match": {"asset": asset_key}},
@@ -233,9 +279,10 @@ def _fetch_posture_list_raw():
                 cached_items = [dict(item) for item in _POSTURE_CACHE["items"]]
                 return _POSTURE_CACHE["total"], cached_items
 
+    tenant_filters = _tenant_filters()
     body = {
         "size": 1000,
-        "query": {"match_all": {}},
+        "query": {"match_all": {}} if not tenant_filters else {"bool": {"filter": tenant_filters}},
         "sort": [{"status_num": "desc"}, {"posture_score": "asc"}],
     }
     try:
@@ -470,16 +517,14 @@ def list_posture(
 
 def _avg_latency_24h() -> float | None:
     """Average latency (ms) across all health events in last 24h."""
+    filters: list[dict] = [
+        {"term": {"level": "health"}},
+        {"range": {"@timestamp": {"gte": "now-24h"}}},
+        *_tenant_filters(),
+    ]
     body = {
         "size": 0,
-        "query": {
-            "bool": {
-                "filter": [
-                    {"term": {"level": "health"}},
-                    {"range": {"@timestamp": {"gte": "now-24h"}}},
-                ]
-            }
-        },
+        "query": {"bool": {"filter": filters}},
         "aggs": {"avg_latency": {"avg": {"field": "latency_ms"}}},
     }
     try:
@@ -1334,7 +1379,7 @@ def posture_alert_send(
     normalized_assets = ",".join(sorted({a.strip() for a in down_assets if a and a.strip()}))
     bucket = datetime.now(UTC).strftime("%Y%m%d%H")
     digest = (
-        hashlib.sha1(normalized_assets.encode("utf-8")).hexdigest()[:16]
+        hashlib.sha256(normalized_assets.encode("utf-8")).hexdigest()[:16]
         if normalized_assets
         else "none"
     )
@@ -1417,103 +1462,74 @@ def get_posture_detail(
 ):
     """Extended detail: state + timeline + evidence + recommendations + completeness/SLO. State enriched with Postgres owner/criticality."""
     try:
-        data = _opensearch_get(f"/_doc/{asset_key}")
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 404:
-            repository_state = _repository_asset_state(db, asset_key)
-            if not repository_state:
-                raise HTTPException(status_code=404, detail="Asset not found in posture index")
-            latest_finding = (
-                db.execute(
-                    text(
-                        """
-                        SELECT title, remediation, scanner_metadata_json, COALESCE(last_seen, time) AS last_seen
-                        FROM findings f
-                        JOIN assets a ON a.asset_id = f.asset_id
-                        WHERE a.asset_key = :asset_key
-                        ORDER BY COALESCE(last_seen, time) DESC, finding_id DESC
-                        LIMIT 1
-                        """
-                    ),
-                    {"asset_key": asset_key},
-                )
-                .mappings()
-                .first()
-            )
-            active_findings = (
-                db.execute(
-                    text(
-                        """
-                        SELECT COUNT(*) AS count
-                        FROM findings f
-                        JOIN assets a ON a.asset_id = f.asset_id
-                        WHERE a.asset_key = :asset_key
-                          AND COALESCE(f.status, 'open') <> 'remediated'
-                        """
-                    ),
-                    {"asset_key": asset_key},
-                )
-                .mappings()
-                .first()
-            )
-            active_count = int((active_findings or {}).get("count") or 0)
-            recommendations = (
-                [
-                    "Review repository scan findings and update vulnerable packages or misconfigurations."
-                ]
-                if active_count > 0
-                else ["No active repository findings. Run a repository scan to refresh coverage."]
-            )
-            if latest_finding and latest_finding.get("remediation"):
-                recommendations.append(str(latest_finding.get("remediation")))
-            return AssetDetailResponse(
-                state=repository_state,
-                timeline=[],
-                evidence={
-                    "summary": "Repository asset detail is based on scanner findings rather than posture telemetry.",
-                    "latest_finding_title": latest_finding.get("title") if latest_finding else None,
-                    "latest_finding_seen_at": latest_finding.get("last_seen").isoformat()
-                    if latest_finding and hasattr(latest_finding.get("last_seen"), "isoformat")
-                    else None,
-                    "latest_finding_metadata": latest_finding.get("scanner_metadata_json")
-                    if latest_finding
-                    else None,
-                },
-                recommendations=recommendations,
-                expected_interval_sec=21600,
-                data_completeness=DataCompleteness(
-                    checks=active_count,
-                    expected=0,
-                    label_24h="scan-based",
-                    label_1h="scan-based",
-                    pct_24h=None,
-                    pct_1h=None,
-                ),
-                latency_slo_ms=0,
-                latency_slo_ok=True,
-                error_rate_24h=0.0,
-                reason_display="repository_scan",
-            )
-        raise HTTPException(status_code=502, detail=f"OpenSearch error: {e.response.text}")
+        raw = _fetch_status_doc(asset_key)
     except httpx.RequestError as e:
         raise HTTPException(status_code=503, detail=f"OpenSearch unreachable: {e!s}")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=502, detail=f"OpenSearch error: {e.response.text}")
 
-    if not data.get("found"):
+    if not raw:
         repository_state = _repository_asset_state(db, asset_key)
         if not repository_state:
             raise HTTPException(status_code=404, detail="Asset not found in posture index")
+        latest_finding = (
+            db.execute(
+                text(
+                    """
+                    SELECT title, remediation, scanner_metadata_json, COALESCE(last_seen, time) AS last_seen
+                    FROM findings f
+                    JOIN assets a ON a.asset_id = f.asset_id
+                    WHERE a.asset_key = :asset_key
+                    ORDER BY COALESCE(last_seen, time) DESC, finding_id DESC
+                    LIMIT 1
+                    """
+                ),
+                {"asset_key": asset_key},
+            )
+            .mappings()
+            .first()
+        )
+        active_findings = (
+            db.execute(
+                text(
+                    """
+                    SELECT COUNT(*) AS count
+                    FROM findings f
+                    JOIN assets a ON a.asset_id = f.asset_id
+                    WHERE a.asset_key = :asset_key
+                      AND COALESCE(f.status, 'open') <> 'remediated'
+                    """
+                ),
+                {"asset_key": asset_key},
+            )
+            .mappings()
+            .first()
+        )
+        active_count = int((active_findings or {}).get("count") or 0)
+        recommendations = (
+            ["Review repository scan findings and update vulnerable packages or misconfigurations."]
+            if active_count > 0
+            else ["No active repository findings. Run a repository scan to refresh coverage."]
+        )
+        if latest_finding and latest_finding.get("remediation"):
+            recommendations.append(str(latest_finding.get("remediation")))
         return AssetDetailResponse(
             state=repository_state,
             timeline=[],
             evidence={
-                "summary": "Repository asset detail is based on scanner findings rather than posture telemetry."
+                "summary": "Repository asset detail is based on scanner findings rather than posture telemetry.",
+                "latest_finding_title": latest_finding.get("title") if latest_finding else None,
+                "latest_finding_seen_at": latest_finding.get("last_seen").isoformat()
+                if latest_finding and hasattr(latest_finding.get("last_seen"), "isoformat")
+                else None,
+                "latest_finding_metadata": latest_finding.get("scanner_metadata_json")
+                if latest_finding
+                else None,
             },
-            recommendations=[
-                "Run repository scans from Jobs to refresh dependency and misconfiguration coverage."
-            ],
+            recommendations=recommendations,
             expected_interval_sec=21600,
             data_completeness=DataCompleteness(
-                checks=0,
+                checks=active_count,
                 expected=0,
                 label_24h="scan-based",
                 label_1h="scan-based",
@@ -1525,7 +1541,6 @@ def get_posture_detail(
             error_rate_24h=0.0,
             reason_display="repository_scan",
         )
-    raw = data.get("_source", {})
     raw["asset_key"] = raw.get("asset_key") or asset_key
     state = raw_to_asset_state(raw)
     meta = _get_asset_metadata_batch(db, [asset_key])
@@ -1598,23 +1613,17 @@ def get_posture_detail(
 def get_posture(asset_key: str, db: Session = Depends(get_db), _user: str = Depends(require_auth)):
     """Get current posture for one asset (canonical schema). Enriched with Postgres owner/criticality."""
     try:
-        data = _opensearch_get(f"/_doc/{asset_key}")
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 404:
-            repository_state = _repository_asset_state(db, asset_key)
-            if repository_state:
-                return repository_state
-            raise HTTPException(status_code=404, detail="Asset not found in posture index")
-        raise HTTPException(status_code=502, detail=f"OpenSearch error: {e.response.text}")
+        raw = _fetch_status_doc(asset_key)
     except httpx.RequestError as e:
         raise HTTPException(status_code=503, detail=f"OpenSearch unreachable: {e!s}")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=502, detail=f"OpenSearch error: {e.response.text}")
 
-    if not data.get("found"):
+    if not raw:
         repository_state = _repository_asset_state(db, asset_key)
         if repository_state:
             return repository_state
         raise HTTPException(status_code=404, detail="Asset not found in posture index")
-    raw = data.get("_source", {})
     raw["asset_key"] = raw.get("asset_key") or asset_key
     state = raw_to_asset_state(raw)
     meta = _get_asset_metadata_batch(db, [asset_key])

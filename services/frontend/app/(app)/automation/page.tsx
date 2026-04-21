@@ -152,7 +152,7 @@ export default function AutomationPage() {
     if (!canMutate) return;
     const title = playbookTitle.trim();
     if (!title) {
-      setError('Playbook title is required');
+      setError('Workflow name is required');
       return;
     }
     let conditions: Array<Record<string, unknown>> = [];
@@ -167,7 +167,7 @@ export default function AutomationPage() {
       conditions = parsedConditions;
       actions = parsedActions;
     } catch (parseError) {
-      setError(parseError instanceof Error ? parseError.message : 'Invalid playbook JSON');
+      setError(parseError instanceof Error ? parseError.message : 'Invalid workflow JSON');
       return;
     }
 
@@ -184,7 +184,7 @@ export default function AutomationPage() {
           approval_required: playbookApprovalRequired,
           enabled: playbookEnabled,
         });
-        setMessage(`Playbook ${selectedPlaybookId} updated.`);
+        setMessage(`Workflow ${selectedPlaybookId} updated.`);
       } else {
         await createAutomationPlaybook({
           title,
@@ -195,14 +195,14 @@ export default function AutomationPage() {
           approval_required: playbookApprovalRequired,
           enabled: playbookEnabled,
         });
-        setMessage(`Playbook "${title}" created.`);
+        setMessage(`Workflow "${title}" created.`);
       }
       await load();
       if (!selectedPlaybookId) {
         resetPlaybookForm();
       }
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : 'Failed to save playbook');
+      setError(saveError instanceof Error ? saveError.message : 'Failed to save workflow');
     } finally {
       setSavingPlaybook(false);
     }
@@ -232,7 +232,7 @@ export default function AutomationPage() {
       });
       setMessage(
         `Triggered ${out.runs_created} run(s) for trigger ${out.trigger}${
-          selectedPlaybookId ? ` using playbook ${selectedPlaybookId}` : ''
+          selectedPlaybookId ? ` using workflow ${selectedPlaybookId}` : ''
         }.`
       );
       await load();
@@ -300,16 +300,16 @@ export default function AutomationPage() {
       <section className="page-hero animate-in">
         <div className="hero-grid">
           <div>
-            <span className="stat-chip-strong">Automation</span>
-            <h1 className="hero-title mt-3">Playbook Operations</h1>
+            <span className="stat-chip-strong">Workflows</span>
+            <h1 className="hero-title mt-3">Workflow Builder</h1>
             <p className="hero-copy">
-              Define playbooks, trigger runs, approve guarded actions, and execute rollbacks from a
-              single response workflow view.
+              Design response workflows, trigger runs, route approvals, and keep rollback safety
+              visible in one place.
             </p>
           </div>
           <div className="hero-stat-grid">
             <div className="hero-stat">
-              <p className="hero-stat-label">Playbooks</p>
+              <p className="hero-stat-label">Workflows</p>
               <p className="hero-stat-value">{playbooks.length}</p>
             </div>
             <div className="hero-stat">
@@ -344,14 +344,14 @@ export default function AutomationPage() {
         <div className="section-panel animate-in">
           <div className="section-head">
             <div>
-              <h2 className="section-title">Playbook editor</h2>
+              <h2 className="section-title">Workflow builder</h2>
               <p className="section-head-copy">
-                Create or update additive playbooks with JSON conditions and actions.
+                Create or update response workflows with JSON conditions and actions.
               </p>
             </div>
             {selectedPlaybookId ? (
               <button type="button" onClick={resetPlaybookForm} className="btn-secondary text-sm">
-                New playbook
+                New workflow
               </button>
             ) : null}
           </div>
@@ -408,7 +408,7 @@ export default function AutomationPage() {
                     checked={playbookApprovalRequired}
                     onChange={(event) => setPlaybookApprovalRequired(event.target.checked)}
                   />
-                  <span>Approval required (playbook-level)</span>
+                  <span>Approval required</span>
                 </label>
               </div>
             </div>
@@ -441,8 +441,8 @@ export default function AutomationPage() {
                   {savingPlaybook
                     ? 'Saving...'
                     : selectedPlaybookId
-                      ? 'Update playbook'
-                      : 'Create playbook'}
+                      ? 'Update workflow'
+                      : 'Create workflow'}
                 </button>
               </div>
             )}
@@ -452,13 +452,13 @@ export default function AutomationPage() {
         <div className="section-panel animate-in">
           <div className="section-head">
             <div>
-              <h2 className="section-title">Playbook inventory</h2>
-              <p className="section-head-copy">Select a playbook to edit or trigger.</p>
+              <h2 className="section-title">Workflow library</h2>
+              <p className="section-head-copy">Select a workflow to edit or trigger.</p>
             </div>
             <span className="stat-chip">{playbooks.length} total</span>
           </div>
           {playbooks.length === 0 ? (
-            <p className="text-sm text-[var(--muted)]">No playbooks available.</p>
+            <p className="text-sm text-[var(--muted)]">No workflows available.</p>
           ) : (
             <ul className="space-y-3">
               {playbooks.map((item) => (
@@ -466,7 +466,7 @@ export default function AutomationPage() {
                   key={item.playbook_id}
                   className={`rounded-2xl border p-4 ${
                     selectedPlaybookId === item.playbook_id
-                      ? 'border-cyan-300/45 bg-cyan-300/10'
+                      ? 'border-cyan-300/20 bg-cyan-300/08'
                       : 'border-[var(--border)] bg-[var(--surface-elevated)]/40'
                   }`}
                 >
@@ -474,7 +474,7 @@ export default function AutomationPage() {
                     <button
                       type="button"
                       onClick={() => selectPlaybook(item)}
-                      className="text-left text-sm font-medium text-[var(--text)] hover:text-cyan-100"
+                      className="text-left text-sm font-medium text-[var(--text)] hover:text-[var(--cyan-strong)]"
                     >
                       {item.title}
                     </button>
@@ -491,7 +491,7 @@ export default function AutomationPage() {
           <div className="mt-5 rounded-2xl border border-[var(--border)] bg-[var(--surface-elevated)]/35 p-4">
             <h3 className="mb-2 text-sm font-semibold text-[var(--text)]">Trigger run</h3>
             <p className="mb-3 text-xs text-[var(--muted)]">
-              Runs selected playbook only when one is selected. Otherwise runs all playbooks for the
+              Runs the selected workflow only when one is selected. Otherwise runs all workflows for the
               trigger.
             </p>
             <label className="text-sm text-[var(--muted)]">
@@ -537,7 +537,7 @@ export default function AutomationPage() {
               <thead>
                 <tr className="border-b border-[var(--border)] text-left text-xs uppercase tracking-[0.16em] text-[var(--muted)]">
                   <th className="px-4 py-3">Run</th>
-                  <th className="px-4 py-3">Playbook</th>
+                  <th className="px-4 py-3">Workflow</th>
                   <th className="px-4 py-3">Trigger</th>
                   <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3">Actions</th>

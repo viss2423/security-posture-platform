@@ -31,7 +31,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: api
-          image: ghcr.io/your-org/secplat-api:latest
+          image: ghcr.io/your-org/secplat-api@sha256:1111111111111111111111111111111111111111111111111111111111111111
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
@@ -47,11 +47,16 @@ spec:
                 secretKeyRef:
                   name: secplat-secrets
                   key: API_POSTGRES_DSN
+            - name: MIGRATIONS_POSTGRES_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: secplat-secrets
+                  key: API_MIGRATIONS_POSTGRES_DSN
             - name: PYTHONDONTWRITEBYTECODE
               value: "1"
           readinessProbe:
             httpGet:
-              path: /health
+              path: /ready
               port: http
             initialDelaySeconds: 10
             periodSeconds: 10

@@ -654,6 +654,7 @@ export type AlertItem = {
   ai_recommended_action?: 'ack' | 'suppress' | 'assign' | 'escalate' | 'resolve' | 'monitor' | null;
   ai_urgency?: 'critical' | 'high' | 'medium' | 'low' | null;
   ai_generated_at?: string | null;
+  ai_requires_human_approval?: boolean | null;
   effective_severity?: 'critical' | 'high' | 'medium' | 'low' | 'info' | null;
   effective_severity_score?: number | null;
   effective_severity_top_drivers?: Array<{
@@ -1309,6 +1310,8 @@ export type AIAlertGuidance = {
   guidance_text: string;
   recommended_action?: 'ack' | 'suppress' | 'assign' | 'escalate' | 'resolve' | 'monitor' | null;
   urgency?: 'critical' | 'high' | 'medium' | 'low' | null;
+  requires_human_approval?: boolean;
+  approval_mode?: string | null;
   provider: string;
   model: string;
   generated_by?: string | null;
@@ -1345,8 +1348,50 @@ export type AssetMetadata = {
   criticality?: string | null;
 };
 
+export type AssetInventoryItem = AssetMetadata & {
+  owner_team?: string | null;
+  owner_email?: string | null;
+  asset_type?: string | null;
+  verified?: boolean | null;
+  verification_method?: string | null;
+  verification_token?: string | null;
+  address?: string | null;
+  port?: number | null;
+  is_active?: boolean | null;
+  tags?: string[] | null;
+  metadata?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export async function getAssets(): Promise<AssetInventoryItem[]> {
+  return apiFetch<AssetInventoryItem[]>('/assets/');
+}
+
 export async function getAssetByKey(assetKey: string): Promise<AssetMetadata> {
   return apiFetch<AssetMetadata>(`/assets/by-key/${encodeURIComponent(assetKey)}`);
+}
+
+export async function createAsset(body: {
+  asset_key: string;
+  type: 'user' | 'host' | 'external_web' | 'app';
+  name: string;
+  owner?: string | null;
+  owner_team?: string | null;
+  owner_email?: string | null;
+  asset_type?: string | null;
+  environment?: string | null;
+  criticality?: string | null;
+  address?: string | null;
+  port?: number | null;
+  is_active?: boolean;
+  tags?: string[];
+  metadata?: Record<string, unknown>;
+}): Promise<AssetInventoryItem> {
+  return apiFetch<AssetInventoryItem>('/assets/', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
 }
 
 export async function updateAssetByKey(
@@ -2076,6 +2121,63 @@ export async function launchCyberRangeMission(missionId: string): Promise<{
   });
 }
 
+export type PlatformDemoStatus = {
+  seed_version: string;
+  asset_key: string;
+  repo_asset_key: string;
+  ioc_source: string;
+  rule_name: string;
+  seeded: boolean;
+  assets_present: number;
+  assets: Array<{
+    asset_key: string;
+    name?: string | null;
+    environment?: string | null;
+    criticality?: string | null;
+    verified?: boolean | null;
+  }>;
+  telemetry_events: number;
+  alerts: number;
+  incidents: number;
+  repository_findings: number;
+  attack_lab_runs: number;
+  detection_rule?: {
+    rule_id: number;
+    name: string;
+    enabled: boolean;
+    last_tested_at?: string | null;
+    last_test_matches?: number | null;
+  } | null;
+  latest_seed_at?: string | null;
+  latest_seed_details?: Record<string, unknown> | null;
+};
+
+export async function getPlatformDemoStatus(): Promise<PlatformDemoStatus> {
+  return apiFetch<PlatformDemoStatus>('/platform/demo/status');
+}
+
+export async function seedDemoEnvironment(force: boolean = false): Promise<{
+  requested_by: string;
+  result: Record<string, unknown>;
+}> {
+  return apiFetch('/platform/demo/seed', {
+    method: 'POST',
+    body: JSON.stringify({ force }),
+  });
+}
+
+export async function resetDemoEnvironment(): Promise<{
+  requested_by: string;
+  reset: boolean;
+  cleanup: Record<string, number>;
+  seed: Record<string, unknown>;
+}> {
+  return apiFetch('/platform/demo/reset', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
 export async function updateFindingStatus(finding_id: number, status: FindingStatus): Promise<{ ok: boolean; finding_id: number; status: string }> {
   return apiFetch(`/findings/${finding_id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) });
 }
@@ -2482,6 +2584,8 @@ export type CreateIncidentBody = {
   assigned_to?: string | null;
   sla_due_at?: string | null;
   asset_keys?: string[] | null;
+  alert_ids?: number[] | null;
+  incident_key?: string | null;
 };
 
 export async function getIncidents(params?: {

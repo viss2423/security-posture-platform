@@ -1,0 +1,58 @@
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="secplat-api",status="5xx"}'
+        values: '0+10x30'
+      - series: 'http_requests_total{job="secplat-api",status="2xx"}'
+        values: '0+100x30'
+      - series: 'secplat_api_p95_latency_ms'
+        values: '700x30'
+      - series: 'secplat_worker_loop_errors_total'
+        values: '0+1x30'
+      - series: 'up{job="secplat-worker-web"}'
+        values: '0x30'
+      - series: 'up{job="secplat-correlator"}'
+        values: '1x30'
+      - series: 'up{job="secplat-notifier"}'
+        values: '1x30'
+      - series: 'up{job="secplat-deriver"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: SecPlatApiAvailabilityBurn
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "SecPlat API availability error budget is burning"
+              description: "The 5xx rate exceeded the GA error budget threshold over the last 10 minutes."
+      - eval_time: 20m
+        alertname: SecPlatApiLatencyP95High
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "SecPlat API p95 latency is above target"
+              description: "The exported API p95 latency metric stayed above 500 ms for 15 minutes."
+      - eval_time: 16m
+        alertname: SecPlatWorkerLoopErrors
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "SecPlat worker loop is erroring"
+              description: "The worker main loop emitted at least one error in the last 10 minutes."
+      - eval_time: 10m
+        alertname: SecPlatBackgroundServiceMissing
+        exp_alerts:
+          - exp_labels:
+              job: secplat-worker-web
+              severity: critical
+            exp_annotations:
+              summary: "A SecPlat background service metrics endpoint is down"
+              description: "Prometheus could not scrape one of the background service metrics endpoints."

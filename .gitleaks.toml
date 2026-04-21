@@ -1,0 +1,8 @@
+[allowlist]
+  description = "False positives: generated keys in SQL backups, test fixtures, and telemetry data"
+  paths = [
+    '''artifacts/.*\.sql''',
+    '''artifacts/.*\.json''',
+    '''lab-data/.*\.jsonl''',
+    '''services/api/tests/test_ai_client_redaction\.py''',
+  ]

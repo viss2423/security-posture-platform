@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["config", "secretData", "images"],
+  "properties": {
+    "config": { "type": "object" },
+    "secretData": { "type": "object" },
+    "images": {
+      "type": "object",
+      "required": ["api", "frontend", "workerWeb", "correlator", "deriver", "notifier", "ingestion"],
+      "properties": {
+        "api": { "type": "string" },
+        "frontend": { "type": "string" },
+        "workerWeb": { "type": "string" },
+        "correlator": { "type": "string" },
+        "deriver": { "type": "string" },
+        "notifier": { "type": "string" },
+        "ingestion": { "type": "string" }
+      }
+    },
+    "frontend": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "replicaCount": { "type": "integer", "minimum": 1 },
+        "grafanaUrl": { "type": "string" },
+        "service": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string" },
+            "port": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "ingress": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "className": { "type": "string" },
+            "annotations": { "type": "object" },
+            "host": { "type": "string" },
+            "path": { "type": "string" },
+            "tls": { "type": "array" }
+          }
+        },
+        "resources": { "type": "object" }
+      }
+    }
+  }
+}

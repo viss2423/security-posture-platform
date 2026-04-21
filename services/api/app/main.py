@@ -1,18 +1,22 @@
 import asyncio
 import logging
+import time
 import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from . import metrics
+from .db import SessionLocal
 from .db_migrate import run_startup_migrations
 from .demo_seed import maybe_seed_cyberlab_demo
 from .errors import register_error_handlers
 from .logging_config import configure_logging
-from .request_context import request_id_ctx
+from .otel import configure_otel, start_span
+from .request_context import request_id_ctx, tenant_id_ctx
 from .routers import (
     ai,
     ai_feedback,
@@ -30,17 +34,21 @@ from .routers import (
     incidents,
     integrations,
     jobs,
+    platform,
     policy,
     posture,
+    privacy,
     retention,
     risk,
     risk_ml,
+    security,
     suppression,
     telemetry,
     threat_intel,
 )
 from .routers import audit as audit_router
 from .settings import settings
+from .stability import capture_api_runtime_snapshot, materialize_sli_sample
 from .telemetry import (
     enqueue_network_anomaly_job,
     enqueue_telemetry_import_job,
@@ -170,43 +178,121 @@ async def _scheduled_telemetry_keepalive_loop():
         await asyncio.sleep(interval_sec)
 
 
+def _materialize_platform_sli_sample() -> None:
+    db = SessionLocal()
+    try:
+        capture_api_runtime_snapshot(db, source="platform_runtime_loop_capture")
+        materialize_sli_sample(
+            db,
+            source="platform_runtime_loop",
+        )
+    finally:
+        db.close()
+
+
+async def _scheduled_sli_materialization_loop():
+    interval_sec = max(
+        15,
+        int(getattr(settings, "PLATFORM_SLI_MATERIALIZATION_INTERVAL_SECONDS", 60)),
+    )
+    await asyncio.sleep(min(interval_sec, 15))
+    while True:
+        try:
+            await asyncio.to_thread(_materialize_platform_sli_sample)
+            logger.info("scheduled_sli_materialization completed")
+        except Exception as e:
+            logger.exception("scheduled_sli_materialization failed: %s", e)
+        await asyncio.sleep(interval_sec)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    configure_otel(service_name="secplat-api")
     # Ensure audit_events + alert_states exist (e.g. existing DB from before those tables were in init.sql)
     await asyncio.to_thread(run_startup_migrations)
     await asyncio.to_thread(maybe_seed_cyberlab_demo)
-    asyncio.create_task(_scheduled_snapshot_loop())
-    asyncio.create_task(_scheduled_network_anomaly_loop())
-    asyncio.create_task(_scheduled_telemetry_import_loop())
-    asyncio.create_task(_scheduled_telemetry_keepalive_loop())
-    yield
+    tasks = [
+        asyncio.create_task(_scheduled_snapshot_loop()),
+        asyncio.create_task(_scheduled_network_anomaly_loop()),
+        asyncio.create_task(_scheduled_telemetry_import_loop()),
+        asyncio.create_task(_scheduled_telemetry_keepalive_loop()),
+        asyncio.create_task(_scheduled_sli_materialization_loop()),
+    ]
+    try:
+        yield
+    finally:
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
 
 class RequestLogMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+        header_tenant = (request.headers.get("x-tenant-id") or "").strip()
+        mode = str(getattr(settings, "TENANCY_MODE", "single") or "single").strip().lower()
+        default_tenant = str(getattr(settings, "DEFAULT_TENANT_ID", "default") or "default").strip()
+        tenant_id = header_tenant or default_tenant
+        if (
+            mode == "multi"
+            and getattr(settings, "REQUIRE_TENANT_HEADER", False)
+            and not header_tenant
+        ):
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "x-tenant-id header required in multi-tenant mode"},
+            )
         token = request_id_ctx.set(request_id)
+        tenant_token = tenant_id_ctx.set(tenant_id)
+        started = time.monotonic()
         try:
-            response = await call_next(request)
+            with start_span(
+                "http.server.request",
+                attributes={
+                    "http.request.method": request.method,
+                    "http.route": request.url.path,
+                    "url.path": request.url.path,
+                    "secplat.request_id": request_id,
+                    "secplat.tenant_id": tenant_id,
+                },
+                context_carrier=dict(request.headers),
+            ) as span:
+                response = await call_next(request)
+                span.set_attribute("http.response.status_code", response.status_code)
+            latency_ms = round((time.monotonic() - started) * 1000.0, 3)
             logger.info(
                 "http_request",
                 extra={
                     "action": "http_request",
-                    "method": request.method,
-                    "path": request.url.path,
-                    "status": response.status_code,
+                    "request_id": request_id,
+                    "trace_id": request_id,
+                    "tenant_id": tenant_id,
+                    "http.method": request.method,
+                    "url.path": request.url.path,
+                    "http.status_code": response.status_code,
+                    "http.latency_ms": latency_ms,
                 },
             )
             response.headers["x-request-id"] = request_id
+            response.headers["x-tenant-id"] = tenant_id
             return response
         finally:
             request_id_ctx.reset(token)
+            tenant_id_ctx.reset(tenant_token)
 
 
 class MetricsMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        started = time.monotonic()
         response = await call_next(request)
-        metrics.record_request(request.method, request.url.path, response.status_code)
+        duration_ms = (time.monotonic() - started) * 1000.0
+        metrics.record_request(
+            request.method,
+            request.url.path,
+            response.status_code,
+            duration_ms=duration_ms,
+        )
         return response
 
 
@@ -216,10 +302,13 @@ app.add_middleware(RequestLogMiddleware)
 register_error_handlers(app)
 
 app.include_router(health.router)
+app.include_router(platform.router)
+app.include_router(security.router)
 app.include_router(auth.router)
 app.include_router(assets.router)
 app.include_router(posture.router)
 app.include_router(retention.router)
+app.include_router(privacy.router)
 app.include_router(audit_router.router)
 app.include_router(alerts.router)
 app.include_router(automation.router)
@@ -227,6 +316,7 @@ app.include_router(attack_surface.router)
 app.include_router(attack_graph.router)
 app.include_router(incidents.router)
 app.include_router(jobs.router, prefix="/jobs", tags=["jobs"])
+app.include_router(jobs.internal_router)
 app.include_router(findings.router, prefix="/findings", tags=["findings"])
 app.include_router(policy.router)
 app.include_router(integrations.router)

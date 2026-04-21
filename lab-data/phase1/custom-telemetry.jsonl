@@ -1,0 +1,1 @@
+{"timestamp":"2026-04-04T12:44:03.919017Z","event_type":"credential_attack","title":"Phase1 Telemetry Alert","description":"Telemetry import for Phase 1 observability validation","severity":"high","src_ip":"203.0.113.10","dst_ip":"10.10.10.10","protocol":"tcp","asset_key":"phase1-observability-1ed726328ef1","dedupe_key":"phase1-observability-12dc9943-ecff-412c-ac5f-076a7b2938c5"}

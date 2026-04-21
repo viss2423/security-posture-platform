@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: secplat-config
+  namespace: secplat
+data:
+  OPENSEARCH_URL: "http://host.docker.internal:9200"
+  REDIS_URL: "redis://host.docker.internal:6379/0"
+  INGESTION_OS_URL: "http://host.docker.internal:9200"
+  INGESTION_VERIFY_WEB_URL: "http://host.docker.internal:8081/.well-known/secplat-verification.txt"
+  INGESTION_JUICE_URL: "http://host.docker.internal:3002"

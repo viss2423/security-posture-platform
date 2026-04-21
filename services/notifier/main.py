@@ -3,12 +3,15 @@
 import json
 import logging
 import os
+import socket
 import sys
 import time
+from contextlib import contextmanager
 from datetime import UTC, datetime
 
 import httpx
 import redis
+from simple_metrics import SimpleMetrics, start_metrics_server
 
 _STANDARD_ATTRS = {
     "name",
@@ -75,6 +78,11 @@ class NonRetryableMessageError(Exception):
 
 configure_logging()
 logger = logging.getLogger("notifier")
+_otel_configured = False
+_otel_enabled = False
+_tracer = None
+_propagator = None
+metrics = SimpleMetrics("secplat-notifier")
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 STREAM_NOTIFY = "secplat.events.notify"
@@ -88,6 +96,7 @@ STREAM_MAX_RETRIES = int(
 STREAM_CLAIM_IDLE_MS = int(
     os.getenv("NOTIFIER_STREAM_CLAIM_IDLE_MS", os.getenv("STREAM_CLAIM_IDLE_MS", "120000"))
 )
+NOTIFIER_METRICS_PORT = int(os.getenv("NOTIFIER_METRICS_PORT", "9103"))
 
 # Slack/Twilio (same as API)
 SLACK_WEBHOOK_URL = (os.environ.get("SLACK_WEBHOOK_URL") or "").strip()
@@ -95,6 +104,98 @@ TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID") or ""
 TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN") or ""
 TWILIO_WHATSAPP_FROM = (os.environ.get("TWILIO_WHATSAPP_FROM") or "").strip()
 WHATSAPP_ALERT_TO = (os.environ.get("WHATSAPP_ALERT_TO") or "").strip()
+
+
+class _NoopSpan:
+    def set_attribute(self, _key: str, _value: object) -> None:
+        return None
+
+    def record_exception(self, _exc: Exception) -> None:
+        return None
+
+
+def configure_otel() -> bool:
+    global _otel_configured, _otel_enabled, _tracer, _propagator
+    if _otel_configured:
+        return _otel_enabled
+    _otel_configured = True
+    if str(os.getenv("OTEL_ENABLED", "false")).strip().lower() != "true":
+        return False
+    endpoint = str(os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "") or "").strip()
+    if not endpoint:
+        return False
+    try:
+        from opentelemetry import propagate, trace
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    except Exception:
+        logger.debug("notifier otel dependencies unavailable", exc_info=True)
+        return False
+    try:
+        resource = Resource.create(
+            {
+                "service.name": "secplat-notifier",
+                "service.instance.id": f"{socket.gethostname()}:{os.getpid()}",
+                "deployment.environment": str(os.getenv("ENV", "dev") or "dev"),
+            }
+        )
+        provider = TracerProvider(resource=resource)
+        exporter = OTLPSpanExporter(endpoint=endpoint)
+        provider.add_span_processor(BatchSpanProcessor(exporter))
+        trace.set_tracer_provider(provider)
+        _tracer = trace.get_tracer("secplat-notifier")
+        _propagator = propagate
+        _otel_enabled = True
+        return True
+    except Exception:
+        logger.debug("notifier otel initialization failed", exc_info=True)
+        _tracer = None
+        _propagator = None
+        _otel_enabled = False
+        return False
+
+
+def inject_context(carrier: dict[str, object]) -> dict[str, object]:
+    if not carrier or not _otel_enabled or _propagator is None:
+        return carrier
+    try:
+        _propagator.inject(carrier=carrier)
+    except Exception:
+        logger.debug("notifier otel inject failed", exc_info=True)
+    return carrier
+
+
+def _extract_context(context_carrier: dict[str, object] | None = None):
+    if not context_carrier or not _otel_enabled or _propagator is None:
+        return None
+    try:
+        return _propagator.extract(carrier=context_carrier)
+    except Exception:
+        logger.debug("notifier otel extract failed", exc_info=True)
+        return None
+
+
+@contextmanager
+def start_span(
+    name: str,
+    *,
+    attributes: dict[str, object] | None = None,
+    context_carrier: dict[str, object] | None = None,
+):
+    if not _otel_enabled or _tracer is None:
+        yield _NoopSpan()
+        return
+    span_kwargs: dict[str, object] = {}
+    extracted = _extract_context(context_carrier)
+    if extracted is not None:
+        span_kwargs["context"] = extracted
+    with _tracer.start_as_current_span(name, **span_kwargs) as span:
+        for key, value in (attributes or {}).items():
+            if value is not None:
+                span.set_attribute(str(key), value)
+        yield span
 
 
 def _slack_configured() -> bool:
@@ -113,7 +214,17 @@ def send_slack(down_assets: list[str]) -> bool:
     text = f"*SecPlat alert:* {len(down_assets)} asset(s) down: {', '.join(down_assets)}"
     try:
         with httpx.Client(timeout=10.0) as client:
-            r = client.post(SLACK_WEBHOOK_URL, json={"text": text})
+            headers: dict[str, object] = {}
+            inject_context(headers)
+            with start_span(
+                "http.client.request",
+                attributes={
+                    "http.request.method": "POST",
+                    "url.full": SLACK_WEBHOOK_URL,
+                    "secplat.notification.channel": "slack",
+                },
+            ):
+                r = client.post(SLACK_WEBHOOK_URL, json={"text": text}, headers=headers)
             r.raise_for_status()
         logger.info("slack sent for %s down assets", len(down_assets))
         return True
@@ -139,11 +250,22 @@ def send_whatsapp(down_assets: list[str]) -> bool:
     url = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json"
     try:
         with httpx.Client(timeout=15.0) as client:
-            r = client.post(
-                url,
-                auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
-                data={"From": from_, "To": to, "Body": body},
-            )
+            headers: dict[str, object] = {}
+            inject_context(headers)
+            with start_span(
+                "http.client.request",
+                attributes={
+                    "http.request.method": "POST",
+                    "url.full": url,
+                    "secplat.notification.channel": "whatsapp",
+                },
+            ):
+                r = client.post(
+                    url,
+                    auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
+                    data={"From": from_, "To": to, "Body": body},
+                    headers=headers,
+                )
             r.raise_for_status()
         logger.info("whatsapp sent for %s down assets", len(down_assets))
         return True
@@ -238,6 +360,7 @@ def _publish_dlq(
         }
     )
     r.xadd(STREAM_DLQ, payload, maxlen=10_000)
+    metrics.inc_counter("secplat_notifier_events_dlq_total")
 
 
 def _parse_down_assets(raw: object, trace_id: str | None) -> list[str]:
@@ -290,6 +413,8 @@ def handle_notify(payload: dict) -> list[str]:
 
 
 def main() -> None:
+    configure_otel()
+    start_metrics_server(metrics, port=NOTIFIER_METRICS_PORT, logger=logger)
     logger.info(
         "secplat-notifier started stream=%s group=%s consumer=%s dlq=%s claim_idle_ms=%s max_retries=%s",
         STREAM_NOTIFY,
@@ -311,7 +436,19 @@ def main() -> None:
             attempts = _parse_attempts(fields)
             trace_id = (fields.get("trace_id") or "").strip() or None
             try:
-                down_assets = handle_notify(fields)
+                started = time.monotonic()
+                with start_span(
+                    "messaging.process",
+                    attributes={
+                        "messaging.system": "redis",
+                        "messaging.destination.name": STREAM_NOTIFY,
+                        "messaging.operation": "process",
+                        "messaging.message.id": mid,
+                        "secplat.request_id": trace_id,
+                    },
+                    context_carrier=fields,
+                ):
+                    down_assets = handle_notify(fields)
                 logger.info(
                     "notify_processed",
                     extra={
@@ -324,7 +461,14 @@ def main() -> None:
                         "trace_id": trace_id,
                     },
                 )
+                metrics.inc_counter("secplat_notifier_events_processed_total")
+                metrics.set_gauge("secplat_notifier_last_processed_timestamp", time.time())
+                metrics.set_gauge(
+                    "secplat_notifier_last_duration_seconds",
+                    max(0.0, time.monotonic() - started),
+                )
             except NonRetryableMessageError as e:
+                metrics.inc_counter("secplat_notifier_events_failed_total")
                 logger.warning(
                     "notify_non_retryable",
                     extra={
@@ -373,6 +517,7 @@ def main() -> None:
                             attempts=attempts,
                         )
                     else:
+                        metrics.inc_counter("secplat_notifier_events_requeued_total")
                         logger.warning(
                             "notify_requeued",
                             extra={
@@ -387,6 +532,7 @@ def main() -> None:
                             },
                         )
                 else:
+                    metrics.inc_counter("secplat_notifier_events_failed_total")
                     _publish_dlq(
                         r,
                         mid,
@@ -411,9 +557,11 @@ def main() -> None:
             finally:
                 _ack_stream(r, mid)
         except redis.ConnectionError as e:
+            metrics.inc_counter("secplat_notifier_loop_errors_total")
             logger.warning("redis connection error: %s", e)
             time.sleep(5)
         except redis.ResponseError as e:
+            metrics.inc_counter("secplat_notifier_loop_errors_total")
             if "NOGROUP" in str(e):
                 try:
                     _ensure_stream_group(r)

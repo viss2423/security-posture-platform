@@ -336,11 +336,11 @@ export default function JobsPage() {
       <section className="page-hero">
         <div className="hero-grid">
           <div>
-            <span className="stat-chip-strong">Jobs Command Center</span>
-            <h1 className="hero-title mt-3">Security Workload Orchestration</h1>
+            <span className="stat-chip-strong">Activity center</span>
+            <h1 className="hero-title mt-3">Activity Center</h1>
             <p className="hero-copy">
-              Queue operations, inspect failed runs, and use AI triage without reading raw worker
-              logs first.
+              Track imports, scans, and background work with clear status and AI help when a run
+              fails.
             </p>
           </div>
           <div className="hero-stat-grid">
@@ -369,9 +369,9 @@ export default function JobsPage() {
       </section>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        {data && <span className="stat-chip-strong">{data.items.length} jobs in view</span>}
+        {data && <span className="stat-chip-strong">{data.items.length} activities in view</span>}
         <span className="stat-chip">
-          Running {statusCounts.running} • Queued {statusCounts.queued} • Failed {statusCounts.failed}
+          Running {statusCounts.running} | Queued {statusCounts.queued} | Failed {statusCounts.failed}
         </span>
       </div>
 
@@ -385,7 +385,7 @@ export default function JobsPage() {
       <div className="mb-6 grid gap-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(280px,0.8fr)]">
         {canMutate && (
           <section className="section-panel">
-            <h2 className="section-title">Enqueue job</h2>
+            <h2 className="section-title">Start activity</h2>
             <div className="grid gap-4">
               <div className="grid gap-4 sm:grid-cols-[220px_minmax(0,1fr)]">
                 <label className="text-sm text-[var(--muted)]">
@@ -537,7 +537,7 @@ export default function JobsPage() {
               <div className="flex flex-wrap items-end justify-between gap-3">
                 <p className="text-xs text-[var(--muted)]">
                   {enqueueType === 'repository_scan'
-                    ? 'Repository scans run inside the API container and can take several minutes on /workspace.'
+                    ? 'Repository scans run inside the API container and can take several minutes on the platform repository.'
                     : enqueueType === 'threat_intel_refresh'
                       ? 'Threat-intel refresh runs inside the API container and updates IOC summaries plus asset matches.'
                       : enqueueType === 'telemetry_import'
@@ -579,7 +579,7 @@ export default function JobsPage() {
                 onClick={() => setStatusFilter(item.key)}
                 className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition ${
                   statusFilter === item.key
-                    ? 'border-cyan-300/35 bg-cyan-300/14 text-cyan-100'
+                    ? 'border-cyan-300/20 bg-cyan-300/08 text-[var(--cyan-strong)]'
                     : 'border-[var(--border)] bg-[var(--surface-elevated)] text-[var(--text-muted)] hover:border-cyan-300/30 hover:text-[var(--text)]'
                 }`}
               >
@@ -618,7 +618,7 @@ export default function JobsPage() {
         <section className="section-panel">
           <div className="section-head">
             <div>
-              <h2 className="text-lg font-semibold text-[var(--text)]">Queue Stream</h2>
+              <h2 className="text-lg font-semibold text-[var(--text)]">Activity Stream</h2>
               <p className="section-head-copy">Select a row to inspect execution detail and AI triage.</p>
             </div>
             <span className="stat-chip">{data?.items.length ?? 0} records</span>

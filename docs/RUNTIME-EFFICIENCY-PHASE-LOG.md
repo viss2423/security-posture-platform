@@ -62,6 +62,6 @@ Repository: `security-posture-platform`
 - Phase 6: complete
   - `npm run perf:check`: pass
   - Targeted API tests: pass (`19 passed`)
-  - Worker race regression: pass (`1 passed`)
+  - Worker control-plane contract regression: pass (`2 passed`)
   - Compose smoke script: pass
   - K8 smoke checks and manual snapshot job: pass

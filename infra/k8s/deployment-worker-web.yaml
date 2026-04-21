@@ -31,19 +31,27 @@ spec:
           type: RuntimeDefault
       containers:
         - name: worker-web
-          image: ghcr.io/your-org/secplat-worker-web:latest
+          image: ghcr.io/your-org/secplat-worker-web@sha256:2222222222222222222222222222222222222222222222222222222222222222
           imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9101
+              name: metrics
           envFrom:
             - configMapRef:
                 name: secplat-config
             - secretRef:
                 name: secplat-secrets
           env:
-            - name: POSTGRES_DSN
+            - name: WORKER_API_USERNAME
               valueFrom:
                 secretKeyRef:
                   name: secplat-secrets
-                  key: WORKER_POSTGRES_DSN
+                  key: SCANNER_SERVICE_USERNAME
+            - name: WORKER_API_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: secplat-secrets
+                  key: SCANNER_SERVICE_PASSWORD
             - name: PYTHONDONTWRITEBYTECODE
               value: "1"
           resources:

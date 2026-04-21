@@ -1,0 +1,16 @@
+{
+  "branch_ref": "refs/heads/main",
+  "generated_at": "2026-04-04T10:45:31.066578Z",
+  "github_repository": "acme/security-posture-platform",
+  "images": {
+    "api": "ghcr.io/acme/secplat-api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "correlator": "ghcr.io/acme/secplat-correlator@sha256:23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01",
+    "deriver": "ghcr.io/acme/secplat-deriver@sha256:3456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef012",
+    "ingestion": "ghcr.io/acme/secplat-ingestion@sha256:56789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234",
+    "notifier": "ghcr.io/acme/secplat-notifier@sha256:456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123",
+    "worker-web": "ghcr.io/acme/secplat-worker-web@sha256:123456789abcdef00123456789abcdef00123456789abcdef00123456789abcde"
+  },
+  "ok": true,
+  "out_dir": "C:\\Users\\visha\\Desktop\\security-posture-platform\\artifacts\\release-bundle",
+  "registry_pattern": "ghcr.io/acme/secplat-*"
+}

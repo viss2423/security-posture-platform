@@ -84,10 +84,7 @@ def _target_allowed(target: str) -> bool:
         ip_obj = ip_network(f"{ip}/32", strict=False)
     except ValueError:
         return False
-    for network in _allowed_networks():
-        if ip_obj.subnet_of(network):
-            return True
-    return False
+    return any(ip_obj.subnet_of(network) for network in _allowed_networks())
 
 
 def _ports_from_settings() -> list[int]:
@@ -335,6 +332,19 @@ def _create_incident_for_alert(
         },
     )
     return incident_id
+
+
+def create_incident_for_alert(
+    db, *, alert: dict, requested_by: str, title: str, severity: str
+) -> int | None:
+    """Public wrapper for callers that need the same alert->incident linkage."""
+    return _create_incident_for_alert(
+        db,
+        alert=alert,
+        requested_by=requested_by,
+        title=title,
+        severity=severity,
+    )
 
 
 def _run_task(task_type: str, target: str, target_asset_key: str | None) -> dict:

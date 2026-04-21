@@ -1,0 +1,33 @@
+{{- if and .Values.frontend.enabled .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "secplat.fullname" . }}-frontend-egress
+  namespace: {{ include "secplat.namespace" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "secplat.fullname" . }}-frontend
+{{ include "secplat.labels" . | indent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      secplat-role: frontend
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              secplat-role: api
+      ports:
+        - protocol: TCP
+          port: 8000
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.kubeSystemNamespace | quote }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+{{- end }}

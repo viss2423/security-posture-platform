@@ -79,6 +79,65 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      prometheus:
+        condition: service_started
+      tempo:
+        condition: service_started
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: secplat-prometheus
+    profiles:
+      - observability
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9091}:9090"
+    volumes:
+      - prometheus-data:/prometheus
+      - ./infra/observability/prometheus-compose.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/observability/alerts.yml:/etc/prometheus/alerts.yml:ro
+    depends_on:
+      api:
+        condition: service_started
+      redis:
+        condition: service_healthy
+
+  tempo:
+    image: grafana/tempo:2.5.0
+    container_name: secplat-tempo
+    profiles:
+      - observability
+    user: "0:0"
+    command:
+      - "-config.file=/etc/tempo/tempo.yml"
+    ports:
+      - "127.0.0.1:${TEMPO_PORT:-3200}:3200"
+    volumes:
+      - ./infra/observability/tempo.yml:/etc/tempo/tempo.yml:ro
+      - tempo-data:/tmp/tempo
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3200/ready >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.102.1
+    container_name: secplat-otel-collector
+    profiles:
+      - observability
+    command:
+      - "--config=/etc/otelcol-contrib/config.yaml"
+    ports:
+      - "127.0.0.1:${OTEL_COLLECTOR_PORT:-4318}:4318"
+    volumes:
+      - ./infra/observability/otel-collector-compose.yaml:/etc/otelcol-contrib/config.yaml:ro
+    depends_on:
+      tempo:
+        condition: service_healthy
 
   juiceshop:
     image: bkimminich/juice-shop:latest
@@ -103,7 +162,8 @@ services:
       INGESTION_SERVICE_PASSWORD: ${INGESTION_SERVICE_PASSWORD:-ingestion-local-strong}
       CORRELATOR_SERVICE_USERNAME: ${CORRELATOR_SERVICE_USERNAME:-correlator-service}
       CORRELATOR_SERVICE_PASSWORD: ${CORRELATOR_SERVICE_PASSWORD:-correlator-local-strong}
-      POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      POSTGRES_DSN: postgresql+psycopg://${POSTGRES_RUNTIME_USER:-secplat_runtime}:${POSTGRES_RUNTIME_PASSWORD:-secplat_runtime}@postgres:5432/${POSTGRES_DB}
+      MIGRATIONS_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       OPENSEARCH_URL: http://opensearch:9200
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       MAX_SCAN_DURATION_SECONDS: ${MAX_SCAN_DURATION_SECONDS}
@@ -166,6 +226,11 @@ services:
       TELEMETRY_KEEPALIVE_MAX_SILENCE_MINUTES: ${TELEMETRY_KEEPALIVE_MAX_SILENCE_MINUTES:-3}
       TELEMETRY_KEEPALIVE_CREATE_ALERTS: ${TELEMETRY_KEEPALIVE_CREATE_ALERTS:-false}
       TELEMETRY_KEEPALIVE_ASSET_KEY: ${TELEMETRY_KEEPALIVE_ASSET_KEY:-cyberlab-demo-asset}
+      PLATFORM_SLI_MATERIALIZATION_INTERVAL_SECONDS: ${PLATFORM_SLI_MATERIALIZATION_INTERVAL_SECONDS:-60}
+      PLATFORM_SLI_RUNTIME_MAX_AGE_SECONDS: ${PLATFORM_SLI_RUNTIME_MAX_AGE_SECONDS:-300}
+      OTEL_ENABLED: ${OTEL_ENABLED:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318/v1/traces}
+      OTEL_EXPORTER_OTLP_INSECURE: ${OTEL_EXPORTER_OTLP_INSECURE:-true}
       NETWORK_ANOMALY_THRESHOLD: ${NETWORK_ANOMALY_THRESHOLD:-2.5}
       ENABLE_SCHEDULED_NETWORK_ANOMALY: ${ENABLE_SCHEDULED_NETWORK_ANOMALY:-false}
       SCHEDULED_NETWORK_ANOMALY_INTERVAL_MINUTES: ${SCHEDULED_NETWORK_ANOMALY_INTERVAL_MINUTES:-60}
@@ -341,19 +406,21 @@ services:
     profiles:
       - jobs
     environment:
-      POSTGRES_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       MAX_SCAN_DURATION_SECONDS: ${MAX_SCAN_DURATION_SECONDS:-900}
-      REQUIRE_DOMAIN_VERIFICATION: ${REQUIRE_DOMAIN_VERIFICATION:-true}
       API_URL: http://api:8000
       WORKER_API_USERNAME: ${SCANNER_SERVICE_USERNAME:-scanner-service}
       WORKER_API_PASSWORD: ${SCANNER_SERVICE_PASSWORD:-scanner-local-strong}
       WORKER_API_TIMEOUT_SECONDS: ${WORKER_API_TIMEOUT_SECONDS:-1800}
+      WORKER_METRICS_PORT: ${WORKER_METRICS_PORT:-9101}
+      OTEL_ENABLED: ${OTEL_ENABLED:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318/v1/traces}
+      OTEL_EXPORTER_OTLP_INSECURE: ${OTEL_EXPORTER_OTLP_INSECURE:-true}
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
+      api:
+        condition: service_started
     restart: unless-stopped
 
   # Phase 2.1: Deriver writes secplat-asset-status from secplat-events (replaces build_asset_status.sh in ingestion when used)
@@ -366,6 +433,10 @@ services:
       OPENSEARCH_URL: http://opensearch:9200
       STALE_THRESHOLD_SECONDS: ${STALE_THRESHOLD_SECONDS:-300}
       DERIVER_INTERVAL_SECONDS: ${DERIVER_INTERVAL_SECONDS:-60}
+      DERIVER_METRICS_PORT: ${DERIVER_METRICS_PORT:-9104}
+      OTEL_ENABLED: ${OTEL_ENABLED:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318/v1/traces}
+      OTEL_EXPORTER_OTLP_INSECURE: ${OTEL_EXPORTER_OTLP_INSECURE:-true}
     depends_on:
       opensearch:
         condition: service_healthy
@@ -385,6 +456,10 @@ services:
       TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
       TWILIO_WHATSAPP_FROM: ${TWILIO_WHATSAPP_FROM:-}
       WHATSAPP_ALERT_TO: ${WHATSAPP_ALERT_TO:-}
+      NOTIFIER_METRICS_PORT: ${NOTIFIER_METRICS_PORT:-9103}
+      OTEL_ENABLED: ${OTEL_ENABLED:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318/v1/traces}
+      OTEL_EXPORTER_OTLP_INSECURE: ${OTEL_EXPORTER_OTLP_INSECURE:-true}
     depends_on:
       redis:
         condition: service_healthy
@@ -403,6 +478,10 @@ services:
       API_URL: http://api:8000
       CORRELATOR_USER: ${CORRELATOR_SERVICE_USERNAME:-correlator-service}
       CORRELATOR_PASSWORD: ${CORRELATOR_SERVICE_PASSWORD:-correlator-local-strong}
+      CORRELATOR_METRICS_PORT: ${CORRELATOR_METRICS_PORT:-9102}
+      OTEL_ENABLED: ${OTEL_ENABLED:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318/v1/traces}
+      OTEL_EXPORTER_OTLP_INSECURE: ${OTEL_EXPORTER_OTLP_INSECURE:-true}
     depends_on:
       redis:
         condition: service_healthy
@@ -416,3 +495,5 @@ volumes:
   postgres-data:
   opensearch-data:
   grafana-data:
+  prometheus-data:
+  tempo-data:

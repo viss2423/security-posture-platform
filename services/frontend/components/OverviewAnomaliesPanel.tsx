@@ -54,7 +54,12 @@ export default function OverviewAnomaliesPanel({
   return (
     <section className="mb-10">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <h2 className="section-title">AI anomalies</h2>
+        <div>
+          <h2 className="section-title mb-1">AI anomalies</h2>
+          <p className="text-sm text-[var(--text-muted)]">
+            Machine-detected posture movement that deserves a closer look.
+          </p>
+        </div>
         {canMutate && (
           <button
             type="button"
@@ -77,17 +82,29 @@ export default function OverviewAnomaliesPanel({
         {anomalies.length === 0 ? (
           <p className="text-sm text-[var(--muted)]">No anomalies detected.</p>
         ) : (
-          <ul className="space-y-2">
+          <ul className="space-y-3">
             {anomalies.map((anomaly, index) => (
-              <li key={`${anomaly.metric}-${index}`} className="rounded border border-[var(--border)] p-3">
-                <p className="text-sm">
-                  <span className="font-semibold">{anomaly.metric}</span>
-                  <span className="ml-2 capitalize text-[var(--muted)]">{anomaly.severity}</span>
-                </p>
-                <p className="mt-1 text-xs text-[var(--muted)]">
-                  current {anomaly.current_value ?? '-'} vs baseline{' '}
-                  {anomaly.baseline_mean != null ? Number(anomaly.baseline_mean).toFixed(2) : '-'}
-                  {anomaly.z_score != null ? ` (z=${Number(anomaly.z_score).toFixed(2)})` : ''}
+              <li
+                key={`${anomaly.metric}-${index}`}
+                className="rounded-[1.2rem] border border-[var(--border)] bg-white p-4"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <p className="text-sm">
+                    <span className="font-semibold text-[var(--text)]">{anomaly.metric}</span>
+                    <span className="ml-2 capitalize text-[var(--muted)]">
+                      {anomaly.severity}
+                    </span>
+                  </p>
+                  <span className="stat-chip">
+                    {anomaly.current_value ?? '-'} current
+                  </span>
+                </div>
+                <p className="mt-2 text-xs leading-6 text-[var(--text-muted)]">
+                  Baseline{' '}
+                  {anomaly.baseline_mean != null
+                    ? Number(anomaly.baseline_mean).toFixed(2)
+                    : '-'}
+                  {anomaly.z_score != null ? ` | z-score ${Number(anomaly.z_score).toFixed(2)}` : ''}
                 </p>
                 {anomaly.detected_at && (
                   <p className="mt-1 text-[11px] text-[var(--muted)]">

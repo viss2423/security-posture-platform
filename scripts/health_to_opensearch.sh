@@ -3,6 +3,7 @@ set -euo pipefail
 
 OPENSEARCH_URL="${OPENSEARCH_URL:-http://localhost:9200}"
 INDEX="${INDEX:-secplat-events}"
+ORG_ID="${ORG_ID:-default}"
 
 API_HEALTH_URL="${API_HEALTH_URL:-http://localhost:8000/health}"
 VERIFY_WEB_URL="${VERIFY_WEB_URL:-http://localhost:8081/.well-known/secplat-verification.txt}"
@@ -71,6 +72,7 @@ post_event() {
       \"@timestamp\": \"${TS}\",
       \"service\": \"${service}\",
       \"asset\": \"${asset}\",
+      \"org_id\": \"${ORG_ID}\",
       \"level\": \"health\",
       \"message\": \"healthcheck\",
       \"status\": \"${status}\",

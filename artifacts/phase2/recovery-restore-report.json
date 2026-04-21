@@ -1,0 +1,45 @@
+{
+  "verified_at": "2026-04-04T12:53:01.233916Z",
+  "dry_run": false,
+  "ok": true,
+  "checks": [
+    {
+      "check": "backup_file_freshness",
+      "ok": true,
+      "detail": {
+        "path": "C:\\Users\\visha\\Desktop\\security-posture-platform\\artifacts\\phase2\\secplat-recovery-backup.sql",
+        "size_bytes": 148212489,
+        "modified_at": "2026-04-04T12:47:46Z",
+        "max_age_hours": 24
+      }
+    },
+    {
+      "check": "restore_execution",
+      "ok": true,
+      "detail": {
+        "mode": "docker",
+        "returncode": 0,
+        "stdout_tail": "ALTER TABLE\nALTER TABLE\nALTER TABLE\nALTER TABLE\nALTER TABLE\nALTER TABLE\nALTER TABLE\nALTER TABLE\nALTER TABLE\nALTER TABLE\nALTER TABLE\nALTER TABLE\nALTER TABLE\nALTER TABLE\nALTER TABLE\nALTER TABLE\nALTER TABLE\nALTER TABLE\nALTER TABLE\nALTER TABLE\nALTER TABLE\nCREATE POLICY\nCREATE POLICY\nCREATE POLICY\nCREATE POLICY\nCREATE POLICY\nCREATE POLICY\nCREATE POLICY\nCREATE POLICY\nCREATE POLICY\nCREATE POLICY\nCREATE POLICY\nCREATE POLICY\nCREATE POLICY\nCREATE POLICY\nCREATE POLICY\nCREATE POLICY\nALTER TABLE\nALTER TABLE\n",
+        "stderr_tail": ""
+      }
+    },
+    {
+      "check": "restore_expected_tables",
+      "ok": true,
+      "detail": {
+        "expected_tables": [
+          "assets",
+          "findings",
+          "users",
+          "scan_jobs"
+        ],
+        "missing_tables": []
+      }
+    },
+    {
+      "check": "restore_duration_seconds",
+      "ok": true,
+      "detail": 160.98
+    }
+  ]
+}

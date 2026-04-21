@@ -271,6 +271,21 @@ def test_alert_enrichment_related_events_and_clusters(client, admin_headers):
         for item in source_clusters
     )
 
+    dedupe_windows = client.get(
+        "/alerts/dedupe/windows?status=firing&lookback_hours=24&min_events=2&limit=50",
+        headers=admin_headers,
+    )
+    assert dedupe_windows.status_code == 200, dedupe_windows.text
+    windows = dedupe_windows.json().get("items") or []
+    window = next(
+        (item for item in windows if asset_key in (item.get("asset_keys") or [])),
+        None,
+    )
+    assert window is not None
+    assert int(window.get("total_events") or 0) >= 2
+    assert isinstance(window.get("alert_ids"), list)
+    assert window.get("window_minutes") is not None
+
 
 def test_telemetry_lineage_filters_and_summary_metrics(client, admin_headers):
     asset_key = f"telemetry-lineage-{uuid.uuid4().hex[:8]}"

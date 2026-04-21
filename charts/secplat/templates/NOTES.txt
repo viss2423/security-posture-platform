@@ -1,0 +1,16 @@
+SecPlat has been rendered with the Kubernetes-first single-tenant chart.
+
+Primary endpoints:
+- Frontend service: {{ include "secplat.fullname" . }}-frontend:{{ .Values.frontend.service.port }}
+- API service: {{ include "secplat.fullname" . }}-api:{{ .Values.api.service.port }}
+
+Suggested operator checks:
+1. Port-forward the frontend:
+   kubectl -n {{ include "secplat.namespace" . }} port-forward svc/{{ include "secplat.fullname" . }}-frontend {{ .Values.frontend.service.port }}:{{ .Values.frontend.service.port }}
+2. Sign in with the configured admin account.
+3. Open `/onboarding` and complete asset, telemetry, detection, and incident steps.
+
+Upgrade guidance:
+- Keep image references pinned by digest.
+- Run `helm upgrade --install` with the same release name and your saved values file.
+- Validate `/health`, `/ready`, and the onboarding status cards after every upgrade.

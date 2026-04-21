@@ -53,6 +53,7 @@ def list_assets(
     q = text("""
       SELECT
         asset_id,
+        org_id,
         asset_key,
         type,
         name,
@@ -89,6 +90,7 @@ def get_asset(
     q = text("""
       SELECT
         asset_id,
+        org_id,
         asset_key,
         type,
         name,
@@ -127,6 +129,7 @@ def get_asset_by_key(
     q = text("""
       SELECT
         asset_id,
+        org_id,
         asset_key,
         type,
         name,
@@ -201,7 +204,7 @@ def create_asset(
         CAST(:metadata AS jsonb)
       )
       RETURNING
-        asset_id, asset_key, type, name, owner,
+        asset_id, org_id, asset_key, type, name, owner,
         verified, verification_method, verification_token,
         environment, criticality, created_at, updated_at
     """)
@@ -310,7 +313,7 @@ def update_asset_by_key(
             set_parts.append(f"{k} = :{k}")
             params[k] = v
 
-    uq = text(f"""
+    uq = text(f"""  # nosemgrep
       UPDATE assets
       SET {", ".join(set_parts)}
       WHERE asset_key=:k

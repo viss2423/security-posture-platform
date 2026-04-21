@@ -868,7 +868,7 @@ export default function IncidentDetailPage() {
               {loadingGraph ? 'Refreshing...' : 'Refresh graph'}
             </button>
             <Link href="/attack-graph" className="text-xs font-medium text-[var(--green)] hover:underline">
-              Open full graph workspace
+              Open path explorer
             </Link>
           </div>
         </div>
@@ -938,7 +938,7 @@ export default function IncidentDetailPage() {
                 </table>
                 {incidentGraph.edges.length > 12 && (
                   <p className="mt-2 text-xs text-[var(--muted)]">
-                    Showing 12 of {incidentGraph.edges.length} edges. Open the full workspace for the full path graph.
+                    Showing 12 of {incidentGraph.edges.length} edges. Open path explorer for the full graph.
                   </p>
                 )}
               </div>

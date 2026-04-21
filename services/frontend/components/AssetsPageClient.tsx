@@ -19,6 +19,18 @@ type SortKey =
   | 'last_seen'
   | null;
 type SortDir = 'asc' | 'desc';
+type StatusQuick = 'all' | 'up' | 'down' | 'degraded' | 'unknown';
+type CriticalityQuick = 'all' | 'high' | 'medium' | 'low';
+
+function normalizeStatusQuick(value: string | null | undefined): Exclude<StatusQuick, 'all'> {
+  const normalized = (value ?? '').toLowerCase();
+  if (normalized === 'green' || normalized === 'up') return 'up';
+  if (normalized === 'amber' || normalized === 'degraded' || normalized === 'stale') {
+    return 'degraded';
+  }
+  if (normalized === 'red' || normalized === 'down') return 'down';
+  return 'unknown';
+}
 
 function ScoreBar({ score }: { score: number | string | null }) {
   const n = score != null ? Number(score) : Number.NaN;
@@ -58,6 +70,8 @@ function CriticalityCell({ value }: { value: string | null | undefined }) {
 export default function AssetsPageClient({ items }: AssetsPageClientProps) {
   const { isAdmin } = useAuth();
   const [search, setSearch] = useState('');
+  const [statusQuick, setStatusQuick] = useState<StatusQuick>('all');
+  const [criticalityQuick, setCriticalityQuick] = useState<CriticalityQuick>('all');
   const [sortKey, setSortKey] = useState<SortKey>(null);
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [scanBusyByAsset, setScanBusyByAsset] = useState<Record<string, boolean>>({});
@@ -67,6 +81,12 @@ export default function AssetsPageClient({ items }: AssetsPageClientProps) {
 
   const filteredAndSorted = useMemo(() => {
     let list = items;
+    if (statusQuick !== 'all') {
+      list = list.filter((asset) => normalizeStatusQuick(asset.status) === statusQuick);
+    }
+    if (criticalityQuick !== 'all') {
+      list = list.filter((asset) => (asset.criticality || '').toLowerCase() === criticalityQuick);
+    }
     const q = deferredSearch.trim().toLowerCase();
     if (q) {
       list = list.filter(
@@ -97,10 +117,50 @@ export default function AssetsPageClient({ items }: AssetsPageClientProps) {
       });
     }
     return list;
-  }, [deferredSearch, items, sortDir, sortKey]);
+  }, [criticalityQuick, deferredSearch, items, sortDir, sortKey, statusQuick]);
+
+  const statusCounts = useMemo(() => {
+    const counts: Record<Exclude<StatusQuick, 'all'>, number> = {
+      up: 0,
+      down: 0,
+      degraded: 0,
+      unknown: 0,
+    };
+    for (const asset of items) {
+      const key = normalizeStatusQuick(asset.status);
+      if (key in counts) counts[key] += 1;
+      else counts.unknown += 1;
+    }
+    return counts;
+  }, [items]);
+
+  const criticalityCounts = useMemo(() => {
+    const counts: Record<Exclude<CriticalityQuick, 'all'>, number> = {
+      high: 0,
+      medium: 0,
+      low: 0,
+    };
+    for (const asset of items) {
+      const key = ((asset.criticality || '').toLowerCase() as Exclude<CriticalityQuick, 'all'>);
+      if (key in counts) counts[key] += 1;
+    }
+    return counts;
+  }, [items]);
+
+  const topRiskAssets = useMemo(
+    () =>
+      [...filteredAndSorted]
+        .sort(
+          (a, b) =>
+            Number(a.posture_score ?? 101) - Number(b.posture_score ?? 101) ||
+            String(a.asset_key || '').localeCompare(String(b.asset_key || ''))
+        )
+        .slice(0, 5),
+    [filteredAndSorted]
+  );
 
   const unhealthyCount = useMemo(
-    () => items.filter((asset) => (asset.status || '').toLowerCase() !== 'up').length,
+    () => items.filter((asset) => normalizeStatusQuick(asset.status) !== 'up').length,
     [items]
   );
   const lowPostureCount = useMemo(
@@ -121,26 +181,16 @@ export default function AssetsPageClient({ items }: AssetsPageClientProps) {
     setSortDir('asc');
   };
 
-  const headerClass =
-    'px-5 py-3 text-left text-xs font-semibold uppercase tracking-widest text-[var(--muted)] whitespace-nowrap';
-
-  const SortButton = ({ label, value }: { label: string; value: SortKey }) => (
-    <button
-      type="button"
-      onClick={() => handleSort(value)}
-      className="inline-flex items-center gap-1.5 rounded transition-colors hover:text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--green)] focus:ring-offset-2 focus:ring-offset-[var(--surface-elevated)]"
-    >
-      {label}
-      {sortKey === value && (
-        <span className="shrink-0 text-[var(--green)]" aria-hidden>
-          {sortDir === 'asc' ? '\u2191' : '\u2193'}
-        </span>
-      )}
-    </button>
-  );
-
-  const gridCols = '120px 100px 90px 100px 120px 90px 70px 1fr';
   const assetKey = (asset: AssetPosture) => asset.asset_key ?? asset.asset_id ?? '';
+
+  const sortOptions: Array<{ label: string; value: SortKey }> = [
+    { label: 'Asset', value: 'asset_key' },
+    { label: 'Name', value: 'name' },
+    { label: 'Status', value: 'status' },
+    { label: 'Criticality', value: 'criticality' },
+    { label: 'Score', value: 'posture_score' },
+    { label: 'Last seen', value: 'last_seen' },
+  ];
 
   const handleScanAsset = async (asset: AssetPosture) => {
     const key = assetKey(asset);
@@ -163,10 +213,10 @@ export default function AssetsPageClient({ items }: AssetsPageClientProps) {
       <section className="page-hero animate-in">
         <div className="hero-grid">
           <div>
-            <h1 className="hero-title">Asset Inventory Command View</h1>
+            <h1 className="hero-title">Asset Inventory</h1>
             <p className="hero-copy">
-              Full asset visibility with posture, ownership, and direct scan actions in a single
-              workspace table.
+              See every monitored asset with ownership, posture, health, and direct scan actions
+              in one customer-friendly inventory view.
             </p>
             <div className="mt-4 max-w-sm">
               <label htmlFor="asset-search" className="sr-only">
@@ -203,6 +253,99 @@ export default function AssetsPageClient({ items }: AssetsPageClientProps) {
         </div>
       </section>
 
+      <section className="command-lane animate-in">
+        <div className="command-lane-grid">
+          <span className="command-pill-strong">Visible {filteredAndSorted.length}</span>
+          <span className="command-pill">Down/degraded {unhealthyCount}</span>
+          <span className="command-pill">Low score {lowPostureCount}</span>
+        </div>
+        <div className="mt-3 space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">
+              Status
+            </span>
+            {(['all', 'up', 'down', 'degraded', 'unknown'] as const).map((status) => (
+              <button
+                key={status}
+                type="button"
+                onClick={() => setStatusQuick(status)}
+                className={`rounded-full border px-3 py-1.5 text-xs font-semibold uppercase transition ${
+                  statusQuick === status
+                    ? 'border-cyan-300/20 bg-cyan-300/08 text-[var(--cyan-strong)]'
+                    : 'border-[var(--border)] bg-[var(--surface)] text-[var(--muted)] hover:border-cyan-300/18 hover:text-[var(--text)]'
+                }`}
+              >
+                {status}
+                {status !== 'all' && ` ${statusCounts[status]}`}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">
+              Criticality
+            </span>
+            {(['all', 'high', 'medium', 'low'] as const).map((criticality) => (
+              <button
+                key={criticality}
+                type="button"
+                onClick={() => setCriticalityQuick(criticality)}
+                className={`rounded-full border px-3 py-1.5 text-xs font-semibold uppercase transition ${
+                  criticalityQuick === criticality
+                    ? 'border-cyan-300/20 bg-cyan-300/08 text-[var(--cyan-strong)]'
+                    : 'border-[var(--border)] bg-[var(--surface)] text-[var(--muted)] hover:border-cyan-300/18 hover:text-[var(--text)]'
+                }`}
+              >
+                {criticality}
+                {criticality !== 'all' && ` ${criticalityCounts[criticality]}`}
+              </button>
+            ))}
+            {(statusQuick !== 'all' || criticalityQuick !== 'all') && (
+              <button
+                type="button"
+                onClick={() => {
+                  setStatusQuick('all');
+                  setCriticalityQuick('all');
+                }}
+                className="btn-secondary px-3 py-1.5 text-xs"
+              >
+                Reset slice
+              </button>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <section className="section-panel-tight animate-in">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="section-title mb-2">Sort the inventory</p>
+            <p className="text-sm text-[var(--text-muted)]">
+              Switch from alphabetical browsing to risk-first review with one click.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {sortOptions.map((option) => {
+              const active = sortKey === option.value;
+              return (
+                <button
+                  key={option.label}
+                  type="button"
+                  onClick={() => handleSort(option.value)}
+                  className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                    active
+                      ? 'border-cyan-300/20 bg-cyan-300/08 text-[var(--cyan-strong)]'
+                      : 'border-[var(--border)] bg-white text-[var(--text-muted)] hover:border-cyan-300/20 hover:text-[var(--text)]'
+                  }`}
+                >
+                  {option.label}
+                  {active ? ` ${sortDir === 'asc' ? '↑' : '↓'}` : ''}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
       {scanNotice && (
         <div className="mb-4 rounded-xl border border-[var(--green)]/30 bg-[var(--green)]/10 px-4 py-3 text-sm text-[var(--text)]">
           {scanNotice}
@@ -215,113 +358,170 @@ export default function AssetsPageClient({ items }: AssetsPageClientProps) {
       )}
 
       {items.length > 0 && filteredAndSorted.length > 0 && (
-        <section className="section-panel animate-in overflow-hidden rounded-2xl p-0">
-          <div className="overflow-x-auto rounded-b-2xl" style={{ minWidth: 0 }}>
-            <div role="table" className="assets-grid-table" style={{ minWidth: 980, gridTemplateColumns: `${gridCols} 120px` }}>
-              <div role="row" className="assets-grid-header">
-                <div role="columnheader" className={headerClass}>
-                  <SortButton label="Asset" value="asset_key" />
-                </div>
-                <div role="columnheader" className={headerClass}>
-                  <SortButton label="Name" value="name" />
-                </div>
-                <div role="columnheader" className={headerClass}>
-                  <SortButton label="Status" value="status" />
-                </div>
-                <div role="columnheader" className={headerClass}>
-                  <SortButton label="Criticality" value="criticality" />
-                </div>
-                <div role="columnheader" className={headerClass}>
-                  <SortButton label="Score" value="posture_score" />
-                </div>
-                <div role="columnheader" className={headerClass}>
-                  Owner
-                </div>
-                <div role="columnheader" className={headerClass}>
-                  Env
-                </div>
-                <div role="columnheader" className={headerClass}>
-                  <SortButton label="Last seen" value="last_seen" />
-                </div>
-                <div role="columnheader" className={headerClass}>
-                  Action
-                </div>
-              </div>
-              {filteredAndSorted.map((asset, index) => (
-                <div
-                  key={assetKey(asset) || index}
-                  role="row"
-                  className="assets-grid-row group border-b border-[var(--border)] transition-colors hover:bg-[var(--surface-elevated-50)]"
-                >
-                  <div role="cell" className="px-5 py-3">
+        <section className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
+          <div className="grid gap-4 lg:grid-cols-2">
+            {filteredAndSorted.map((asset, index) => (
+              <article key={assetKey(asset) || index} className="section-panel animate-in">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
+                      {assetKey(asset) || 'Unassigned asset'}
+                    </p>
                     <Link
                       href={`/assets/${encodeURIComponent(assetKey(asset))}`}
-                      className="inline-flex items-center gap-2 font-semibold text-[var(--text)] transition hover:text-[var(--green)]"
+                      className="mt-2 inline-flex items-center gap-2 text-[1.35rem] font-semibold tracking-[-0.03em] text-[var(--text)] transition hover:text-[var(--green)]"
                     >
-                      {assetKey(asset) || '-'}
-                      <span className="text-[var(--muted)] opacity-0 transition-opacity group-hover:opacity-100" aria-hidden>
-                        {'->'}
-                      </span>
+                      {asset.name || assetKey(asset) || 'Unnamed asset'}
+                      <span aria-hidden>{'->'}</span>
                     </Link>
                   </div>
-                  <div role="cell" className="px-5 py-3 text-sm text-[var(--text-muted)]">
-                    {asset.name ?? '-'}
+                  <span className={`badge ${(asset.status || 'unknown').toLowerCase()}`}>
+                    {asset.status || 'unknown'}
+                  </span>
+                </div>
+
+                <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                  <div className="signal-card">
+                    <p className="text-[10px] uppercase tracking-[0.14em] text-[var(--muted)]">
+                      Criticality
+                    </p>
+                    <div className="mt-2 text-sm text-[var(--text)]">
+                      <CriticalityCell value={asset.criticality ?? undefined} />
+                    </div>
                   </div>
-                  <div role="cell" className="px-5 py-3">
-                    <span className={`badge ${(asset.status || 'unknown').toLowerCase()}`}>
-                      {asset.status || 'unknown'}
-                    </span>
+                  <div className="signal-card">
+                    <p className="text-[10px] uppercase tracking-[0.14em] text-[var(--muted)]">
+                      Owner
+                    </p>
+                    <p className="mt-2 text-sm font-medium text-[var(--text)]">
+                      {asset.owner?.trim() || 'Unassigned'}
+                    </p>
                   </div>
-                  <div role="cell" className="px-5 py-3 text-sm">
-                    <CriticalityCell value={asset.criticality ?? undefined} />
+                  <div className="signal-card">
+                    <p className="text-[10px] uppercase tracking-[0.14em] text-[var(--muted)]">
+                      Environment
+                    </p>
+                    <p className="mt-2 text-sm font-medium text-[var(--text)]">
+                      {asset.environment ?? '-'}
+                    </p>
                   </div>
-                  <div role="cell" className="px-5 py-3">
-                    <ScoreBar score={asset.posture_score ?? null} />
-                  </div>
-                  <div role="cell" className="px-5 py-3 text-sm text-[var(--muted)]">
-                    {asset.owner?.trim() || 'Unassigned'}
-                  </div>
-                  <div role="cell" className="px-5 py-3 text-sm text-[var(--muted)]">
-                    {asset.environment ?? '-'}
-                  </div>
-                  <div role="cell" className="px-5 py-3 text-sm tabular-nums text-[var(--muted)]">
-                    {asset.last_seen ? formatDateTime(asset.last_seen) : '-'}
-                  </div>
-                  <div role="cell" className="px-5 py-3">
-                    {isAdmin ? (
-                      <button
-                        type="button"
-                        onClick={() => void handleScanAsset(asset)}
-                        disabled={Boolean(scanBusyByAsset[assetKey(asset)])}
-                        className="btn-secondary px-2 py-1 text-xs"
-                      >
-                        {scanBusyByAsset[assetKey(asset)] ? 'Queueing...' : 'Scan this asset'}
-                      </button>
-                    ) : (
-                      <span className="text-xs text-[var(--muted)]">Admin only</span>
-                    )}
+                  <div className="signal-card">
+                    <p className="text-[10px] uppercase tracking-[0.14em] text-[var(--muted)]">
+                      Last seen
+                    </p>
+                    <p className="mt-2 text-sm font-medium text-[var(--text)]">
+                      {asset.last_seen ? formatDateTime(asset.last_seen) : '-'}
+                    </p>
                   </div>
                 </div>
-              ))}
-            </div>
+
+                <div className="mt-5 rounded-[1.35rem] border border-[var(--border)] bg-white/84 px-4 py-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
+                      Posture score
+                    </p>
+                    <span className="stat-chip">
+                      {asset.posture_score != null ? Number(asset.posture_score) : '-'}
+                    </span>
+                  </div>
+                  <div className="mt-3">
+                    <ScoreBar score={asset.posture_score ?? null} />
+                  </div>
+                </div>
+
+                <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+                  <Link
+                    href={`/assets/${encodeURIComponent(assetKey(asset))}`}
+                    className="btn-secondary"
+                  >
+                    Open asset
+                  </Link>
+                  {isAdmin ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleScanAsset(asset)}
+                      disabled={Boolean(scanBusyByAsset[assetKey(asset)])}
+                      className="btn-primary"
+                    >
+                      {scanBusyByAsset[assetKey(asset)] ? 'Queueing...' : 'Run verification scan'}
+                    </button>
+                  ) : (
+                    <span className="text-xs text-[var(--muted)]">Verification scans are admin-only</span>
+                  )}
+                </div>
+              </article>
+            ))}
           </div>
-          {search.trim() && items.length !== filteredAndSorted.length && (
-            <p className="border-t border-[var(--border)] px-5 py-3 text-xs text-[var(--muted)]">
-              Showing {filteredAndSorted.length} of {items.length} assets
-            </p>
-          )}
+
+          <aside className="space-y-4">
+            <section className="section-panel animate-in h-fit">
+              <h2 className="section-title mb-3">Priority lane</h2>
+              <p className="mb-3 text-sm text-[var(--text-muted)]">
+                The assets at greatest risk in the current view.
+              </p>
+              {topRiskAssets.length === 0 ? (
+                <p className="text-sm text-[var(--muted)]">No assets in scope.</p>
+              ) : (
+                <ul className="space-y-2">
+                  {topRiskAssets.map((asset) => (
+                    <li
+                      key={assetKey(asset)}
+                      className="rounded-[1.2rem] border border-[var(--border)] bg-white/84 px-3 py-3"
+                    >
+                      <Link
+                        href={`/assets/${encodeURIComponent(assetKey(asset))}`}
+                        className="text-sm font-semibold text-[var(--text)] hover:text-[var(--green)]"
+                      >
+                        {asset.name || assetKey(asset)}
+                      </Link>
+                      <div className="mt-2 flex items-center justify-between text-xs text-[var(--muted)]">
+                        <span>{asset.status || 'unknown'}</span>
+                        <span>
+                          Score {asset.posture_score != null ? Number(asset.posture_score) : '-'}
+                        </span>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+
+            <section className="section-panel-tight animate-in">
+              <p className="section-title mb-2">Inventory summary</p>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between rounded-[1rem] border border-[var(--border)] bg-white/86 px-3 py-2 text-sm">
+                  <span className="text-[var(--text-muted)]">Total assets</span>
+                  <span className="font-semibold text-[var(--text)]">{items.length}</span>
+                </div>
+                <div className="flex items-center justify-between rounded-[1rem] border border-[var(--border)] bg-white/86 px-3 py-2 text-sm">
+                  <span className="text-[var(--text-muted)]">Visible in slice</span>
+                  <span className="font-semibold text-[var(--text)]">{filteredAndSorted.length}</span>
+                </div>
+                <div className="flex items-center justify-between rounded-[1rem] border border-[var(--border)] bg-white/86 px-3 py-2 text-sm">
+                  <span className="text-[var(--text-muted)]">Need attention</span>
+                  <span className="font-semibold text-[var(--text)]">{unhealthyCount}</span>
+                </div>
+              </div>
+            </section>
+          </aside>
         </section>
       )}
 
       {items.length > 0 && filteredAndSorted.length === 0 && (
         <div className="card animate-in py-12 text-center">
-          <p className="text-[var(--muted)]">No assets match &quot;{search}&quot;</p>
+          <p className="text-[var(--muted)]">
+            No assets match the current search and slice filters.
+          </p>
           <button
             type="button"
-            onClick={() => setSearch('')}
+            onClick={() => {
+              setSearch('');
+              setStatusQuick('all');
+              setCriticalityQuick('all');
+            }}
             className="mt-3 text-sm font-medium text-[var(--green)] hover:underline"
           >
-            Clear search
+            Clear filters
           </button>
         </div>
       )}

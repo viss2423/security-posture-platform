@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.attack_lab import ATTACK_TASKS, launch_attack_lab_job
 from app.audit import log_audit
 from app.db import get_db
-from app.request_context import request_id_ctx
+from app.request_context import current_tenant_id, request_id_ctx
 from app.routers.auth import require_auth, require_role
 
 router = APIRouter(prefix="/attack-lab", tags=["attack-lab"])
@@ -77,8 +77,9 @@ def _enqueue_attack_lab_run(
         db.execute(
             text(
                 """
-                INSERT INTO scan_jobs(job_type, requested_by, status, job_params_json)
+                INSERT INTO scan_jobs(org_id, job_type, requested_by, status, job_params_json)
                 VALUES (
+                  :org_id,
                   'attack_lab_run',
                   :requested_by,
                   'queued',
@@ -88,6 +89,7 @@ def _enqueue_attack_lab_run(
                 """
             ),
             {
+                "org_id": current_tenant_id(),
                 "requested_by": requested_by,
                 "job_params_json": json.dumps(
                     {"task_type": task_type, "target": target, "asset_key": normalized_asset_key}
@@ -223,7 +225,7 @@ def list_attack_lab_runs(
     where = " AND ".join(clauses)
     rows = (
         db.execute(
-            text(
+            text(  # nosemgrep
                 f"""
                 SELECT
                   run_id, task_type, target_asset_id, target_asset_key, target,

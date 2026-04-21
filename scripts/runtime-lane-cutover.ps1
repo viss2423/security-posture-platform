@@ -42,6 +42,15 @@ $k8ReplicaTarget = @{
     "secplat-correlator" = 1
 }
 
+function Test-K8ClusterAvailable {
+    try {
+        kubectl cluster-info | Out-Null
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        return $false
+    }
+}
+
 function Get-ComposeActiveServices {
     $running = @()
     try {
@@ -53,6 +62,9 @@ function Get-ComposeActiveServices {
 }
 
 function Get-K8ActiveDeployments {
+    if (-not (Test-K8ClusterAvailable)) {
+        return @()
+    }
     $active = @()
     foreach ($name in $k8Deployments) {
         try {
@@ -69,6 +81,9 @@ function Get-K8ActiveDeployments {
 }
 
 function Get-K8ActiveCronJobs {
+    if (-not (Test-K8ClusterAvailable)) {
+        return @()
+    }
     $active = @()
     foreach ($name in $k8CronJobs) {
         try {
@@ -88,6 +103,9 @@ function Stop-ComposeLane {
 }
 
 function Stop-K8Lane {
+    if (-not (Test-K8ClusterAvailable)) {
+        throw "Kubernetes is not reachable from the current kubectl context. Start or enable the cluster before switching lanes."
+    }
     foreach ($name in $k8Deployments) {
         kubectl -n $k8Namespace scale deployment $name --replicas=0 | Out-Null
         if ($LASTEXITCODE -ne 0) {
@@ -98,10 +116,13 @@ function Stop-K8Lane {
 }
 
 function Start-ComposeLane {
-    docker compose up -d --build | Out-Null
+    docker compose up -d | Out-Null
 }
 
 function Start-K8Lane {
+    if (-not (Test-K8ClusterAvailable)) {
+        throw "Kubernetes is not reachable from the current kubectl context. Start or enable the cluster before switching lanes."
+    }
     foreach ($name in $k8Deployments) {
         if (-not $k8ReplicaTarget.ContainsKey($name)) {
             continue

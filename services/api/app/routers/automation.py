@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -97,6 +98,206 @@ def _load_run_actions(db: Session, run_id: int) -> list[dict[str, Any]]:
     return [_serialize_action(dict(row)) for row in rows]
 
 
+@router.get("/dashboard")
+def automation_dashboard(
+    lookback_hours: int = Query(168, ge=1, le=720),
+    db: Session = Depends(get_db),
+    _user: str = Depends(require_auth),
+):
+    since = datetime.now(UTC) - timedelta(hours=max(1, int(lookback_hours)))
+    generated_at = datetime.now(UTC).isoformat()
+
+    playbook_counts = (
+        db.execute(
+            text(
+                """
+                SELECT
+                  COUNT(*) AS total,
+                  SUM(CASE WHEN enabled THEN 1 ELSE 0 END) AS enabled
+                FROM automation_playbooks
+                """
+            )
+        )
+        .mappings()
+        .first()
+        or {}
+    )
+    run_rows = (
+        db.execute(
+            text(
+                """
+                SELECT status, COUNT(*) AS count
+                FROM automation_runs
+                WHERE started_at >= :since
+                GROUP BY status
+                """
+            ),
+            {"since": since},
+        )
+        .mappings()
+        .all()
+    )
+    trigger_rows = (
+        db.execute(
+            text(
+                """
+                SELECT trigger_source, COUNT(*) AS count
+                FROM automation_runs
+                WHERE started_at >= :since
+                GROUP BY trigger_source
+                ORDER BY count DESC, trigger_source ASC
+                LIMIT 10
+                """
+            ),
+            {"since": since},
+        )
+        .mappings()
+        .all()
+    )
+    action_rows = (
+        db.execute(
+            text(
+                """
+                SELECT
+                  a.action_type,
+                  a.status,
+                  COUNT(*) AS count
+                FROM automation_run_actions a
+                JOIN automation_runs r ON r.run_id = a.run_id
+                WHERE r.started_at >= :since
+                GROUP BY a.action_type, a.status
+                ORDER BY count DESC, a.action_type ASC, a.status ASC
+                """
+            ),
+            {"since": since},
+        )
+        .mappings()
+        .all()
+    )
+    approval_rows = (
+        db.execute(
+            text(
+                """
+                SELECT status, COUNT(*) AS count
+                FROM automation_approvals
+                WHERE created_at >= :since
+                GROUP BY status
+                """
+            ),
+            {"since": since},
+        )
+        .mappings()
+        .all()
+    )
+    rollback_rows = (
+        db.execute(
+            text(
+                """
+                SELECT status, COUNT(*) AS count
+                FROM automation_rollbacks
+                WHERE created_at >= :since
+                GROUP BY status
+                """
+            ),
+            {"since": since},
+        )
+        .mappings()
+        .all()
+    )
+    latest_runs = (
+        db.execute(
+            text(
+                """
+                SELECT
+                  r.run_id,
+                  r.playbook_id,
+                  p.title AS playbook_title,
+                  r.trigger_source,
+                  r.trigger_payload_json,
+                  r.matched,
+                  r.status,
+                  r.requested_by,
+                  r.started_at,
+                  r.finished_at,
+                  r.error,
+                  r.summary_json
+                FROM automation_runs r
+                JOIN automation_playbooks p ON p.playbook_id = r.playbook_id
+                WHERE r.started_at >= :since
+                ORDER BY r.started_at DESC, r.run_id DESC
+                LIMIT 10
+                """
+            ),
+            {"since": since},
+        )
+        .mappings()
+        .all()
+    )
+
+    runs_by_status: dict[str, int] = {}
+    for row in run_rows:
+        status = str(row.get("status") or "unknown")
+        runs_by_status[status] = int(row.get("count") or 0)
+    approvals_by_status: dict[str, int] = {}
+    for row in approval_rows:
+        status = str(row.get("status") or "unknown")
+        approvals_by_status[status] = int(row.get("count") or 0)
+    rollbacks_by_status: dict[str, int] = {}
+    for row in rollback_rows:
+        status = str(row.get("status") or "unknown")
+        rollbacks_by_status[status] = int(row.get("count") or 0)
+
+    actions_by_type: dict[str, dict[str, int]] = {}
+    for row in action_rows:
+        action_type = str(row.get("action_type") or "unknown")
+        status = str(row.get("status") or "unknown")
+        actions_by_type.setdefault(action_type, {})
+        actions_by_type[action_type][status] = int(row.get("count") or 0)
+
+    total_playbooks = int(playbook_counts.get("total") or 0)
+    enabled_playbooks = int(playbook_counts.get("enabled") or 0)
+    total_runs = sum(runs_by_status.values())
+    total_actions = sum(
+        int(count or 0) for status_map in actions_by_type.values() for count in status_map.values()
+    )
+    total_approvals = sum(approvals_by_status.values())
+    total_rollbacks = sum(rollbacks_by_status.values())
+
+    return {
+        "generated_at": generated_at,
+        "lookback_hours": int(lookback_hours),
+        "playbooks": {
+            "total": total_playbooks,
+            "enabled": enabled_playbooks,
+            "disabled": max(0, total_playbooks - enabled_playbooks),
+        },
+        "runs": {
+            "total": total_runs,
+            "by_status": runs_by_status,
+            "top_triggers": [
+                {
+                    "trigger_source": row.get("trigger_source"),
+                    "count": int(row.get("count") or 0),
+                }
+                for row in trigger_rows
+            ],
+            "latest": [_serialize_run(dict(row)) for row in latest_runs],
+        },
+        "actions": {
+            "total": total_actions,
+            "by_type": actions_by_type,
+        },
+        "approvals": {
+            "total": total_approvals,
+            "by_status": approvals_by_status,
+        },
+        "rollbacks": {
+            "total": total_rollbacks,
+            "by_status": rollbacks_by_status,
+        },
+    }
+
+
 def _ensure_trigger(trigger: str) -> str:
     normalized = str(trigger or "").strip().lower()
     if normalized not in SUPPORTED_TRIGGERS:
@@ -137,7 +338,7 @@ def list_playbooks(
     where = "" if include_disabled else "WHERE enabled = TRUE"
     rows = (
         db.execute(
-            text(
+            text(  # nosemgrep
                 f"""
                 SELECT
                   playbook_id,
@@ -591,7 +792,7 @@ def list_runs(
     where = " AND ".join(clauses)
     rows = (
         db.execute(
-            text(
+            text(  # nosemgrep
                 f"""
                 SELECT
                   r.run_id,

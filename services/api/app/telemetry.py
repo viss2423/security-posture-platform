@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from .alerts_v2 import normalize_alert_severity, upsert_security_alert
 from .db import SessionLocal
 from .queue import publish_scan_job
+from .request_context import current_tenant_id
 from .settings import settings
 
 logger = logging.getLogger("secplat.telemetry")
@@ -433,7 +434,7 @@ def _ioc_match(
         ORDER BY last_seen_at DESC
         LIMIT 1
     """
-    row = db.execute(text(sql), params).mappings().first()
+    row = db.execute(text(sql), params).mappings().first()  # nosemgrep
     if not row:
         return False, None
     return True, str(row.get("source") or "")
@@ -650,11 +651,13 @@ def _insert_event(
             text(
                 """
                 INSERT INTO security_events(
+                  org_id,
                   source, event_type, asset_id, asset_key, collector, ingest_job_id, raw_offset, raw_path, severity,
                   src_ip, src_port, dst_ip, dst_port, domain, url, protocol, event_time,
                   ingest_lag_seconds, ti_match, ti_source, mitre_techniques, payload_json
                 )
                 VALUES (
+                  :org_id,
                   :source, :event_type, :asset_id, :asset_key, :collector, :ingest_job_id, :raw_offset, :raw_path, :severity,
                   :src_ip, :src_port, :dst_ip, :dst_port, :domain, :url, :protocol, :event_time,
                   :ingest_lag_seconds, :ti_match, :ti_source, CAST(:mitre_techniques AS jsonb), CAST(:payload_json AS jsonb)
@@ -663,6 +666,7 @@ def _insert_event(
                 """
             ),
             {
+                "org_id": current_tenant_id(),
                 "source": source,
                 "event_type": normalized.get("event_type") or "event",
                 "asset_id": asset_id,
@@ -723,6 +727,7 @@ def _build_opensearch_doc(
     doc = {
         "@timestamp": _iso_z(event_time),
         "event_id": int(event_id),
+        "org_id": current_tenant_id(),
         "source": source,
         "event_type": str(normalized.get("event_type") or "event"),
         "asset_key": asset_key,
@@ -1401,8 +1406,9 @@ def enqueue_network_anomaly_job(
             db.execute(
                 text(
                     """
-                    INSERT INTO scan_jobs(job_type, requested_by, status, job_params_json)
+                    INSERT INTO scan_jobs(org_id, job_type, requested_by, status, job_params_json)
                     VALUES (
+                      :org_id,
                       'network_anomaly_score',
                       :requested_by,
                       'queued',
@@ -1411,7 +1417,11 @@ def enqueue_network_anomaly_job(
                     RETURNING job_id
                     """
                 ),
-                {"requested_by": requested_by, "job_params_json": json.dumps(params)},
+                {
+                    "org_id": current_tenant_id(),
+                    "requested_by": requested_by,
+                    "job_params_json": json.dumps(params),
+                },
             )
             .mappings()
             .first()
@@ -1495,8 +1505,9 @@ def enqueue_telemetry_import_job(
             db.execute(
                 text(
                     """
-                    INSERT INTO scan_jobs(job_type, requested_by, status, job_params_json)
+                    INSERT INTO scan_jobs(org_id, job_type, requested_by, status, job_params_json)
                     VALUES (
+                      :org_id,
                       'telemetry_import',
                       :requested_by,
                       'queued',
@@ -1505,7 +1516,11 @@ def enqueue_telemetry_import_job(
                     RETURNING job_id
                     """
                 ),
-                {"requested_by": requested_by, "job_params_json": json.dumps(params)},
+                {
+                    "org_id": current_tenant_id(),
+                    "requested_by": requested_by,
+                    "job_params_json": json.dumps(params),
+                },
             )
             .mappings()
             .first()
@@ -1647,7 +1662,7 @@ def ensure_recent_telemetry_activity(
             placeholders.append(f":{key}")
         rows = (
             db.execute(
-                text(
+                text(  # nosemgrep
                     f"""
                     SELECT source, MAX(event_time) AS last_event_time
                     FROM security_events

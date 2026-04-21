@@ -1,0 +1,40 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: secplat-verify-images
+  annotations:
+    secplat.contract: supply-chain-phase5
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: require-image-digests
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "Container images must be pinned to immutable sha256 digests."
+        pattern:
+          spec:
+            containers:
+              - image: "*@sha256:*"
+            =(initContainers):
+              - image: "*@sha256:*"
+    - name: verify-secplat-images-keyless
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      verifyImages:
+        - imageReferences:
+            - "ghcr.io/acme/secplat-*"
+          mutateDigest: false
+          required: true
+          attestors:
+            - entries:
+                - keyless:
+                    issuer: "https://token.actions.githubusercontent.com"
+                    subject: "https://github.com/acme/security-posture-platform/.github/workflows/supply-chain.yml@refs/heads/main"

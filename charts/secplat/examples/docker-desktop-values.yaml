@@ -1,0 +1,27 @@
+config:
+  ENV: "dev"
+  FRONTEND_URL: "http://secplat.local"
+
+secretData:
+  API_SECRET_KEY: "phase3-docker-desktop-secret"
+  ADMIN_PASSWORD: "secplat-admin-123"
+
+images:
+  api: "security-posture-platform-api:latest"
+  frontend: "security-posture-platform-frontend:latest"
+  workerWeb: "security-posture-platform-worker-web:latest"
+  correlator: "security-posture-platform-correlator:latest"
+  deriver: "security-posture-platform-deriver:latest"
+  notifier: "security-posture-platform-notifier:latest"
+  ingestion: "security-posture-platform-ingestion:latest"
+
+cronjobs:
+  ingestion:
+    enabled: false
+
+hpa:
+  workerWeb:
+    enabled: false
+
+frontend:
+  grafanaUrl: "http://localhost:3001"

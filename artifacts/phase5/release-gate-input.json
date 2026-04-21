@@ -1,0 +1,9 @@
+{
+  "measurements": {
+    "alert_creation_seconds": 0.0,
+    "api_availability": 1.0,
+    "api_p95_latency_ms": 70.844,
+    "background_job_freshness_minutes": 0.1821279,
+    "ingestion_visibility_seconds": 1.0
+  }
+}

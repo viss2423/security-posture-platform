@@ -35,7 +35,7 @@ spec:
               type: RuntimeDefault
           containers:
             - name: ingestion-health
-              image: ghcr.io/your-org/secplat-ingestion:latest
+              image: ghcr.io/your-org/secplat-ingestion@sha256:6666666666666666666666666666666666666666666666666666666666666666
               imagePullPolicy: IfNotPresent
               command: ["/bin/bash", "-lc"]
               args:

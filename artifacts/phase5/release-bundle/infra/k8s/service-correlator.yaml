@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: secplat-correlator
+  namespace: secplat
+  labels:
+    app.kubernetes.io/name: secplat-correlator
+    app.kubernetes.io/part-of: secplat
+spec:
+  selector:
+    app.kubernetes.io/name: secplat-correlator
+  ports:
+    - name: metrics
+      port: 9102
+      targetPort: metrics

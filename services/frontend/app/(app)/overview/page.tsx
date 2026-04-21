@@ -293,10 +293,10 @@ export default async function OverviewPage({ searchParams }: PageProps) {
       <section className="page-hero animate-in">
         <div className="hero-grid">
           <div>
-            <h1 className="hero-title">Security Operations Overview</h1>
+            <span className="stat-chip-strong">Executive overview</span>
+            <h1 className="hero-title">Executive Overview</h1>
             <p className="hero-copy">
-              Unified posture, risk, and telemetry intelligence with direct paths into
-              triage and remediation workflows.
+              See coverage, rising risk, and the next best action across the customer estate.
             </p>
             <div className="mt-4 flex flex-wrap gap-2">
               <Link href="/alerts" className="btn-secondary text-sm">
@@ -309,6 +309,32 @@ export default async function OverviewPage({ searchParams }: PageProps) {
                 Open telemetry
               </Link>
             </div>
+            <div className="mt-6 grid gap-3 sm:grid-cols-3">
+              <div className="signal-card">
+                <p className="text-[10px] uppercase tracking-[0.14em] text-[var(--muted)]">
+                  Customer answer
+                </p>
+                <p className="mt-2 text-sm font-medium text-[var(--text)]">
+                  What assets are we protecting right now?
+                </p>
+              </div>
+              <div className="signal-card">
+                <p className="text-[10px] uppercase tracking-[0.14em] text-[var(--muted)]">
+                  Customer answer
+                </p>
+                <p className="mt-2 text-sm font-medium text-[var(--text)]">
+                  What risk is moving up fastest?
+                </p>
+              </div>
+              <div className="signal-card">
+                <p className="text-[10px] uppercase tracking-[0.14em] text-[var(--muted)]">
+                  Customer answer
+                </p>
+                <p className="mt-2 text-sm font-medium text-[var(--text)]">
+                  Where should the team act next?
+                </p>
+              </div>
+            </div>
           </div>
           <div className="hero-stat-grid">
             <div className="hero-stat">
@@ -320,7 +346,7 @@ export default async function OverviewPage({ searchParams }: PageProps) {
               <p className="hero-stat-value">{anomalies.length}</p>
             </div>
             <div className="hero-stat">
-              <p className="hero-stat-label">Trend range</p>
+              <p className="hero-stat-label">Trend window</p>
               <p className="hero-stat-value">{trendRange.toUpperCase()}</p>
             </div>
             <div className="hero-stat">
@@ -329,6 +355,29 @@ export default async function OverviewPage({ searchParams }: PageProps) {
             </div>
           </div>
         </div>
+      </section>
+
+      <section className="command-lane animate-in">
+        <div className="command-lane-grid">
+          <span className="command-pill-strong">
+            Posture score{' '}
+            {strip?.posture_score_avg != null
+              ? Math.round(Number(strip.posture_score_avg))
+              : '--'}
+          </span>
+          <span className="command-pill">
+            Trend window{' '}
+            {trendRange === '24h' ? '24 hours' : trendRange === '30d' ? '30 days' : '7 days'}
+          </span>
+          <span className="command-pill">Assets {strip?.total_assets ?? 0}</span>
+          <span className="command-pill">Alerts {strip?.alerts_firing ?? 0}</span>
+          <span className="command-pill">Findings {findings.length}</span>
+          <span className="command-pill">Anomalies {anomalies.length}</span>
+        </div>
+        <p className="mt-3 text-sm text-[var(--text-muted)]">
+          This page is built to answer the first three customer questions in under a minute:
+          coverage, pressure, and next action.
+        </p>
       </section>
 
       {errors[0] && (
@@ -348,104 +397,124 @@ export default async function OverviewPage({ searchParams }: PageProps) {
 
       {overview && strip && strip.total_assets > 0 && (
         <div className="view-stack">
-          <section className="section-panel animate-in">
-            <h2 className="section-title">Executive summary</h2>
-            <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-              <div className="metric-card neutral animate-in flex flex-col items-center justify-center">
-                {showRing ? (
-                  <>
-                    <div className="relative">
-                      <ProgressRing value={scoreNum} className="block" />
-                      <span className="absolute inset-0 flex items-center justify-center text-lg font-bold text-[var(--text)]">
-                        {Math.round(scoreNum)}
-                      </span>
-                    </div>
-                    <div className="mt-2 text-sm font-medium text-[var(--muted)]">
-                      Posture score
-                    </div>
-                    {strip.score_trend_vs_yesterday && (
-                      <span
-                        className={
-                          strip.score_trend_vs_yesterday === 'up'
-                            ? 'text-[var(--green)]'
+          <div className="canvas-split">
+            <section className="section-panel animate-in">
+              <h2 className="section-title">Posture summary</h2>
+              <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="metric-card neutral animate-in flex flex-col items-center justify-center">
+                  {showRing ? (
+                    <>
+                      <div className="relative">
+                        <ProgressRing value={scoreNum} className="block" />
+                        <span className="absolute inset-0 flex items-center justify-center text-lg font-bold text-[var(--text)]">
+                          {Math.round(scoreNum)}
+                        </span>
+                      </div>
+                      <div className="mt-2 text-sm font-medium text-[var(--muted)]">
+                        Posture score
+                      </div>
+                      {strip.score_trend_vs_yesterday && (
+                        <span
+                          className={
+                            strip.score_trend_vs_yesterday === 'up'
+                              ? 'text-[var(--green)]'
+                              : strip.score_trend_vs_yesterday === 'down'
+                                ? 'text-[var(--red)]'
+                                : 'text-[var(--muted)]'
+                          }
+                        >
+                          {strip.score_trend_vs_yesterday === 'up'
+                            ? 'Up vs yesterday'
                             : strip.score_trend_vs_yesterday === 'down'
-                              ? 'text-[var(--red)]'
-                              : 'text-[var(--muted)]'
-                        }
-                      >
-                        {strip.score_trend_vs_yesterday === 'up'
-                          ? 'Up vs yesterday'
-                          : strip.score_trend_vs_yesterday === 'down'
-                            ? 'Down vs yesterday'
-                            : 'Same'}
-                      </span>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    <div className="text-4xl font-bold text-[var(--text)]">
-                      {strip.posture_score_avg ?? '-'}
-                    </div>
-                    <div className="mt-2 text-sm font-medium text-[var(--muted)]">
-                      Posture score
-                    </div>
-                  </>
-                )}
-              </div>
-              <div className="metric-card animate-in">
-                <div className="text-4xl font-bold text-[var(--text)]">
-                  {strip.total_assets}
+                              ? 'Down vs yesterday'
+                              : 'Same'}
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <div className="text-4xl font-bold text-[var(--text)]">
+                        {strip.posture_score_avg ?? '-'}
+                      </div>
+                      <div className="mt-2 text-sm font-medium text-[var(--muted)]">
+                        Posture score
+                      </div>
+                    </>
+                  )}
                 </div>
-                <div className="mt-2 text-sm font-medium text-[var(--muted)]">
-                  Assets monitored
+                <div className="metric-card animate-in">
+                  <div className="text-4xl font-bold text-[var(--text)]">
+                    {strip.total_assets}
+                  </div>
+                  <div className="mt-2 text-sm font-medium text-[var(--muted)]">
+                    Assets monitored
+                  </div>
                 </div>
-              </div>
-              <div className="metric-card red animate-in">
-                <div className="text-4xl font-bold text-[var(--red)]">
-                  {strip.alerts_firing}
+                <div className="metric-card red animate-in">
+                  <div className="text-4xl font-bold text-[var(--red)]">
+                    {strip.alerts_firing}
+                  </div>
+                  <div className="mt-2 text-sm font-medium text-[var(--muted)]">
+                    Alerts firing
+                  </div>
                 </div>
-                <div className="mt-2 text-sm font-medium text-[var(--muted)]">
-                  Alerts firing
-                </div>
-              </div>
-              <div className="metric-card animate-in">
-                <div className="text-4xl font-bold text-[var(--text)]">
-                  {strip.risk_change_24h != null
-                    ? strip.risk_change_24h >= 0
-                      ? `+${strip.risk_change_24h}`
-                      : strip.risk_change_24h
-                    : '-'}
-                </div>
-                <div className="mt-2 text-sm font-medium text-[var(--muted)]">
-                  Risk change (24h)
+                <div className="metric-card animate-in">
+                  <div className="text-4xl font-bold text-[var(--text)]">
+                    {strip.risk_change_24h != null
+                      ? strip.risk_change_24h >= 0
+                        ? `+${strip.risk_change_24h}`
+                        : strip.risk_change_24h
+                      : '-'}
+                  </div>
+                  <div className="mt-2 text-sm font-medium text-[var(--muted)]">
+                    Risk change (24h)
+                  </div>
                 </div>
               </div>
-            </div>
-          </section>
+            </section>
 
-          <section className="section-panel animate-in">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-              <h2 className="section-title">Posture trend</h2>
-              <div className="flex gap-2">
-                {(['24h', '7d', '30d'] as const).map((range) => (
-                  <Link
-                    key={range}
-                    href={buildOverviewHref(range, filters)}
-                    className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${
-                      trendRange === range
-                        ? 'bg-[var(--green)] text-white'
-                        : 'bg-[var(--border)]/50 text-[var(--muted)] hover:bg-[var(--border)]'
-                    }`}
-                  >
-                    {range === '24h' ? '24h' : range === '7d' ? '7 days' : '30 days'}
-                  </Link>
-                ))}
+            <section className="section-panel animate-in">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                <h2 className="section-title">Posture trend</h2>
+                <div className="flex gap-2">
+                  {(['24h', '7d', '30d'] as const).map((range) => (
+                    <Link
+                      key={range}
+                      href={buildOverviewHref(range, filters)}
+                      className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${
+                        trendRange === range
+                          ? 'bg-[var(--green)] text-white'
+                          : 'bg-[var(--border)]/50 text-[var(--muted)] hover:bg-[var(--border)]'
+                      }`}
+                    >
+                      {range === '24h' ? '24h' : range === '7d' ? '7 days' : '30 days'}
+                    </Link>
+                  ))}
+                </div>
               </div>
-            </div>
-            <div className="card overflow-hidden">
-              <TrendChart points={trend.points} />
-            </div>
-          </section>
+              <div className="card overflow-hidden">
+                <TrendChart points={trend.points} />
+              </div>
+              <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                <div className="signal-card">
+                  <p className="text-[10px] uppercase tracking-[0.14em] text-[var(--muted)]">Top driver</p>
+                  <p className="mt-2 text-sm font-medium text-[var(--text)]">
+                    {drivers?.by_reason && drivers.by_reason.length > 0
+                      ? drivers.by_reason[0].reason
+                      : 'No primary driver'}
+                  </p>
+                </div>
+                <div className="signal-card">
+                  <p className="text-[10px] uppercase tracking-[0.14em] text-[var(--muted)]">Driver pressure</p>
+                  <p className="mt-2 text-sm text-[var(--text)]">
+                    {drivers?.by_reason && drivers.by_reason.length > 0
+                      ? `${drivers.by_reason.length} active risk vectors`
+                      : 'Stable'}
+                  </p>
+                </div>
+              </div>
+            </section>
+          </div>
 
           <OverviewAnomaliesPanel
             initialAnomalies={anomalies}
@@ -687,7 +756,7 @@ export default async function OverviewPage({ searchParams }: PageProps) {
             <section className="section-panel animate-in">
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <h2 className="section-title">Telemetry operations</h2>
+                  <h2 className="section-title">Signal coverage</h2>
                   <p className="text-sm text-[var(--muted)]">
                     Event volume, IOC-linked activity, and latest anomaly observations.
                   </p>
@@ -934,7 +1003,7 @@ export default async function OverviewPage({ searchParams }: PageProps) {
           )}
 
           <section className="section-panel animate-in">
-            <h2 className="section-title">Highest-risk entities</h2>
+            <h2 className="section-title">What needs attention</h2>
             <div className="grid gap-6 lg:grid-cols-2">
               <div className="card">
                 <h3 className="mb-3 text-sm font-medium text-[var(--muted)]">
@@ -1021,7 +1090,7 @@ export default async function OverviewPage({ searchParams }: PageProps) {
           </section>
 
           <section className="section-panel animate-in">
-            <h2 className="section-title">Top drivers</h2>
+            <h2 className="section-title">Why the score is moving</h2>
             <div className="grid gap-6 lg:grid-cols-3">
               <div className="card animate-in">
                 <h3 className="mb-3 text-sm font-medium text-[var(--muted)]">
@@ -1095,7 +1164,7 @@ export default async function OverviewPage({ searchParams }: PageProps) {
 
           {strip.red > 0 && strip.down_assets?.length > 0 && (
             <section className="section-panel animate-in">
-              <h2 className="section-title">Down assets</h2>
+              <h2 className="section-title">Unavailable assets</h2>
               <div className="card" style={{ borderColor: 'var(--red-border-subtle)' }}>
                 <ul className="space-y-3">
                   {strip.down_assets.map((assetId) => (

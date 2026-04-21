@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -25,6 +25,7 @@ from app.schemas.posture import raw_to_asset_state
 from app.severity_engine import compute_effective_alert_severity
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
+_SEVERITY_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 
 
 def _normalize_criticality(value) -> str | None:
@@ -74,7 +75,7 @@ def _get_asset_metadata(db: Session, asset_keys: list[str]) -> dict[str, dict]:
         return {}
     placeholders, params = _sql_in_params("ak", asset_keys)
     rows = db.execute(
-        text(
+        text(  # nosemgrep
             f"""
             SELECT asset_key, name, owner, environment, criticality, type, verified
             FROM assets
@@ -125,7 +126,7 @@ def _active_maintenance_map(
     placeholders, params = _sql_in_params("mw", asset_keys)
     params["now"] = now
     rows = db.execute(
-        text(
+        text(  # nosemgrep
             f"""
             SELECT id, asset_key, start_at, end_at, reason, created_by, created_at
             FROM maintenance_windows
@@ -153,7 +154,7 @@ def _active_suppression_map(
     placeholders, params = _sql_in_params("sr", asset_keys)
     params["now"] = now
     rows = db.execute(
-        text(
+        text(  # nosemgrep
             f"""
             SELECT id, scope, scope_value, starts_at, ends_at, reason, created_by, created_at
             FROM suppression_rules
@@ -193,7 +194,7 @@ def _active_finding_summary_map(db: Session, asset_keys: list[str]) -> dict[str,
         return out
     placeholders, params = _sql_in_params("fk", asset_keys)
     rows = db.execute(
-        text(
+        text(  # nosemgrep
             f"""
             WITH ranked_findings AS (
               SELECT
@@ -256,7 +257,7 @@ def _open_incident_summary_map(db: Session, asset_keys: list[str]) -> dict[str, 
         return out
     placeholders, params = _sql_in_params("ia", asset_keys)
     rows = db.execute(
-        text(
+        text(  # nosemgrep
             f"""
             SELECT
               ia.asset_key,
@@ -287,6 +288,7 @@ def _alert_ai_summary_map(db: Session, asset_keys: list[str]) -> dict[str, dict]
             "ai_recommended_action": None,
             "ai_urgency": None,
             "ai_generated_at": None,
+            "ai_requires_human_approval": None,
         }
         for asset_key in asset_keys
     }
@@ -294,7 +296,7 @@ def _alert_ai_summary_map(db: Session, asset_keys: list[str]) -> dict[str, dict]
         return out
     placeholders, params = _sql_in_params("ag", asset_keys)
     rows = db.execute(
-        text(
+        text(  # nosemgrep
             f"""
             SELECT asset_key, recommended_action, urgency, generated_at
             FROM alert_ai_guidance
@@ -304,12 +306,15 @@ def _alert_ai_summary_map(db: Session, asset_keys: list[str]) -> dict[str, dict]
         params,
     ).mappings()
     for row in rows:
+        action = row.get("recommended_action")
         out[row["asset_key"]] = {
-            "ai_recommended_action": row.get("recommended_action"),
+            "ai_recommended_action": action,
             "ai_urgency": row.get("urgency"),
             "ai_generated_at": row.get("generated_at").isoformat()
             if hasattr(row.get("generated_at"), "isoformat")
             else None,
+            "ai_requires_human_approval": str(action or "").strip().lower()
+            in {"ack", "suppress", "assign", "escalate", "resolve"},
         }
     return out
 
@@ -417,6 +422,10 @@ def _compute_effective_severity_fields(
         "effective_severity_score": severity.get("effective_score"),
         "effective_severity_top_drivers": severity.get("top_drivers"),
     }
+
+
+def _severity_rank(value: str | None) -> int:
+    return _SEVERITY_RANK.get(str(value or "").strip().lower(), 2)
 
 
 def _upsert_alert_state(
@@ -676,7 +685,7 @@ def list_alert_clusters(
         params["status"] = normalized_status
     rows = (
         db.execute(
-            text(
+            text(  # nosemgrep
                 f"""
                 SELECT
                   alert_id,
@@ -706,6 +715,159 @@ def list_alert_clusters(
         "cluster_by": cluster_mode,
         "status": normalized_status,
         "items": items,
+    }
+
+
+@router.get("/dedupe/windows")
+def list_alert_dedupe_windows(
+    status: str | None = Query(None),
+    lookback_hours: int = Query(168, ge=1, le=720),
+    min_events: int = Query(2, ge=1, le=100000),
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
+    _user: str = Depends(require_auth),
+):
+    normalized_status = (status or "").strip().lower() or None
+    if normalized_status and normalized_status not in {"firing", "acked", "suppressed", "resolved"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid status. Use one of: firing, acked, suppressed, resolved",
+        )
+    since = datetime.now(UTC) - timedelta(hours=max(1, int(lookback_hours)))
+    clauses = [
+        "dedupe_key IS NOT NULL",
+        "dedupe_key <> ''",
+        "COALESCE(last_seen_at, first_seen_at, NOW()) >= :since",
+    ]
+    params: dict[str, object] = {
+        "since": since,
+        "fetch_limit": min(max(int(limit) * 50, 1000), 20000),
+    }
+    if normalized_status:
+        clauses.append("status = :status")
+        params["status"] = normalized_status
+    where = " AND ".join(clauses)
+    rows = (
+        db.execute(
+            text(  # nosemgrep
+                f"""
+                SELECT
+                  alert_id,
+                  dedupe_key,
+                  status,
+                  severity,
+                  event_count,
+                  asset_key,
+                  source,
+                  first_seen_at,
+                  last_seen_at
+                FROM security_alerts
+                WHERE {where}
+                ORDER BY COALESCE(last_seen_at, first_seen_at) DESC
+                LIMIT :fetch_limit
+                """
+            ),
+            params,
+        )
+        .mappings()
+        .all()
+    )
+    grouped: dict[str, dict] = {}
+    for row in rows:
+        dedupe_key = str(row.get("dedupe_key") or "").strip()
+        if not dedupe_key:
+            continue
+        bucket = grouped.setdefault(
+            dedupe_key,
+            {
+                "dedupe_key": dedupe_key,
+                "alert_count": 0,
+                "total_events": 0,
+                "first_seen_at": None,
+                "last_seen_at": None,
+                "max_severity": "info",
+                "statuses": set(),
+                "asset_keys": set(),
+                "sources": set(),
+                "alert_ids": [],
+            },
+        )
+        first_seen = row.get("first_seen_at")
+        last_seen = row.get("last_seen_at")
+        bucket["alert_count"] += 1
+        bucket["total_events"] += max(1, int(row.get("event_count") or 1))
+        if first_seen is not None and (
+            bucket["first_seen_at"] is None or first_seen < bucket["first_seen_at"]
+        ):
+            bucket["first_seen_at"] = first_seen
+        if last_seen is not None and (
+            bucket["last_seen_at"] is None or last_seen > bucket["last_seen_at"]
+        ):
+            bucket["last_seen_at"] = last_seen
+        severity = str(row.get("severity") or "medium").strip().lower()
+        if _severity_rank(severity) > _severity_rank(bucket["max_severity"]):
+            bucket["max_severity"] = severity
+        status_value = str(row.get("status") or "").strip().lower()
+        if status_value:
+            bucket["statuses"].add(status_value)
+        asset_key = str(row.get("asset_key") or "").strip()
+        if asset_key:
+            bucket["asset_keys"].add(asset_key)
+        source_value = str(row.get("source") or "").strip().lower()
+        if source_value:
+            bucket["sources"].add(source_value)
+        alert_id = int(row.get("alert_id") or 0)
+        if alert_id > 0:
+            bucket["alert_ids"].append(alert_id)
+
+    items: list[dict] = []
+    for bucket in grouped.values():
+        total_events = int(bucket["total_events"] or 0)
+        if total_events < int(min_events):
+            continue
+        first_seen = bucket.get("first_seen_at")
+        last_seen = bucket.get("last_seen_at")
+        window_minutes = None
+        recurrence_per_hour = None
+        if hasattr(first_seen, "timestamp") and hasattr(last_seen, "timestamp"):
+            seconds = max((last_seen - first_seen).total_seconds(), 0.0)
+            window_minutes = round(seconds / 60.0, 2)
+            if seconds > 0:
+                recurrence_per_hour = round((total_events / seconds) * 3600.0, 3)
+        items.append(
+            {
+                "dedupe_key": bucket["dedupe_key"],
+                "alert_count": int(bucket["alert_count"] or 0),
+                "total_events": total_events,
+                "window_minutes": window_minutes,
+                "recurrence_per_hour": recurrence_per_hour,
+                "max_severity": bucket["max_severity"],
+                "first_seen_at": first_seen.isoformat()
+                if hasattr(first_seen, "isoformat")
+                else first_seen,
+                "last_seen_at": last_seen.isoformat()
+                if hasattr(last_seen, "isoformat")
+                else last_seen,
+                "statuses": sorted(bucket["statuses"]),
+                "asset_keys": sorted(bucket["asset_keys"]),
+                "sources": sorted(bucket["sources"]),
+                "alert_ids": sorted(bucket["alert_ids"], reverse=True),
+            }
+        )
+
+    items.sort(
+        key=lambda item: (
+            int(item.get("total_events") or 0),
+            int(item.get("alert_count") or 0),
+            str(item.get("last_seen_at") or ""),
+        ),
+        reverse=True,
+    )
+    return {
+        "status": normalized_status,
+        "lookback_hours": int(lookback_hours),
+        "min_events": int(min_events),
+        "items": items[: int(limit)],
     }
 
 

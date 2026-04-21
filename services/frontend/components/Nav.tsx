@@ -8,9 +8,6 @@ import {
   BrainCircuit,
   Briefcase,
   Bug,
-  ChevronRight,
-  Cpu,
-  FileText,
   Gamepad2,
   LogOut,
   Menu,
@@ -19,7 +16,7 @@ import {
   ScrollText,
   Shield,
   ShieldAlert,
-  Signal,
+  Sparkles,
   Users,
   X,
   type LucideIcon,
@@ -27,15 +24,18 @@ import {
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useMemo, useState } from 'react';
-import { logout, type PostureSummary } from '@/lib/api';
+import CommandPalette from '@/components/CommandPalette';
+import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/cn';
+import { logout, type PostureSummary } from '@/lib/api';
 import {
+  getActiveNavItem,
   getVisibleNavGroups,
   isActivePath,
   type NavGroup,
   type NavIconKey,
+  type NavItem,
 } from '@/lib/navigation';
-import { useAuth } from '@/contexts/AuthContext';
 
 const ICONS: Record<NavIconKey, LucideIcon> = {
   activity: Activity,
@@ -54,202 +54,135 @@ const ICONS: Record<NavIconKey, LucideIcon> = {
   incidents: ShieldAlert,
   suppression: Shield,
   jobs: Briefcase,
-  reports: FileText,
+  reports: BarChart3,
   policy: Scale,
   audit: ScrollText,
   users: Users,
   ml: BrainCircuit,
 };
 
-function Brand({ compact = false }: { compact?: boolean }) {
+function BrandBlock() {
   return (
-    <Link
-      href="/overview"
-      className="group relative flex items-center gap-3 rounded-2xl border border-[var(--border)] bg-[linear-gradient(165deg,rgba(13,28,45,0.92),rgba(8,19,33,0.84))] px-2.5 py-2 transition duration-300 hover:border-cyan-300/45 hover:bg-[linear-gradient(165deg,rgba(14,34,55,0.94),rgba(8,19,33,0.88))]"
-    >
-      <span className="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-cyan-300/70 to-transparent" />
-      <span className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-cyan-200/35 bg-[radial-gradient(circle_at_35%_25%,rgba(136,248,255,0.55),rgba(28,180,218,0.16)_58%,rgba(5,18,32,0.95)_100%)] text-sm font-black text-cyan-50 shadow-[0_14px_34px_-16px_rgba(50,215,255,0.85)]">
-        <span className="absolute inset-0 rounded-2xl border border-cyan-100/20" />
-        <span className="relative">SP</span>
+    <Link href="/overview" className="inline-flex items-center gap-4 rounded-[1.25rem]">
+      <span className="inline-flex h-14 w-14 items-center justify-center rounded-[1.25rem] border border-white/15 bg-white/10 text-lg font-black uppercase tracking-[0.18em] text-white shadow-[0_18px_40px_-22px_rgba(0,0,0,0.45)] backdrop-blur-md">
+        SP
       </span>
-      {!compact && (
-        <span className="flex min-w-0 flex-1 flex-col">
-          <span className="[font-family:var(--font-display)] text-sm font-semibold uppercase tracking-[0.14em] text-[var(--text)]">
-            SecPlat
-          </span>
-          <span className="truncate text-[11px] tracking-[0.12em] text-[var(--muted)]">
-            Quantum SOC Console
-          </span>
+      <span className="min-w-0">
+        <span className="block text-lg font-semibold tracking-[-0.03em] text-white">
+          SecPlat
         </span>
-      )}
-      {!compact && (
-        <span className="inline-flex items-center gap-1 rounded-full border border-cyan-300/35 bg-cyan-300/12 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-100">
-          <Signal size={10} />
-          Sync
+        <span className="block text-[11px] uppercase tracking-[0.2em] text-white/60">
+          Customer Security Platform
         </span>
-      )}
+      </span>
     </Link>
   );
 }
 
-function PulseCard({ summary }: { summary: PostureSummary | null }) {
-  const score = summary?.posture_score_avg != null ? Math.round(Number(summary.posture_score_avg)) : null;
-  const scoreWidth = Math.max(6, Math.min(100, score ?? 6));
-
+function OverviewMetric({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | number;
+}) {
   return (
-    <div className="relative overflow-hidden rounded-2xl border border-cyan-300/30 bg-[linear-gradient(170deg,rgba(14,31,51,0.96),rgba(9,20,36,0.88))] p-4 shadow-[0_18px_32px_-24px_rgba(50,215,255,0.72)]">
-      <div className="pointer-events-none absolute -right-10 -top-14 h-28 w-28 rounded-full bg-cyan-300/20 blur-2xl" />
-      <div className="pointer-events-none absolute -left-10 -bottom-12 h-24 w-24 rounded-full bg-emerald-300/15 blur-2xl" />
-      <div className="relative">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
-              Neural posture pulse
-            </p>
-            <div className="mt-2 flex items-end gap-3">
-              <p className="[font-family:var(--font-display)] text-4xl font-semibold leading-none text-[var(--text)]">
-                {score ?? '--'}
-              </p>
-              <div className="pb-1 text-xs text-[var(--muted)]">Score index</div>
-            </div>
-          </div>
-          <span className="relative inline-flex h-8 items-center gap-2 rounded-full border border-emerald-300/35 bg-emerald-300/12 px-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-100">
-            <span className="relative h-2 w-2 rounded-full bg-emerald-300">
-              <span className="absolute inset-0 rounded-full bg-emerald-300/70 animate-[pulse-ring_2s_ease-out_infinite]" />
-            </span>
-            Live
-          </span>
-        </div>
-
-        <div className="mt-4 h-2 overflow-hidden rounded-full border border-cyan-300/25 bg-[var(--surface)]/95">
-          <div
-            className="h-full rounded-full bg-[linear-gradient(90deg,#32d7ff,#3ef3db,#9dff81)] transition-all duration-500"
-            style={{ width: `${scoreWidth}%` }}
-          />
-        </div>
-
-        <div className="mt-4 grid grid-cols-3 gap-2 text-xs">
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)]/90 p-2.5 shadow-inner shadow-black/20">
-            <p className="text-[var(--muted)]">Green</p>
-            <p className="mt-1 font-semibold text-emerald-300">{summary?.green ?? '--'}</p>
-          </div>
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)]/90 p-2.5 shadow-inner shadow-black/20">
-            <p className="text-[var(--muted)]">Amber</p>
-            <p className="mt-1 font-semibold text-amber-300">{summary?.amber ?? '--'}</p>
-          </div>
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)]/90 p-2.5 shadow-inner shadow-black/20">
-            <p className="text-[var(--muted)]">Red</p>
-            <p className="mt-1 font-semibold text-rose-300">{summary?.red ?? '--'}</p>
-          </div>
-        </div>
-      </div>
+    <div className="rounded-[1.1rem] border border-white/10 bg-white/7 px-4 py-3 backdrop-blur-md">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/58">
+        {label}
+      </p>
+      <p className="mt-2 text-2xl font-semibold leading-none text-white">{value}</p>
     </div>
   );
 }
 
-function SidebarPanel({
+function GroupChips({
+  group,
   pathname,
-  groups,
-  username,
-  role,
-  summary,
-  onSignOut,
-  onNavigate,
 }: {
+  group: NavGroup;
   pathname: string;
-  groups: NavGroup[];
-  username?: string;
-  role?: string;
-  summary: PostureSummary | null;
-  onSignOut: () => void | Promise<void>;
-  onNavigate?: () => void;
 }) {
   return (
-    <div className="relative flex h-full flex-col overflow-hidden">
-      <div className="pointer-events-none absolute -left-20 top-20 h-40 w-40 rounded-full bg-cyan-300/16 blur-3xl" />
-      <div className="pointer-events-none absolute -right-12 bottom-24 h-36 w-36 rounded-full bg-emerald-300/14 blur-3xl" />
-
-      <div className="relative border-b border-[var(--border)]/80 p-4">
-        <Brand />
+    <section className="rounded-[1.45rem] border border-[var(--border)] bg-[rgba(255,255,255,0.76)] p-3 shadow-[var(--shadow-soft)] backdrop-blur-xl">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[var(--muted)]">
+          {group.title}
+        </p>
+        <span className="rounded-full border border-[var(--border)] bg-white/80 px-2 py-0.5 text-[10px] text-[var(--muted)]">
+          {group.items.length}
+        </span>
       </div>
-
-      <div className="relative space-y-4 border-b border-[var(--border)]/80 px-3 py-4">
-        <PulseCard summary={summary} />
+      <div className="mt-3 flex flex-wrap gap-2">
+        {group.items.map((item) => {
+          const Icon = ICONS[item.icon];
+          const active = isActivePath(pathname, item.href);
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={cn(
+                'inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs transition',
+                active
+                  ? 'border-cyan-300/24 bg-cyan-300/10 text-[var(--cyan-strong)]'
+                  : 'border-[var(--border)] bg-white/88 text-[var(--text-muted)] hover:border-cyan-300/20 hover:text-[var(--text)]'
+              )}
+            >
+              <Icon size={13} />
+              <span>{item.label}</span>
+            </Link>
+          );
+        })}
       </div>
+    </section>
+  );
+}
 
-      <div className="relative flex-1 space-y-5 overflow-y-auto px-3 py-4">
-        {groups.map((group) => (
-          <section key={group.title}>
-            <div className="mb-2 flex items-center gap-2 px-2">
-              <span className="h-px flex-1 bg-gradient-to-r from-cyan-300/35 to-transparent" />
-              <h2 className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--muted)]">
-                {group.title}
-              </h2>
-              <span className="h-px flex-1 bg-gradient-to-l from-emerald-300/35 to-transparent" />
-            </div>
-            <div className="space-y-1.5">
-              {group.items.map((item) => {
-                const Icon = ICONS[item.icon];
-                const active = isActivePath(pathname, item.href);
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    onClick={onNavigate}
-                    className={cn(
-                      'group relative flex items-center gap-3 overflow-hidden rounded-xl border px-3 py-2.5 text-sm font-medium transition duration-200',
-                      active
-                        ? 'border-cyan-300/45 bg-[linear-gradient(90deg,rgba(50,215,255,0.18),rgba(62,243,219,0.1))] text-[var(--text)] shadow-[0_12px_22px_-16px_rgba(50,215,255,0.75)]'
-                        : 'border-transparent text-[var(--text-muted)] hover:border-cyan-300/20 hover:bg-cyan-300/[0.08] hover:text-[var(--text)]'
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        'absolute bottom-2 left-1 top-2 w-[2px] rounded-full transition',
-                        active ? 'bg-[linear-gradient(180deg,#32d7ff,#3ef3db)]' : 'bg-transparent'
-                      )}
-                    />
-                    <Icon
-                      size={16}
-                      className={cn(
-                        'relative z-[1] shrink-0 transition',
-                        active ? 'text-cyan-100' : 'text-[var(--muted)] group-hover:text-cyan-100'
-                      )}
-                    />
-                    <span className="relative z-[1] flex-1 truncate">{item.label}</span>
-                    <ChevronRight
-                      size={14}
-                      className={cn(
-                        'relative z-[1] transition',
-                        active ? 'translate-x-0.5 text-cyan-100' : 'text-[var(--muted)]/70'
-                      )}
-                    />
-                  </Link>
-                );
-              })}
-            </div>
-          </section>
-        ))}
-      </div>
-
-      <div className="relative border-t border-[var(--border)]/80 p-4">
-        <div className="mb-3 rounded-2xl border border-[var(--border)] bg-[linear-gradient(165deg,rgba(14,30,47,0.92),rgba(8,19,34,0.82))] px-3 py-3">
-          <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-cyan-300/30 bg-cyan-300/12 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-100">
-            <Cpu size={10} />
-            Operator
-          </div>
-          <p className="truncate text-sm font-medium text-[var(--text)]">{username || 'Signed in'}</p>
-          <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-[var(--muted)]">{role || 'viewer'}</p>
-        </div>
-        <button
-          type="button"
-          onClick={onSignOut}
-          className="flex w-full items-center justify-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 text-sm font-medium text-[var(--text-muted)] transition hover:border-cyan-300/40 hover:bg-cyan-300/[0.08] hover:text-[var(--text)]"
-        >
-          <LogOut size={15} />
-          Sign out
-        </button>
-      </div>
+function DrawerList({
+  items,
+  pathname,
+  onNavigate,
+}: {
+  items: NavItem[];
+  pathname: string;
+  onNavigate: () => void;
+}) {
+  return (
+    <div className="space-y-2">
+      {items.map((item) => {
+        const Icon = ICONS[item.icon];
+        const active = isActivePath(pathname, item.href);
+        return (
+          <Link
+            key={item.href}
+            href={item.href}
+            onClick={onNavigate}
+            className={cn(
+              'flex items-start gap-3 rounded-[1.25rem] border px-3.5 py-3 transition',
+              active
+                ? 'border-cyan-300/24 bg-cyan-300/10'
+                : 'border-[var(--border)] bg-white/86 hover:border-cyan-300/20'
+            )}
+          >
+            <span
+              className={cn(
+                'mt-0.5 inline-flex h-9 w-9 items-center justify-center rounded-[0.95rem] border',
+                active
+                  ? 'border-cyan-300/24 bg-cyan-300/10 text-[var(--cyan-strong)]'
+                  : 'border-[var(--border)] bg-[var(--surface-soft)] text-[var(--muted)]'
+              )}
+            >
+              <Icon size={16} />
+            </span>
+            <span className="min-w-0">
+              <span className="block text-sm font-semibold text-[var(--text)]">{item.label}</span>
+              <span className="mt-1 block text-xs leading-5 text-[var(--text-muted)]">
+                {item.description}
+              </span>
+            </span>
+          </Link>
+        );
+      })}
     </div>
   );
 }
@@ -257,9 +190,16 @@ function SidebarPanel({
 export default function Nav({ initialSummary }: { initialSummary: PostureSummary | null }) {
   const pathname = usePathname();
   const { isAdmin, user } = useAuth();
-  const [mobileOpen, setMobileOpen] = useState(false);
-
+  const [open, setOpen] = useState(false);
   const visibleGroups = useMemo(() => getVisibleNavGroups(isAdmin), [isAdmin]);
+  const active = useMemo(() => getActiveNavItem(pathname, isAdmin), [pathname, isAdmin]);
+
+  const score =
+    initialSummary?.posture_score_avg != null
+      ? Math.round(Number(initialSummary.posture_score_avg))
+      : '--';
+  const alertPressure = initialSummary?.red ?? 0;
+  const attentionItems = (initialSummary?.red ?? 0) + (initialSummary?.amber ?? 0);
 
   const handleSignOut = async () => {
     try {
@@ -271,65 +211,200 @@ export default function Nav({ initialSummary }: { initialSummary: PostureSummary
 
   return (
     <>
-      <div className="sticky top-2 z-40 mb-5 lg:hidden">
-        <div className="overflow-hidden rounded-2xl border border-[var(--border)] bg-[linear-gradient(165deg,rgba(14,30,48,0.95),rgba(8,19,34,0.9))] shadow-[0_20px_30px_-24px_rgba(0,0,0,0.9)] backdrop-blur-xl">
-          <div className="flex items-center justify-between px-3 py-2.5">
-            <Brand compact />
-            <button
-              type="button"
-              aria-label="Open menu"
-              onClick={() => setMobileOpen(true)}
-              className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)] text-[var(--text)] transition hover:border-cyan-300/55 hover:text-cyan-100"
-            >
-              <Menu size={18} />
-            </button>
+      <header className="relative z-20">
+        <div className="relative overflow-hidden rounded-[2.3rem] border border-[var(--border)] bg-[rgba(255,255,255,0.78)] p-4 shadow-[var(--shadow-heavy)] backdrop-blur-2xl sm:p-5">
+          <div className="pointer-events-none absolute inset-x-10 top-0 h-px bg-gradient-to-r from-transparent via-cyan-200/55 to-transparent" />
+          <div className="pointer-events-none absolute -left-16 top-16 h-44 w-44 rounded-full bg-cyan-300/10 blur-3xl" />
+          <div className="pointer-events-none absolute right-[-2rem] top-[-1rem] h-44 w-44 rounded-full bg-emerald-300/10 blur-3xl" />
+
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(22rem,0.8fr)]">
+            <section className="relative overflow-hidden rounded-[1.9rem] bg-[linear-gradient(135deg,#08111c_0%,#12233c_36%,#0d5f8f_100%)] px-5 py-5 text-white sm:px-6 sm:py-6">
+              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.16),transparent_34%),radial-gradient(circle_at_bottom_left,rgba(31,183,166,0.18),transparent_32%)]" />
+              <div className="relative">
+                <div className="flex items-start justify-between gap-4">
+                  <BrandBlock />
+                  <button
+                    type="button"
+                    onClick={() => setOpen(true)}
+                    className="inline-flex h-11 w-11 items-center justify-center rounded-[1rem] border border-white/12 bg-white/10 text-white transition hover:bg-white/16 lg:hidden"
+                    aria-label="Open navigation"
+                  >
+                    <Menu size={18} />
+                  </button>
+                </div>
+
+                <div className="mt-6 flex flex-wrap items-center gap-2">
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-white/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-white/78">
+                    <Sparkles size={10} />
+                    New customer portal
+                  </span>
+                  <span className="inline-flex rounded-full border border-white/12 bg-white/8 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-white/58">
+                    Component-gallery inspired
+                  </span>
+                </div>
+
+                <div className="mt-5 max-w-3xl">
+                  <p className="text-[2.45rem] leading-[0.92] tracking-[-0.06em] text-white sm:text-[3.1rem]">
+                    A clearer product story for customers.
+                  </p>
+                  <p className="mt-4 max-w-2xl text-sm leading-7 text-white/74 sm:text-base">
+                    {active?.description ??
+                      'See coverage, priorities, and proof of progress without decoding an internal operations console.'}
+                  </p>
+                </div>
+
+                <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                  <OverviewMetric label="Security Score" value={score} />
+                  <OverviewMetric label="Needs Attention" value={attentionItems} />
+                  <OverviewMetric label="Live Pressure" value={alertPressure} />
+                </div>
+              </div>
+            </section>
+
+            <section className="grid gap-3">
+              <div className="rounded-[1.65rem] border border-[var(--border)] bg-[rgba(255,255,255,0.9)] p-4 shadow-[var(--shadow-soft)]">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--muted)]">
+                      Current page
+                    </p>
+                    <p className="mt-2 text-[1.65rem] leading-none tracking-[-0.05em] text-[var(--text)]">
+                      {active?.label ?? 'Executive Overview'}
+                    </p>
+                    <p className="mt-3 max-w-xl text-sm leading-6 text-[var(--text-muted)]">
+                      Jump anywhere, then use the page itself to explain risk, progress, and next
+                      steps.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setOpen(true)}
+                    className="hidden h-11 w-11 items-center justify-center rounded-[1rem] border border-[var(--border)] bg-[var(--surface-soft)] text-[var(--text)] transition hover:border-cyan-300/20 hover:text-[var(--cyan-strong)] lg:inline-flex"
+                    aria-label="Open navigation"
+                  >
+                    <Menu size={18} />
+                  </button>
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <CommandPalette isAdmin={isAdmin} />
+                  <Link href="/reports" className="btn-secondary">
+                    Share reporting
+                  </Link>
+                  <Link href="/incidents" className="btn-secondary">
+                    Review response
+                  </Link>
+                </div>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="rounded-[1.4rem] border border-[var(--border)] bg-[rgba(255,255,255,0.9)] p-4 shadow-[var(--shadow-soft)]">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
+                    Customer focus
+                  </p>
+                  <p className="mt-2 text-sm font-medium leading-6 text-[var(--text)]">
+                    Coverage, risk, and proof of progress.
+                  </p>
+                </div>
+                <div className="rounded-[1.4rem] border border-[var(--border)] bg-[rgba(255,255,255,0.9)] p-4 shadow-[var(--shadow-soft)]">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
+                    Signed in as
+                  </p>
+                  <p className="mt-2 truncate text-sm font-medium text-[var(--text)]">
+                    {user?.username || 'operator'}
+                  </p>
+                  <p className="mt-1 text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
+                    {user?.role || 'viewer'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleSignOut}
+                  className="flex items-center justify-between rounded-[1.4rem] border border-[var(--border)] bg-[rgba(255,255,255,0.9)] p-4 text-left shadow-[var(--shadow-soft)] transition hover:border-cyan-300/20 hover:text-[var(--text)]"
+                >
+                  <span>
+                    <span className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
+                      Session
+                    </span>
+                    <span className="mt-2 block text-sm font-medium text-[var(--text)]">
+                      Sign out
+                    </span>
+                  </span>
+                  <LogOut size={16} className="text-[var(--muted)]" />
+                </button>
+              </div>
+            </section>
+          </div>
+
+          <div className="mt-4 hidden gap-3 lg:grid xl:grid-cols-4">
+            {visibleGroups.map((group) => (
+              <GroupChips key={group.title} group={group} pathname={pathname} />
+            ))}
           </div>
         </div>
-      </div>
+      </header>
 
-      {mobileOpen && (
+      {open && (
         <>
           <button
             type="button"
-            aria-label="Close menu"
-            onClick={() => setMobileOpen(false)}
-            className="fixed inset-0 z-50 bg-[radial-gradient(circle_at_30%_20%,rgba(50,215,255,0.14),rgba(0,0,0,0.82))] backdrop-blur-md"
+            className="fixed inset-0 z-[70] bg-[rgba(14,18,28,0.22)] backdrop-blur-md"
+            onClick={() => setOpen(false)}
+            aria-label="Close navigation"
           />
-          <div className="fixed inset-y-0 left-0 z-[60] w-[min(88vw,22rem)] border-r border-[var(--border)] bg-[linear-gradient(180deg,rgba(14,31,51,0.98),rgba(8,19,34,0.96))] shadow-[0_28px_48px_-22px_rgba(0,0,0,0.96)] focus:outline-none lg:hidden">
-            <button
-              type="button"
-              aria-label="Close menu"
-              onClick={() => setMobileOpen(false)}
-              className="absolute right-3 top-3 inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface-elevated)] text-[var(--text)] transition hover:border-cyan-300/45"
-            >
-              <X size={16} />
-            </button>
-            <SidebarPanel
-              pathname={pathname}
-              groups={visibleGroups}
-              username={user?.username}
-              role={user?.role}
-              summary={initialSummary}
-              onSignOut={handleSignOut}
-              onNavigate={() => setMobileOpen(false)}
-            />
-          </div>
+          <aside className="fixed inset-y-0 right-0 z-[80] flex w-[min(94vw,34rem)] flex-col border-l border-[var(--border)] bg-[rgba(248,244,237,0.98)] shadow-[0_36px_90px_-28px_rgba(14,18,28,0.24)]">
+            <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-4">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
+                  Browse product
+                </p>
+                <p className="mt-2 text-3xl leading-none tracking-[-0.05em] text-[var(--text)]">
+                  All pages
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                className="inline-flex h-10 w-10 items-center justify-center rounded-[1rem] border border-[var(--border)] bg-white text-[var(--text)] transition hover:border-cyan-300/22"
+                aria-label="Close navigation"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-5 py-5">
+              {visibleGroups.map((group) => (
+                <section key={group.title}>
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[var(--muted)]">
+                      {group.title}
+                    </p>
+                    <span className="rounded-full border border-[var(--border)] bg-white/86 px-2 py-0.5 text-[10px] text-[var(--muted)]">
+                      {group.items.length}
+                    </span>
+                  </div>
+                  <DrawerList
+                    items={group.items}
+                    pathname={pathname}
+                    onNavigate={() => setOpen(false)}
+                  />
+                </section>
+              ))}
+            </div>
+
+            <div className="border-t border-[var(--border)] px-5 py-4">
+              <button
+                type="button"
+                onClick={handleSignOut}
+                className="flex w-full items-center justify-center gap-2 rounded-[1rem] border border-[var(--border)] bg-white px-3 py-2.5 text-sm text-[var(--text-muted)] transition hover:border-cyan-300/20 hover:text-[var(--text)]"
+              >
+                <LogOut size={14} />
+                Sign out
+              </button>
+            </div>
+          </aside>
         </>
       )}
-
-      <aside className="hidden lg:block lg:w-[20rem] lg:shrink-0">
-        <div className="relative sticky top-4 h-[calc(100vh-2rem)] overflow-hidden rounded-[1.75rem] border border-[var(--border)] bg-[linear-gradient(180deg,rgba(14,31,51,0.98),rgba(8,19,34,0.94))] shadow-[0_30px_58px_-34px_rgba(0,0,0,0.95)] backdrop-blur-xl">
-          <div className="pointer-events-none absolute inset-x-5 top-0 h-px bg-gradient-to-r from-transparent via-cyan-300/65 to-transparent" />
-          <SidebarPanel
-            pathname={pathname}
-            groups={visibleGroups}
-            username={user?.username}
-            role={user?.role}
-            summary={initialSummary}
-            onSignOut={handleSignOut}
-          />
-        </div>
-      </aside>
     </>
   );
 }

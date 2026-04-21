@@ -1,3 +1,4 @@
+from pydantic import computed_field
 from pydantic_settings import BaseSettings
 
 
@@ -19,9 +20,17 @@ class Settings(BaseSettings):
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24h; shorten for higher security
     JWT_REFRESH_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 30  # 30d
     # Default keeps local imports/test collection working when env is not preloaded.
-    # Runtime environments should still override this via POSTGRES_DSN.
-    POSTGRES_DSN: str = "postgresql+psycopg://secplat:secplat@localhost:5433/secplat"
+    # Runtime environments should still override these via env.
+    POSTGRES_DSN: str = (
+        "postgresql+psycopg://secplat_runtime:secplat_runtime@localhost:5433/secplat"
+    )
+    MIGRATIONS_POSTGRES_DSN: str = (
+        ""  # optional elevated DSN for startup migrations; fallback uses POSTGRES_DSN
+    )
     OPENSEARCH_URL: str = "http://localhost:9200"
+    OPENSEARCH_ASSETS_INDEX: str = "secplat-assets"
+    OPENSEARCH_EVENTS_INDEX: str = "secplat-events"
+    OPENSEARCH_STATUS_INDEX: str = "secplat-asset-status"
     REDIS_URL: str | None = None  # Phase 1: when set, API publishes scan jobs to Redis stream
     MAX_SCAN_DURATION_SECONDS: int = 900
     MAX_REQUESTS_PER_SECOND: int = 2
@@ -32,6 +41,16 @@ class Settings(BaseSettings):
     STALE_THRESHOLD_SECONDS: int = 300  # > this = amber/stale
     EXPECTED_CHECK_INTERVAL_SECONDS: int = 60  # ingestion runs every Ns
     LATENCY_SLO_MS: int = 200  # latency above = SLO breach
+    API_AVAILABILITY_SLO_TARGET: float = 0.995
+    API_P95_LATENCY_SLO_MS: int = 500
+    INGESTION_VISIBILITY_SLO_SECONDS: int = 120
+    ALERT_CREATION_SLO_SECONDS: int = 180
+    BACKGROUND_JOB_FRESHNESS_SLO_MINUTES: int = 30
+    ERROR_BUDGET_WINDOW_DAYS: int = 28
+    ERROR_BUDGET_FREEZE_THRESHOLD: float = 1.0
+    PLATFORM_SLI_MATERIALIZATION_INTERVAL_SECONDS: int = 60
+    PLATFORM_SLI_RUNTIME_MAX_AGE_SECONDS: int = 300
+    PLATFORM_REQUIRE_DURABLE_SLI: bool = False
     POSTURE_CACHE_TTL_SECONDS: float = (
         5.0  # reuse posture reads briefly to avoid duplicate OpenSearch work
     )
@@ -69,6 +88,10 @@ class Settings(BaseSettings):
 
     # Logging
     LOG_LEVEL: str = "INFO"
+    OTEL_ENABLED: bool = False
+    OTEL_SERVICE_NAME: str = "secplat-api"
+    OTEL_EXPORTER_OTLP_ENDPOINT: str = ""
+    OTEL_EXPORTER_OTLP_INSECURE: bool = True
 
     # Rate limiting (in-memory, per process)
     RATE_LIMIT_LOGIN_PER_MINUTE: int = 5
@@ -87,6 +110,9 @@ class Settings(BaseSettings):
     AI_PROVIDER: str = "ollama"  # ollama | openai
     AI_TIMEOUT_SECONDS: int = 60
     AI_TEMPERATURE: float = 0.2
+    AI_PROMPT_REDACTION_ENABLED: bool = True
+    AI_PROMPT_MAX_CHARS: int = 12000
+    AI_REQUIRE_HUMAN_APPROVAL_FOR_ACTIONS: bool = True
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "llama3.1:8b"
     OLLAMA_KEEP_ALIVE: str | None = "30m"
@@ -113,6 +139,11 @@ class Settings(BaseSettings):
     THREAT_INTEL_FEEDS_JSON: str = ""
     THREAT_INTEL_CROWDSEC_API_KEY: str = ""
     THREAT_INTEL_ABUSEIPDB_API_KEY: str = ""
+    SECURITY_CONTACT_EMAIL: str = "security@secplat.dev"
+    SECURITY_CONTACT_URL: str | None = "https://trust.secplat.dev/report"
+    SECURITY_POLICY_URL: str = "https://trust.secplat.dev/security"
+    SECURITY_REPORT_INTAKE_PATH: str = "/security/report"
+    SECURITY_TTL_DAYS: int = 90
     TELEMETRY_IMPORT_MAX_EVENTS: int = 20000
     TELEMETRY_MIRROR_TO_OPENSEARCH: bool = True
     TELEMETRY_OPENSEARCH_INDEX_PREFIX: str = "secplat-telemetry"
@@ -125,6 +156,19 @@ class Settings(BaseSettings):
     TELEMETRY_KEEPALIVE_MAX_SILENCE_MINUTES: int = 3
     TELEMETRY_KEEPALIVE_CREATE_ALERTS: bool = False
     TELEMETRY_KEEPALIVE_ASSET_KEY: str = ""
+    TENANCY_MODE: str = "single"  # single | multi
+    DEFAULT_TENANT_ID: str = "default"
+    REQUIRE_TENANT_HEADER: bool = False
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def DURABLE_SLI_REQUIRED(self) -> bool:  # noqa: N802
+        if self.PLATFORM_REQUIRE_DURABLE_SLI:
+            return True
+        return (self.ENV or "dev").strip().lower() in {"prod", "production", "staging"}
+
+    BACKUP_TARGET_RPO_HOURS: int = 24
+    BACKUP_TARGET_RTO_HOURS: int = 4
     NETWORK_ANOMALY_THRESHOLD: float = 2.5
     ENABLE_SCHEDULED_NETWORK_ANOMALY: bool = True
     SCHEDULED_NETWORK_ANOMALY_INTERVAL_MINUTES: int = 60

@@ -1,0 +1,25 @@
+{{- if .Values.hpa.workerWeb.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "secplat.fullname" . }}-worker-web
+  namespace: {{ include "secplat.namespace" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "secplat.fullname" . }}-worker-web
+    app.kubernetes.io/part-of: {{ include "secplat.name" . }}
+{{ include "secplat.labels" . | indent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "secplat.fullname" . }}-worker-web
+  minReplicas: {{ .Values.hpa.workerWeb.minReplicas }}
+  maxReplicas: {{ .Values.hpa.workerWeb.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.hpa.workerWeb.averageUtilization }}
+{{- end }}

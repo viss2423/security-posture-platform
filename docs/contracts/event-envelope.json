@@ -19,6 +19,7 @@
         "incident.updated",
         "incident.closed",
         "alert.triggered",
+        "notify.requested",
         "notify.sent",
         "notify.failed"
       ],
