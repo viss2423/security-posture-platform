@@ -7,9 +7,11 @@ metadata:
     app.kubernetes.io/name: secplat-api
     app.kubernetes.io/part-of: secplat
 spec:
+  type: NodePort
   selector:
     app.kubernetes.io/name: secplat-api
   ports:
     - name: http
       port: 8000
       targetPort: 8000
+      nodePort: 30800

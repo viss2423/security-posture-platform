@@ -107,6 +107,8 @@ function Stop-K8Lane {
         throw "Kubernetes is not reachable from the current kubectl context. Start or enable the cluster before switching lanes."
     }
     foreach ($name in $k8Deployments) {
+        kubectl -n $k8Namespace get deployment $name 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) { continue }
         kubectl -n $k8Namespace scale deployment $name --replicas=0 | Out-Null
         if ($LASTEXITCODE -ne 0) {
             throw "Failed to scale deployment $name to 0"
@@ -127,6 +129,8 @@ function Start-K8Lane {
         if (-not $k8ReplicaTarget.ContainsKey($name)) {
             continue
         }
+        kubectl -n $k8Namespace get deployment $name 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) { continue }
         $replicas = [int]$k8ReplicaTarget[$name]
         kubectl -n $k8Namespace scale deployment $name --replicas=$replicas | Out-Null
         if ($LASTEXITCODE -ne 0) {

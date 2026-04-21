@@ -100,8 +100,6 @@ services:
       - ./infra/observability/prometheus-compose.yml:/etc/prometheus/prometheus.yml:ro
       - ./infra/observability/alerts.yml:/etc/prometheus/alerts.yml:ro
     depends_on:
-      api:
-        condition: service_started
       redis:
         condition: service_healthy
 
@@ -281,23 +279,19 @@ services:
     volumes:
       - ./infra/web:/usr/share/nginx/html:ro
       - ./infra/web/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-    depends_on:
-      - api
 
   frontend:
     build:
       context: ./services/frontend
       dockerfile: Dockerfile
       args:
-        API_URL: http://api:8000
+        API_URL: ${FRONTEND_API_URL:-http://api:8000}
         NEXT_PUBLIC_GRAFANA_URL: ${NEXT_PUBLIC_GRAFANA_URL:-http://localhost:3001}
     container_name: secplat-frontend
     environment:
-      API_URL: http://api:8000
+      API_URL: ${FRONTEND_API_URL:-http://api:8000}
     ports:
       - "127.0.0.1:${FRONTEND_PORT:-3000}:3000"
-    depends_on:
-      - api
 
   ingestion:
     build:
@@ -305,7 +299,7 @@ services:
       dockerfile: services/ingestion/Dockerfile
     container_name: secplat-ingestion
     environment:
-      API_URL: http://api:8000
+      API_URL: ${INGESTION_API_URL:-http://api:8000}
       API_AUTH_USERNAME: ${INGESTION_SERVICE_USERNAME:-ingestion-service}
       API_AUTH_PASSWORD: ${INGESTION_SERVICE_PASSWORD:-ingestion-local-strong}
       OPENSEARCH_URL: http://opensearch:9200
@@ -315,8 +309,6 @@ services:
       EXAMPLE_COM_URL: ${EXAMPLE_COM_URL:-https://example.com}
       INGESTION_INTERVAL: "60"
     depends_on:
-      api:
-        condition: service_started
       opensearch:
         condition: service_healthy
     restart: unless-stopped
@@ -329,7 +321,7 @@ services:
     profiles:
       - scan
     environment:
-      API_URL: http://api:8000
+      API_URL: ${SCANNER_API_URL:-http://api:8000}
       SCANNER_API_USERNAME: ${SCANNER_SERVICE_USERNAME:-scanner-service}
       SCANNER_API_PASSWORD: ${SCANNER_SERVICE_PASSWORD:-scanner-local-strong}
       # internal_only = only lab (verify-web, juice-shop, api); internal_and_verified = + verified external_web assets
@@ -356,9 +348,6 @@ services:
       SCAN_INTERVAL_SECONDS: ${SCAN_INTERVAL_SECONDS:-21600}
     volumes:
       - ./:/workspace:ro
-    depends_on:
-      api:
-        condition: service_started
     restart: unless-stopped
 
   suricata:
