@@ -23,4 +23,7 @@ jobs:
         run: python -m compileall -q services/api/app
 
       - name: Result
-        run: echo "CI passed for commit ${{ github.sha }} on ${{ github.ref_name }}."
+        env:
+          SHA: ${{ github.sha }}
+          REF: ${{ github.ref_name }}
+        run: echo "CI passed for commit $SHA on $REF."
