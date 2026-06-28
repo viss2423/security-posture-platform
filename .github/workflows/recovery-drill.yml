@@ -1,8 +1,8 @@
 name: Recovery Drill
 
 on:
-  schedule:
-    - cron: "0 3 * * 1"
+  # Manual-only: this weekly backup/restore drill needs DB infra to run cleanly.
+  # Kept intact; run on demand from the Actions tab instead of auto-failing.
   workflow_dispatch:
 
 jobs:
