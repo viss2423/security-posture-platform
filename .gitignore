@@ -29,6 +29,7 @@ exports/
 artifacts/**/*.sql
 services/api/models/*.joblib
 services/api/exports/
+reports/zap/
 
 # Node
 node_modules/

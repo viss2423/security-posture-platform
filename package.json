@@ -10,6 +10,7 @@
     "start": "npm run start --prefix services/frontend",
     "frontend:install": "npm install --prefix services/frontend",
     "perf:check": "node scripts/frontend-performance-check.cjs",
+    "knip": "cd services/frontend && npx knip",
     "postinstall": "npm install --prefix services/frontend --ignore-scripts"
   }
 }
