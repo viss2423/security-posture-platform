@@ -33,3 +33,19 @@ services/api/exports/
 # Node
 node_modules/
 .next/
+.gitnexus
+
+# Scratch / experiment files
+/_*.py
+/_*.txt
+tmpcookies.txt
+tmp-kyverno/
+
+# Build caches
+*.tsbuildinfo
+
+# Generated cleanup artifacts
+services/artifacts/
+
+# Local AI-assistant settings (personal)
+.claude/
