@@ -8,7 +8,6 @@ on:
 jobs:
   release-gate-contract:
     name: release-gate-contract (${{ matrix.mode }})
-    if: ${{ matrix.mode == 'baseline' || vars.SECPLAT_STRICT_RELEASE_PROFILE == 'true' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
