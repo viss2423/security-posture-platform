@@ -181,6 +181,9 @@ services:
       JIRA_EMAIL: ${JIRA_EMAIL:-}
       JIRA_API_TOKEN: ${JIRA_API_TOKEN:-}
       JIRA_PROJECT_KEY: ${JIRA_PROJECT_KEY:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_API_URL: ${GITHUB_API_URL:-https://api.github.com}
+      GITHUB_MAX_REPOS: ${GITHUB_MAX_REPOS:-100}
       OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-}
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
@@ -387,8 +390,8 @@ services:
 
   worker-web:
     build:
-      context: ./services/worker-web
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/worker-web/Dockerfile
     container_name: secplat-worker-web
     cpus: 0.75
     mem_limit: 512m
@@ -415,8 +418,8 @@ services:
   # Phase 2.1: Deriver writes secplat-asset-status from secplat-events (replaces build_asset_status.sh in ingestion when used)
   deriver:
     build:
-      context: ./services/deriver
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/deriver/Dockerfile
     container_name: secplat-deriver
     environment:
       OPENSEARCH_URL: http://opensearch:9200
@@ -435,8 +438,8 @@ services:
 
   notifier:
     build:
-      context: ./services/notifier
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/notifier/Dockerfile
     container_name: secplat-notifier
     environment:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
@@ -459,8 +462,8 @@ services:
   # Phase 3.1: Correlator consumes secplat.events.correlation, creates incidents via API
   correlator:
     build:
-      context: ./services/correlator
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/correlator/Dockerfile
     container_name: secplat-correlator
     environment:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}

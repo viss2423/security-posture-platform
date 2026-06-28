@@ -74,6 +74,13 @@ class Settings(BaseSettings):
     JIRA_API_TOKEN: str | None = None
     JIRA_PROJECT_KEY: str | None = None  # default project when not passed in request
 
+    # GitHub posture connector (read-only). Token is a fine-grained / classic PAT
+    # with read-only scope; set via env, never committed.
+    GITHUB_TOKEN: str | None = None
+    GITHUB_API_URL: str = "https://api.github.com"
+    GITHUB_HTTP_TIMEOUT_SECONDS: int = 30
+    GITHUB_MAX_REPOS: int = 100
+
     # Retention: applied by POST /retention/apply (or cron calling it)
     EVENTS_RETENTION_DAYS: int = 90  # delete OpenSearch secplat-events older than this
     SNAPSHOTS_RETENTION_KEEP: int = 500  # keep this many newest report snapshots in Postgres

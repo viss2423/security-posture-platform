@@ -23,6 +23,7 @@ from app.detections import (
     run_correlation_pass_job,
     run_detection_rule_job,
 )
+from app.github_connector import launch_github_posture_job, run_github_posture_job
 from app.queue import publish_scan_job
 from app.repository_scan import launch_repository_scan_job, run_repository_scan_job
 from app.request_context import current_tenant_id, request_id_ctx
@@ -41,6 +42,7 @@ router = APIRouter()
 internal_router = APIRouter(prefix="/internal/jobs", tags=["internal-jobs"])
 
 ASYNC_JOB_TYPES = {
+    "github_posture",
     "web_exposure",
     "score_recompute",
     "repository_scan",
@@ -54,6 +56,7 @@ ASYNC_JOB_TYPES = {
     "correlation_pass",
 }
 WORKER_EXECUTABLE_JOB_TYPES = {
+    "github_posture",
     "web_exposure",
     "score_recompute",
     "repository_scan",
@@ -534,6 +537,8 @@ def _dispatch_queued_job(
         launch_detection_rule_scheduled_job(job_id)
     elif job_type == "correlation_pass":
         launch_correlation_pass_job(job_id)
+    elif job_type == "github_posture":
+        launch_github_posture_job(job_id)
     else:
         publish_scan_job(job_id, job_type, target_asset_id, requested_by or "")
 
@@ -1131,6 +1136,23 @@ def create_job(
                 ) from exc
             if numeric_rule_id <= 0:
                 raise HTTPException(status_code=400, detail="correlation_rule_id must be positive")
+    elif job_type == "github_posture":
+        if not isinstance(job_params, dict):
+            raise HTTPException(status_code=400, detail="job_params_json must be an object")
+        scope_type = str(job_params.get("scope_type") or "user").strip().lower()
+        if scope_type not in {"user", "org"}:
+            raise HTTPException(status_code=400, detail="scope_type must be 'user' or 'org'")
+        scope = str(job_params.get("scope") or "").strip()
+        if scope_type == "org" and not scope:
+            raise HTTPException(
+                status_code=400, detail="scope (org name) is required for org scans"
+            )
+        max_repos = int(job_params.get("max_repos") or settings.GITHUB_MAX_REPOS)
+        job_params = {
+            "scope_type": scope_type,
+            "scope": scope,
+            "max_repos": max(1, min(max_repos, 500)),
+        }
 
     q = text("""
       INSERT INTO scan_jobs(org_id, job_type, target_asset_id, requested_by, status, job_params_json)
@@ -1185,6 +1207,8 @@ def create_job(
         launch_detection_rule_scheduled_job(int(out["job_id"]))
     elif job_type == "correlation_pass":
         launch_correlation_pass_job(int(out["job_id"]))
+    elif job_type == "github_posture":
+        launch_github_posture_job(int(out["job_id"]))
     else:
         publish_scan_job(out["job_id"], job_type, asset_id, requested_by)
     return out
@@ -1297,7 +1321,8 @@ def claim_job(
                     'attack_surface_discovery',
                     'detection_rule_test',
                     'detection_rule_schedule',
-                    'correlation_pass'
+                    'correlation_pass',
+                    'github_posture'
                   )
                   AND (
                     j.status = 'queued'
@@ -1621,6 +1646,7 @@ def execute_job(
         "detection_rule_test": run_detection_rule_job,
         "detection_rule_schedule": run_detection_rule_job,
         "correlation_pass": run_correlation_pass_job,
+        "github_posture": run_github_posture_job,
     }
     runner = dispatchers.get(job_type)
     if not runner:
