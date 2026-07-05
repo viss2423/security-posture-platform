@@ -106,9 +106,15 @@ Supporting components:
 
 ```bash
 cd security-posture-platform
+cp .env.example .env   # then edit: at minimum set API_SECRET_KEY and the passwords
 docker compose up -d --build
 docker compose ps
 ```
+
+Open http://localhost:3000 and sign in with `admin` / `admin` (dev default — the API
+refuses this default when `ENV=prod`), or create your own account via **Create an
+account** on the login page (self-registered users get a read-only demo sandbox;
+promote them in **Team Access**).
 
 Default startup is the **lean local lane**: `frontend`, `api`, `postgres`, `opensearch`, `redis`, `ingestion`, plus local probe targets.
 
@@ -528,3 +534,15 @@ If you can reason about this system, you can reason about internal security tool
 * **Owner/criticality from Postgres:** Merge asset metadata into posture views
 * **Grafana drill-down:** Dashboard with `$asset` variable, linked from website asset detail
 * **OAuth or read-only role:** Second user or GitHub/Google login
+
+---
+
+## License
+
+SecPlat is open source under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0).
+
+You are free to self-host, study, and modify it. If you run a modified version
+as a network service, the AGPL requires you to publish your modifications.
+
+Want SecPlat without AGPL obligations, or run and managed for you? See
+[COMMERCIAL.md](COMMERCIAL.md) for hosted and commercial licensing options.
