@@ -18,15 +18,11 @@ repos:
     hooks:
       - id: gitleaks
 
-  - repo: local
-    hooks:
-      - id: semgrep
-        name: semgrep
-        entry: powershell -ExecutionPolicy Bypass -File scripts/run-semgrep.ps1
-        language: system
-        args: ["--config=auto", "--error", "--disable-version-check", "--skip-unknown-extensions"]
-        files: \.(py|js|ts|tsx)$
-        exclude: ^(services/api/scripts/|scripts/dev\.js)
+  # NOTE: Semgrep (SAST) runs in CI only — see .github/workflows/security-scan.yml.
+  # It is not a local pre-commit hook because semgrep hangs on Windows (even
+  # `semgrep --version` never returns), which wedges every commit. Run a full
+  # local scan on demand with `powershell scripts/sec-scan.ps1` on a machine
+  # where semgrep works, or rely on the CI gate.
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.6.9
