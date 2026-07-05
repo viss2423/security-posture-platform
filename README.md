@@ -1,43 +1,84 @@
-# Security Posture Platform
+# SecPlat — Security Posture Platform
 
-A local, containerised **security posture and observability lab** that demonstrates how security and reliability signals flow from running services → **OpenSearch** → **derived asset posture** → **Grafana dashboards + alerts**.
+**SecPlat is a self-hostable security posture platform.** Connect a data source
+(start with a read-only GitHub scan), and it turns raw security signals into
+prioritised findings, live posture scoring, alerts, incidents, and
+auditor-ready **SOC 2 evidence** — in one open-source workspace you fully control.
 
-The goal is to show **how security platforms are built internally** (CSPM / ASM / SIEM-lite), not just how dashboards are used.
-
-Everything runs locally using **Docker Compose**, is easy to inspect and break, and mirrors real internal security tooling patterns.
-
----
-
-## Key characteristics
-
-- Fully local (`127.0.0.1` only)
-- Event-driven (raw signals → derived posture)
-- Asset-centric (one current state per asset)
-- Cron-driven ingestion (no Prometheus required)
-- Grafana dashboards provisioned as code
+It is a real, working product: Next.js + FastAPI + PostgreSQL + OpenSearch,
+run with a single `docker compose up`. Open source under the
+[AGPL-3.0](LICENSE); managed hosting and commercial licensing are available (see
+[COMMERCIAL.md](COMMERCIAL.md)).
 
 ---
 
-## What’s running
+## Why teams use it
 
-| Service            | Purpose                                   | Port |
-|--------------------|-------------------------------------------|------|
-| **Frontend (Next.js)** | Main UI: login, overview, assets, alerts, reports, Grafana embed | 3002 |
-| API (FastAPI)      | Core backend, JWT auth, posture API (source of truth) | 8000 |
-| PostgreSQL         | Asset inventory & metadata                 | 5432 |
-| OpenSearch         | Events + derived asset status              | 9200 |
-| Redis              | Queue (Phase 1+); streams for jobs/notify  | 6379 |
-| Grafana            | Dashboards & alerting (read-only on OpenSearch) | 3001 |
-| Juice Shop         | Demo health-check target                   | 3000 |
-| verify-web (nginx) | Domain / ownership verification            | 8081 |
-| web (nginx)        | Simple static proxy to API (optional)      | 8082 |
-| ingestion          | Health + posture scripts every 60s (no host cron) | —    |
-
-All services are **local-only**. Nothing is exposed externally.
+- **Understand risk fast** — one live view of asset health, exposure, and the
+  findings that actually matter, instead of another raw alert firehose.
+- **Turn findings into compliance evidence** — SOC 2 controls mapped
+  automatically from live posture, exportable as an auditor-ready PDF.
+- **Operate incidents end to end** — alerts → triage → incidents → response, with
+  AI-assisted context and a full audit trail.
+- **Own your data** — self-hosted, no lock-in, and (verified) no telemetry: the
+  platform phones home to no one. See [SECURITY.md](SECURITY.md).
 
 ---
 
-## Data flow (architecture)
+## Try it in 5 minutes
+
+**Prerequisites:** Docker Engine + Docker Compose v2, and ~8 GB free RAM
+(OpenSearch is the heavy component). Works on Linux, macOS, and Windows — no WSL
+or host scripts required; all ingestion runs inside a container.
+
+```bash
+git clone https://github.com/viss2423/security-posture-platform
+cd security-posture-platform
+cp .env.example .env            # then edit: set API_SECRET_KEY + the passwords
+docker compose up -d --build
+docker compose ps               # wait until services are healthy (~1–2 min)
+```
+
+Then open **http://localhost:3000** and either:
+
+- **Sign in** with `admin` / `admin` (dev default — the API refuses this once
+  `ENV=prod`), which gives you the full operator workspace, or
+- **Create an account** on the login page for a self-service **demo sandbox**: a
+  read-only tour of every feature with sample data, safe to explore.
+
+That's it — nothing is exposed to your network (every port binds to `127.0.0.1`),
+so it's safe to run on your laptop.
+
+> **Deploying for a team or in production?** The defaults above are for local
+> evaluation. Read **[SECURITY.md](SECURITY.md)** first — it's a short checklist
+> (TLS, real secrets, `ENV=prod`, access control) that you must complete before
+> exposing SecPlat to anyone else.
+
+---
+
+## What you'll see (roles)
+
+SecPlat has three roles, so you can hand a demo login to anyone safely:
+
+| Role | Who | Access |
+|------|-----|--------|
+| **viewer** | self-registered / demo users | Read-only. Interactive demo sandbox (overview, assets, findings); every other feature shown as a static sample preview. Never sees real operator data. |
+| **analyst** | your security team | Full interactive workspace — alerts, incidents, telemetry, detections, automation, scans. |
+| **admin** | platform owners | Everything, plus user & access management. |
+
+Promote a demo user to analyst/admin under **Team Access** (admin only).
+
+---
+
+## Explore the product without installing
+
+The public landing page walks through the product, an interactive "how it works"
+flow, and a sample SOC 2 evidence experience — a good first stop before you
+self-host.
+
+---
+
+## Architecture at a glance
 
 **Single source of truth:** FastAPI reads from OpenSearch and exposes a **canonical asset state schema**. The website and reports use only this API. Grafana visualises the same data (read-only); it does not define business logic.
 
@@ -80,88 +121,79 @@ flowchart LR
   ST --> GF
 ```
 
-**In words:**
+**In words:** the **FastAPI** backend is the single source of truth — it reads
+raw signals from **OpenSearch**, derives canonical asset posture, and serves it to
+the **Next.js** frontend and to **Grafana** (read-only dashboards). Ingestion runs
+continuously in its own container. Business logic lives in the API, never in the
+dashboards.
 
-1. **Ingestion** (container) runs every 60s: health checks → `secplat-events`; `build_asset_status.sh` → latest event per asset → `secplat-asset-status`.
-2. **Website** (Next.js, port 3002) → **FastAPI** (posture summary, list, detail, reports) → **OpenSearch** (read). Login: JWT; pages: Overview, Assets, Asset detail (timeline, evidence, recommendations), Alerts, Reports (CSV + summary), Grafana embed.
-3. **Grafana** (port 3001) reads OpenSearch for dashboards and alert rules; it does not compute posture (FastAPI does).
+### Services and ports
 
-Supporting components:
+A default `docker compose up` starts the **lean local lane**. Every port binds to
+`127.0.0.1` — nothing is reachable from your network.
 
-- **verify-web**: static nginx for `/.well-known/secplat-verification.txt`
-- **web** (optional): nginx serving a simple static page + API proxy on 8082
+| Service | Purpose | URL (default) | Profile |
+|---------|---------|---------------|---------|
+| **Frontend** (Next.js) | Main UI — the app you log into | http://localhost:3000 | default |
+| **API** (FastAPI) | Backend, JWT auth, posture source of truth | http://localhost:8000 | default |
+| PostgreSQL | Asset inventory, users, findings, audit log | `localhost:5433` | default |
+| OpenSearch | Raw events + derived asset status | http://localhost:9200 | default |
+| Redis | Job queue and notify streams | `localhost:6379` | default |
+| ingestion | Runs health + posture builders every 60s | — | default |
+| Juice Shop | Sample scan/health target | http://localhost:3002 | default |
+| verify-web | Domain / ownership verification endpoint | http://localhost:8081 | default |
+| Grafana | Dashboards & alerting (read-only on OpenSearch) | http://localhost:3001 | `observability` |
+| worker-web | Processes queued scan jobs | — | `jobs` |
+
+Start optional components with their profile, e.g.:
+
+```bash
+docker compose --profile observability up -d grafana     # dashboards
+docker compose --profile jobs up -d worker-web           # scan job worker
+docker compose --profile cyberlab up -d suricata zeek cowrie  # live IDS/honeypot demo
+```
+
+> **Production / Kubernetes:** do not run the Compose app and the Kubernetes
+> workloads at the same time. The supported production path renders a signed
+> release bundle rather than using the placeholder digests under `infra/k8s`.
+> See the render/verify scripts under `services/api/scripts/` and
+> [docs/architecture.md](docs/architecture.md) for the Kubernetes path.
 
 ---
 
-## Getting started
+## Verify it's working
 
-### Prerequisites
-
-- Docker Engine
-- Docker Compose v2
-- **Linux/Ubuntu**: bash, curl, jq for running scripts on the host (optional; see below).
-- **Windows**: No WSL or bash required. All ingestion runs inside the `ingestion` container.
-
-### Start the stack
+After `docker compose up`, confirm the stack is healthy:
 
 ```bash
-cd security-posture-platform
-cp .env.example .env   # then edit: at minimum set API_SECRET_KEY and the passwords
-docker compose up -d --build
+# All services should show "running"/"healthy"
 docker compose ps
-```
 
-Open http://localhost:3000 and sign in with `admin` / `admin` (dev default — the API
-refuses this default when `ENV=prod`), or create your own account via **Create an
-account** on the login page (self-registered users get a read-only demo sandbox;
-promote them in **Team Access**).
-
-Default startup is the **lean local lane**: `frontend`, `api`, `postgres`, `opensearch`, `redis`, `ingestion`, plus local probe targets.
-
-Optional services are profile-gated:
-
-```bash
-docker compose --profile observability up -d grafana
-docker compose --profile jobs up -d worker-web
-docker compose --profile scan up -d scanner
-docker compose --profile optional-web up -d web
-docker compose --profile roadmap up -d deriver notifier correlator
-docker compose --profile cyberlab up -d suricata zeek cowrie
-```
-
-Do not run Compose app services and SecPlat Kubernetes app workloads at the same time. Use `scripts/runtime-lane-cutover.ps1` to enforce lane preflight checks during runtime switches.
-
-On **Windows**, this is enough: the `ingestion` service runs the health and posture scripts inside Docker every 60 seconds, so you don't run any scripts on the host. On **Linux**, you can either use the same (recommended) or run the scripts via cron as in the [Continuous ingestion](#continuous-ingestion-cron) section.
-
-### Production release bundle
-
-The supported production path is a rendered release bundle, not the placeholder digests committed under `infra/k8s`.
-
-```bash
-python services/api/scripts/render_release_bundle.py \
-  --image-map-json services/api/examples/release-images.example.json \
-  --out-dir artifacts/release-bundle \
-  --github-repository acme/security-posture-platform
-
-python services/api/scripts/verify_kyverno_admission.py \
-  --repo-root artifacts/release-bundle \
-  --policy-file infra/policy/kyverno/verify-secplat-images.yaml \
-  --require-real-attestors
-```
-
---- 
-
-## Sanity checks
-
-```bash
-# API health
+# API health — expect {"status":"ok"}
 curl http://localhost:8000/health
 
-# OpenSearch availability
+# OpenSearch is up
 curl http://localhost:9200 | head
+```
 
-# Domain verification token
-curl http://localhost:8081/.well-known/secplat-verification.txt
+Then open **http://localhost:3000**, sign in, and you should land on the
+**Overview** with a posture score and sample assets. Create a second account from
+the login page to see the read-only **demo sandbox**.
+
+### Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| `variable is not set` warnings on startup | You skipped `cp .env.example .env`. Copy it and re-run. |
+| Frontend won't load / port 3000 in use | Another app owns port 3000. Set `FRONTEND_PORT` in `.env` and restart. |
+| OpenSearch container keeps restarting | It needs RAM and a valid admin password. Ensure ~8 GB free and that `OPENSEARCH_INITIAL_ADMIN_PASSWORD` meets complexity rules (upper/lower/digit/symbol). |
+| API returns 503 on login | You set `ENV=prod` with the default `admin` password. Set `ADMIN_PASSWORD`/`ADMIN_PASSWORD_HASH` (see [SECURITY.md](SECURITY.md)). |
+| Grafana link 404s | Grafana is profile-gated: `docker compose --profile observability up -d grafana`. |
+
+Full teardown (removes data volumes too):
+
+```bash
+docker compose down -v
 ```
 
 ---
@@ -416,14 +448,14 @@ Requires `jq`. Checks for `posture_score`, `posture_state`, `staleness_seconds`,
 
 ## Website (main UI)
 
-Open **http://localhost:3002** after starting the stack.
+Open **http://localhost:3000** after starting the stack, and sign in (see
+[Try it in 5 minutes](#try-it-in-5-minutes) and [What you'll see (roles)](#what-youll-see-roles)).
 
-- **Login:** `admin` / `admin` (configurable via `ADMIN_USERNAME`, `ADMIN_PASSWORD`).
-- **Overview:** Green/amber/red counts, posture score, down assets list.
-- **Assets:** Table with status, criticality, owner, env; click for detail (timeline, evidence, recommendations, SLO).
-- **Alerts:** Currently firing (down assets from API) + link to Grafana alerting.
-- **Reports:** Summary (uptime %, avg latency, top incidents) + CSV export.
-- **Grafana:** Embedded posture dashboard (deep dive).
+The workspace groups pages into **Start Here** (onboarding, executive overview,
+dashboards), **Operate** (assets, findings, alerts, incidents, telemetry,
+detections, automation, attack surface & graph, scan jobs), **Assure**
+(compliance evidence, reports, policy, AI risk, audit trail), and **Admin** (team
+access). What a given user sees depends on their role.
 
 All API calls go through FastAPI (canonical schema). See [Testing](docs/TESTING-SECPLAT.md) for a full test plan.
 
@@ -502,28 +534,29 @@ docker compose config > /dev/null && echo "compose ok"
 
 ---
 
-## Security notes
+## Security
 
-* All ports are bound to `127.0.0.1`
-* OpenSearch security plugins disabled (local lab)
-* Grafana credentials configurable via `.env`
-
-This repository is a learning and experimentation environment, not a hardened production deployment.
+- **Local evaluation is safe by default:** every port binds to `127.0.0.1`, and
+  the platform sends no telemetry — all outbound calls are opt-in.
+- **The default compose config is for evaluation, not production.** OpenSearch
+  security is relaxed for local use, secrets carry placeholder defaults, and
+  traffic is plain HTTP.
+- **Before exposing SecPlat to anyone else, complete the hardening checklist in
+  [SECURITY.md](SECURITY.md)** (TLS, real secrets, `ENV=prod`, access control).
+- Found a vulnerability? See the reporting instructions in
+  [SECURITY.md](SECURITY.md) — please don't open a public issue.
 
 ---
 
-## Why this project exists
+## Documentation
 
-This project demonstrates:
-
-* How security signals are generated
-* How events are indexed
-* How posture is derived
-* How assets are tracked
-* How dashboards are provisioned
-* How alerting turns posture into detection
-
-If you can reason about this system, you can reason about internal security tooling used in real organisations.
+| Doc | What's in it |
+|-----|--------------|
+| [SECURITY.md](SECURITY.md) | Safe-by-default guarantees, production hardening checklist, vulnerability reporting |
+| [COMMERCIAL.md](COMMERCIAL.md) | Hosted service and commercial licensing options |
+| [LICENSE](LICENSE) | AGPL-3.0 license text |
+| [docs/architecture.md](docs/architecture.md) | Current and target architecture, service boundaries |
+| [docs/SECPLAT-CORPORATE-ROADMAP.md](docs/SECPLAT-CORPORATE-ROADMAP.md) | Phased plan toward queue-driven services and Kubernetes |
 
 ---
 
