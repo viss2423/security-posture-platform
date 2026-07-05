@@ -1,8 +1,11 @@
 name: Deploy — Cloudflare Pages
 
 on:
-  push:
-    branches: [main]
+  # Manual-only for now. This deploy needs Cloudflare secrets (CF_API_TOKEN,
+  # CF_ACCOUNT_ID) that aren't configured yet, AND the current @cloudflare/next-on-pages
+  # adapter supports only Next <=15.5.2 while this app is on Next 16 — so the build
+  # step will fail until we move to @opennextjs/cloudflare (or pin Next 15).
+  # Re-enable `push` once hosting is set up. Run on demand from the Actions tab.
   workflow_dispatch:
 
 concurrency:
