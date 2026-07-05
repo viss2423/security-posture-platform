@@ -334,7 +334,7 @@ export default function AssetsPageClient({ items }: AssetsPageClientProps) {
                   className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
                     active
                       ? 'border-cyan-300/20 bg-cyan-300/08 text-[var(--cyan-strong)]'
-                      : 'border-[var(--border)] bg-white text-[var(--text-muted)] hover:border-cyan-300/20 hover:text-[var(--text)]'
+                      : 'border-[var(--border)] bg-[var(--surface-soft)] text-[var(--text-muted)] hover:border-cyan-300/20 hover:text-[var(--text)]'
                   }`}
                 >
                   {option.label}

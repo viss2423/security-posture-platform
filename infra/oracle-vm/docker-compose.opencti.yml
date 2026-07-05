@@ -1,0 +1,170 @@
+version: '3.8'
+
+# OpenCTI — STIX-structured threat intelligence platform
+# Access: http://<VM_IP>:8090  default creds: admin@opencti.io / ${OPENCTI_ADMIN_PASSWORD}
+# Requires vm.max_map_count=1048575: sysctl -w vm.max_map_count=1048575
+
+services:
+  opencti:
+    image: opencti/platform:6.4.4
+    environment:
+      NODE_OPTIONS: --max-old-space-size=8096
+      APP__PORT: 8090
+      APP__BASE_URL: http://${ORACLE_VM_HOST}:8090
+      APP__ADMIN__EMAIL: admin@opencti.io
+      APP__ADMIN__PASSWORD: ${OPENCTI_ADMIN_PASSWORD}
+      APP__ADMIN__TOKEN: ${OPENCTI_ADMIN_TOKEN}
+      APP__APP_LOGS__LOGS_LEVEL: error
+      REDIS__HOSTNAME: opencti-redis
+      REDIS__PORT: 6379
+      ELASTICSEARCH__URL: http://opencti-elasticsearch:9200
+      MINIO__ENDPOINT: opencti-minio
+      MINIO__PORT: 9000
+      MINIO__USE_SSL: 'false'
+      MINIO__ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO__SECRET_KEY: ${MINIO_SECRET_KEY}
+      RABBITMQ__HOSTNAME: opencti-rabbitmq
+      RABBITMQ__PORT: 5672
+      RABBITMQ__PORT_MANAGEMENT: 15672
+      RABBITMQ__MANAGEMENT_SSL: 'false'
+      RABBITMQ__USERNAME: opencti
+      RABBITMQ__PASSWORD: ${RABBITMQ_PASSWORD}
+      SMTP__HOSTNAME: ''
+      PROVIDERS__LOCAL__STRATEGY: LocalStrategy
+    ports:
+      - '8090:8090'
+    depends_on:
+      opencti-redis:
+        condition: service_healthy
+      opencti-elasticsearch:
+        condition: service_healthy
+      opencti-minio:
+        condition: service_healthy
+      opencti-rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [opencti]
+
+  # MISP threat intel connector — pulls IOCs into OpenCTI automatically
+  connector-misp:
+    image: opencti/connector-misp:6.4.4
+    environment:
+      OPENCTI_URL: http://opencti:8090
+      OPENCTI_TOKEN: ${OPENCTI_ADMIN_TOKEN}
+      CONNECTOR_ID: ${MISP_CONNECTOR_ID}
+      CONNECTOR_NAME: MISP
+      CONNECTOR_SCOPE: misp-event
+      CONNECTOR_LOG_LEVEL: error
+      MISP_URL: http://${ORACLE_VM_HOST}:80
+      MISP_REFERENCE_URL: http://${ORACLE_VM_HOST}:80
+      MISP_KEY: ${MISP_API_KEY}
+      MISP_SSL_VERIFY: 'false'
+      MISP_CREATE_REPORTS: 'true'
+    depends_on: [opencti]
+    restart: unless-stopped
+    networks: [opencti]
+
+  # CISA KEV connector — pulls confirmed exploited CVEs
+  connector-cisa-kev:
+    image: opencti/connector-cisa-known-exploited-vulnerabilities:6.4.4
+    environment:
+      OPENCTI_URL: http://opencti:8090
+      OPENCTI_TOKEN: ${OPENCTI_ADMIN_TOKEN}
+      CONNECTOR_ID: ${CISA_CONNECTOR_ID}
+      CONNECTOR_NAME: CISA KEV
+      CONNECTOR_SCOPE: vulnerability
+      CONNECTOR_LOG_LEVEL: error
+      CONNECTOR_DURATION_PERIOD: P1D
+    depends_on: [opencti]
+    restart: unless-stopped
+    networks: [opencti]
+
+  # AlienVault OTX connector — crowd-sourced IOC feed
+  connector-alienvault:
+    image: opencti/connector-alienvault:6.4.4
+    environment:
+      OPENCTI_URL: http://opencti:8090
+      OPENCTI_TOKEN: ${OPENCTI_ADMIN_TOKEN}
+      CONNECTOR_ID: ${ALIENVAULT_CONNECTOR_ID}
+      CONNECTOR_NAME: AlienVault
+      CONNECTOR_SCOPE: alienvault
+      CONNECTOR_LOG_LEVEL: error
+      ALIENVAULT_BASE_URL: https://otx.alienvault.com
+      ALIENVAULT_API_KEY: ${ALIENVAULT_API_KEY}
+      ALIENVAULT_TLP: White
+      ALIENVAULT_CREATE_OBSERVABLES: 'true'
+      ALIENVAULT_PULSE_START_TIMESTAMP: '2024-01-01T00:00:00'
+      ALIENVAULT_INTERVAL_SEC: 1800
+    depends_on: [opencti]
+    restart: unless-stopped
+    networks: [opencti]
+
+  opencti-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks: [opencti]
+
+  opencti-elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.4
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: 'false'
+      ES_JAVA_OPTS: '-Xms1g -Xmx1g'
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - opencti-esdata:/usr/share/elasticsearch/data
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -sf http://localhost:9200/_cluster/health || exit 1']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks: [opencti]
+
+  opencti-minio:
+    image: minio/minio:RELEASE.2024-11-07T00-52-20Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
+    volumes:
+      - opencti-minio:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks: [opencti]
+
+  opencti-rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: opencti
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    volumes:
+      - opencti-rabbitmq:/var/lib/rabbitmq
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks: [opencti]
+
+volumes:
+  opencti-esdata:
+  opencti-minio:
+  opencti-rabbitmq:
+
+networks:
+  opencti:
+    driver: bridge

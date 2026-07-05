@@ -104,12 +104,17 @@ class Settings(BaseSettings):
     RATE_LIMIT_LOGIN_PER_MINUTE: int = 5
     RATE_LIMIT_RETENTION_PER_HOUR: int = 10
 
-    # OIDC / SSO (Phase B.1). When set, "Sign in with SSO" is available; users must exist in users table (username = IdP preferred_username or email).
+    # Self-service signup. When true, POST /auth/register creates viewer accounts.
+    ALLOW_SELF_REGISTRATION: bool = True
+
+    # OIDC / SSO (Phase B.1). When set, "Sign in with SSO" is available.
     OIDC_ISSUER_URL: str | None = None  # e.g. https://login.microsoftonline.com/TENANT_ID/v2.0
     OIDC_CLIENT_ID: str | None = None
     OIDC_CLIENT_SECRET: str | None = None
     OIDC_REDIRECT_URI: str | None = None  # e.g. http://localhost:8000/auth/oidc/callback
     OIDC_SCOPES: str = "openid profile email"
+    # When true, first-time SSO users are auto-created as viewers; when false they must exist in the users table.
+    OIDC_AUTO_PROVISION: bool = True
     FRONTEND_URL: str = "http://localhost:3000"  # redirect here after SSO with #access_token=...
 
     # AI enrichment (Phase AI-1): incident summary, finding explanation, anomaly notes.

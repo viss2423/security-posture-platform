@@ -612,7 +612,12 @@ export default function DetectionsPage() {
         {runs.length === 0 ? (
           <p className="text-sm text-[var(--muted)]">No detection runs yet.</p>
         ) : (
-          <div className="overflow-x-auto">
+          <div
+            className="overflow-x-auto"
+            tabIndex={0}
+            role="region"
+            aria-label="Detection rules"
+          >
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-[var(--border)] text-left text-xs uppercase tracking-[0.16em] text-[var(--muted)]">

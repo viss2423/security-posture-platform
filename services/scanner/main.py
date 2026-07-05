@@ -8,10 +8,17 @@ import base64
 import json
 import logging
 import os
-import sys
 import time
 from datetime import UTC, datetime
 from urllib.parse import quote, urlencode
+from secplat_telemetry import configure_logging
+from secplat_telemetry import configure_logging
+
+configure_logging(service_name="secplat-scanner")
+logger = logging.getLogger("scanner")
+
+configure_logging(service_name="secplat-scanner")
+logger = logging.getLogger("scanner")
 
 import httpx
 from config import (
@@ -51,69 +58,6 @@ TOKEN_REFRESH_SKEW_SECONDS = int(os.getenv("SCANNER_TOKEN_REFRESH_SKEW_SECONDS",
 _api_access_token: str | None = None
 _api_access_token_expiry: float = 0.0
 
-_STANDARD_ATTRS = {
-    "name",
-    "msg",
-    "args",
-    "levelname",
-    "levelno",
-    "pathname",
-    "filename",
-    "module",
-    "exc_info",
-    "exc_text",
-    "stack_info",
-    "lineno",
-    "funcName",
-    "created",
-    "msecs",
-    "relativeCreated",
-    "thread",
-    "threadName",
-    "processName",
-    "process",
-}
-
-
-class JsonFormatter(logging.Formatter):
-    def __init__(self, service: str) -> None:
-        super().__init__()
-        self.service = service
-
-    def format(self, record: logging.LogRecord) -> str:
-        payload = {
-            "ts": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-            "level": record.levelname.lower(),
-            "logger": record.name,
-            "message": record.getMessage(),
-            "service": self.service,
-            "pid": os.getpid(),
-        }
-        for key, value in record.__dict__.items():
-            if key in _STANDARD_ATTRS or key in payload:
-                continue
-            try:
-                json.dumps({key: value})
-                payload[key] = value
-            except Exception:
-                payload[key] = str(value)
-        if record.exc_info:
-            payload["exception"] = self.formatException(record.exc_info)
-        return json.dumps(payload, ensure_ascii=True)
-
-
-def configure_logging() -> None:
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(JsonFormatter(service="secplat-scanner"))
-    root = logging.getLogger()
-    root.handlers = [handler]
-    root.setLevel(logging.INFO)
-
-
-configure_logging()
-logger = logging.getLogger("scanner")
-
-
 def _parse_api_retryable(response: httpx.Response) -> bool:
     if response.status_code in RETRYABLE_STATUS:
         return True
@@ -125,7 +69,6 @@ def _parse_api_retryable(response: httpx.Response) -> bool:
     if isinstance(error_obj, dict) and isinstance(error_obj.get("retryable"), bool):
         return bool(error_obj["retryable"])
     return False
-
 
 def _parse_error_message(response: httpx.Response) -> str:
     try:
@@ -141,7 +84,6 @@ def _parse_error_message(response: httpx.Response) -> str:
         pass
     return (response.text or response.reason_phrase or "request failed").strip()
 
-
 def _is_retryable_transport_error(exc: Exception) -> bool:
     return isinstance(
         exc,
@@ -155,7 +97,6 @@ def _is_retryable_transport_error(exc: Exception) -> bool:
         ),
     )
 
-
 def _decode_jwt_exp(token: str) -> float:
     try:
         parts = token.split(".")
@@ -168,7 +109,6 @@ def _decode_jwt_exp(token: str) -> float:
         return float(exp) if isinstance(exp, (int, float)) else 0.0
     except Exception:
         return 0.0
-
 
 def _login_access_token() -> str | None:
     global _api_access_token, _api_access_token_expiry
@@ -218,7 +158,6 @@ def _login_access_token() -> str | None:
         )
         return None
 
-
 def _get_auth_headers(force_refresh: bool = False) -> dict[str, str]:
     global _api_access_token
     should_refresh = force_refresh or not _api_access_token
@@ -229,7 +168,6 @@ def _get_auth_headers(force_refresh: bool = False) -> dict[str, str]:
     if not _api_access_token:
         return {}
     return {"Authorization": f"Bearer {_api_access_token}"}
-
 
 def _api_request_raw(
     method: str,
@@ -293,7 +231,6 @@ def _api_request_raw(
             time.sleep(2 ** (attempt - 1))
     return None
 
-
 def _api_request(
     method: str, path: str, *, json_body: dict | None = None, timeout: float = 10.0
 ) -> httpx.Response | None:
@@ -301,7 +238,6 @@ def _api_request(
     if response is None or response.status_code >= 400:
         return None
     return response
-
 
 def get_verified_targets() -> list[tuple[str, str]]:
     """Fetch assets with verified=true; return (url, asset_key). URL from address or https://asset_key."""
@@ -348,7 +284,6 @@ def get_verified_targets() -> list[tuple[str, str]]:
         targets.append((url, asset_key))
     return targets
 
-
 def get_all_targets() -> list[tuple[str, str]]:
     """Internal + (if scope internal_and_verified) verified external."""
     seen_urls = set()
@@ -363,7 +298,6 @@ def get_all_targets() -> list[tuple[str, str]]:
                 seen_urls.add(url)
                 out.append((url, key))
     return out
-
 
 def submit_finding(finding: dict, asset_key: str) -> bool:
     """POST one finding to API. Returns True on success."""
@@ -391,7 +325,6 @@ def submit_finding(finding: dict, asset_key: str) -> bool:
     r = _api_request("POST", "/findings/", json_body=payload, timeout=10.0)
     return r is not None
 
-
 def _empty_scan_stats(enabled: bool) -> dict[str, int | bool]:
     return {
         "enabled": enabled,
@@ -399,7 +332,6 @@ def _empty_scan_stats(enabled: bool) -> dict[str, int | bool]:
         "submitted": 0,
         "resolved": 0,
     }
-
 
 def _ensure_repository_asset(
     *,
@@ -449,7 +381,6 @@ def _ensure_repository_asset(
     )
     return created is not None
 
-
 def _list_findings_for_source(asset_key: str, source: str, *, limit: int = 500) -> list[dict]:
     query = urlencode(
         {
@@ -467,7 +398,6 @@ def _list_findings_for_source(asset_key: str, source: str, *, limit: int = 500) 
         return []
     return payload if isinstance(payload, list) else []
 
-
 def _update_finding_status(finding_id: int, status: str) -> bool:
     response = _api_request(
         "PATCH",
@@ -476,7 +406,6 @@ def _update_finding_status(finding_id: int, status: str) -> bool:
         timeout=10.0,
     )
     return response is not None
-
 
 def _reconcile_findings_for_source(asset_key: str, source: str, current_keys: set[str]) -> int:
     resolved = 0
@@ -491,7 +420,6 @@ def _reconcile_findings_for_source(asset_key: str, source: str, current_keys: se
         if isinstance(finding_id, int) and _update_finding_status(finding_id, "remediated"):
             resolved += 1
     return resolved
-
 
 def _run_dependency_scan() -> dict[str, int | bool]:
     stats = _empty_scan_stats(DEPENDENCY_SCAN_ENABLED)
@@ -566,7 +494,6 @@ def _run_dependency_scan() -> dict[str, int | bool]:
         },
     )
     return stats
-
 
 def _run_trivy_scan() -> dict[str, int | bool]:
     stats = _empty_scan_stats(TRIVY_SCAN_ENABLED)
@@ -644,7 +571,6 @@ def _run_trivy_scan() -> dict[str, int | bool]:
     )
     return stats
 
-
 def run_once() -> None:
     targets = get_all_targets()
     logger.info(
@@ -696,7 +622,6 @@ def run_once() -> None:
             "trivy_findings_resolved": trivy_stats["resolved"],
         },
     )
-
 
 def main() -> None:
     if SCOPE not in ("internal_only", "internal_and_verified"):
@@ -751,7 +676,6 @@ def main() -> None:
                 },
             )
         time.sleep(SCAN_INTERVAL_SECONDS)
-
 
 if __name__ == "__main__":
     main()

@@ -39,8 +39,9 @@ function humanizeSegment(segment: string): string {
 
 export default function AppTopBar() {
   const pathname = usePathname();
-  const { isAdmin, user } = useAuth();
-  const active = getActiveNavItem(pathname, isAdmin);
+  const { canMutate, user } = useAuth();
+  const role = user?.role ?? 'viewer';
+  const active = getActiveNavItem(pathname, role);
   const [copied, setCopied] = useState(false);
 
   const parts = pathname.split('/').filter(Boolean);
@@ -51,10 +52,10 @@ export default function AppTopBar() {
 
   const commandRoutes = useMemo(
     () =>
-      getVisibleNavGroups(isAdmin)
+      getVisibleNavGroups(role)
         .flatMap((group) => group.items)
         .slice(0, 5),
-    [isAdmin]
+    [role]
   );
 
   useEffect(() => {
@@ -102,7 +103,7 @@ export default function AppTopBar() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <LazyCommandPalette isAdmin={isAdmin} />
+            <LazyCommandPalette />
             <button
               type="button"
               onClick={handleCopyLink}
@@ -116,13 +117,15 @@ export default function AppTopBar() {
               {copied ? <Check size={14} /> : <Copy size={14} />}
               {copied ? 'Copied' : 'Copy link'}
             </button>
-            <Link
-              href="/incidents"
-              className="inline-flex items-center gap-2 rounded-[1rem] border border-[var(--border)] bg-white px-3 py-2 text-sm text-[var(--text-muted)] transition hover:border-cyan-300/18 hover:text-[var(--text)]"
-            >
-              <BriefcaseBusiness size={14} />
-              Response center
-            </Link>
+            {canMutate && (
+              <Link
+                href="/incidents"
+                className="inline-flex items-center gap-2 rounded-[1rem] border border-[var(--border)] bg-white px-3 py-2 text-sm text-[var(--text-muted)] transition hover:border-cyan-300/18 hover:text-[var(--text)]"
+              >
+                <BriefcaseBusiness size={14} />
+                Response center
+              </Link>
+            )}
             <div className="rounded-[1rem] border border-[var(--border)] bg-white px-3 py-2 text-right">
               <p className="text-[10px] uppercase tracking-[0.16em] text-[var(--muted)]">
                 {user?.role || 'viewer'}

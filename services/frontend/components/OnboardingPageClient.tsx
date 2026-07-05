@@ -45,8 +45,14 @@ function countAlerts(alerts: AlertsResponse | null): number {
   return alerts.firing.length + alerts.acked.length + alerts.suppressed.length + alerts.resolved.length;
 }
 
+function isPermissionErrorMessage(message: string | null | undefined): boolean {
+  const normalized = (message || '').toLowerCase();
+  return normalized.includes('insufficient permissions') || normalized.includes('403');
+}
+
 export default function OnboardingPageClient() {
   const { canMutate, isAdmin, user } = useAuth();
+  const viewerMode = !canMutate;
   const [authConfigLoaded, setAuthConfigLoaded] = useState(false);
   const [oidcEnabled, setOidcEnabled] = useState(false);
   const [assets, setAssets] = useState<AssetInventoryItem[]>([]);
@@ -124,20 +130,21 @@ export default function OnboardingPageClient() {
       detectionsResult,
       alertsResult,
       incidentsResult,
-    ].filter((result) => result.status === 'rejected');
+    ]
+      .filter((result) => result.status === 'rejected')
+      .map((result) =>
+        result.status === 'rejected' && result.reason instanceof Error
+          ? result.reason.message
+          : 'Request failed'
+      )
+      .filter((message) => !(viewerMode && isPermissionErrorMessage(message)));
     setError(
       failures.length > 0
-        ? failures
-            .map((result) =>
-              result.status === 'rejected' && result.reason instanceof Error
-                ? result.reason.message
-                : 'Request failed'
-            )
-            .join(' | ')
+        ? failures.join(' | ')
         : null
     );
     setLoading(false);
-  }, [selectedAssetKey]);
+  }, [selectedAssetKey, viewerMode]);
 
   useEffect(() => {
     void load();
@@ -336,9 +343,15 @@ export default function OnboardingPageClient() {
               <Link href="/overview" className="btn-secondary text-sm">
                 Open overview
               </Link>
-              <Link href="/jobs" className="btn-secondary text-sm">
-                Open jobs
-              </Link>
+              {canMutate ? (
+                <Link href="/jobs" className="btn-secondary text-sm">
+                  Open jobs
+                </Link>
+              ) : (
+                <Link href="/findings" className="btn-secondary text-sm">
+                  Explore findings
+                </Link>
+              )}
             </div>
           </div>
           <div className="hero-stat-grid">
@@ -365,6 +378,25 @@ export default function OnboardingPageClient() {
           </div>
         </div>
       </section>
+
+      {viewerMode && (
+        <section className="section-panel animate-in">
+          <div className="section-head">
+            <div>
+              <h2 className="section-title">Viewer sandbox</h2>
+              <p className="section-head-copy">
+                This account is intentionally limited to demo-scoped assets and findings so you can
+                explore the product without seeing live operator data.
+              </p>
+            </div>
+            <span className="stat-chip">Read only</span>
+          </div>
+          <p className="text-sm leading-7 text-[var(--text-muted)]">
+            Asset creation, telemetry ingestion, detections, alerts, incidents, and demo reset
+            controls stay with analyst or admin accounts.
+          </p>
+        </section>
+      )}
 
       <section className="command-lane animate-in">
         <div className="command-lane-grid">
@@ -433,6 +465,12 @@ export default function OnboardingPageClient() {
             <span className="stat-chip">{assets.length} assets</span>
           </div>
           <div className="grid gap-4">
+            {viewerMode && (
+              <p className="text-sm leading-7 text-[var(--text-muted)]">
+                Viewer accounts can inspect the seeded demo inventory here. Switch to an analyst or
+                admin account to register new assets.
+              </p>
+            )}
             <label className="text-sm text-[var(--muted)]">
               Asset key
               <input
@@ -482,6 +520,7 @@ export default function OnboardingPageClient() {
                 {busyAction === 'asset' ? 'Saving...' : 'Create asset'}
               </button>
               <select
+                aria-label="Select asset"
                 value={selectedAssetKey}
                 onChange={(event) => setSelectedAssetKey(event.target.value)}
                 className="input max-w-xs text-sm"
@@ -509,6 +548,12 @@ export default function OnboardingPageClient() {
             <span className="stat-chip">{selectedAssetKey || 'No asset selected'}</span>
           </div>
           <div className="grid gap-3">
+            {viewerMode && (
+              <p className="text-sm leading-7 text-[var(--text-muted)]">
+                Signal generation and incident creation are operator workflows, so this viewer
+                account stays in browse-only mode.
+              </p>
+            )}
             <button
               type="button"
               onClick={() => void handleSampleTelemetry()}
@@ -535,24 +580,49 @@ export default function OnboardingPageClient() {
             </button>
           </div>
           <div className="mt-5 grid gap-3 md:grid-cols-3">
-            <Link
-              href="/telemetry"
-              className="rounded-2xl border border-[var(--border)] bg-[var(--surface-elevated)]/40 p-4 text-sm text-[var(--text)]"
-            >
-              Telemetry
-            </Link>
-            <Link
-              href="/alerts"
-              className="rounded-2xl border border-[var(--border)] bg-[var(--surface-elevated)]/40 p-4 text-sm text-[var(--text)]"
-            >
-              Alerts
-            </Link>
-            <Link
-              href="/incidents"
-              className="rounded-2xl border border-[var(--border)] bg-[var(--surface-elevated)]/40 p-4 text-sm text-[var(--text)]"
-            >
-              Incidents
-            </Link>
+            {canMutate ? (
+              <>
+                <Link
+                  href="/telemetry"
+                  className="rounded-2xl border border-[var(--border)] bg-[var(--surface-elevated)]/40 p-4 text-sm text-[var(--text)]"
+                >
+                  Telemetry
+                </Link>
+                <Link
+                  href="/alerts"
+                  className="rounded-2xl border border-[var(--border)] bg-[var(--surface-elevated)]/40 p-4 text-sm text-[var(--text)]"
+                >
+                  Alerts
+                </Link>
+                <Link
+                  href="/incidents"
+                  className="rounded-2xl border border-[var(--border)] bg-[var(--surface-elevated)]/40 p-4 text-sm text-[var(--text)]"
+                >
+                  Incidents
+                </Link>
+              </>
+            ) : (
+              <>
+                <Link
+                  href="/assets"
+                  className="rounded-2xl border border-[var(--border)] bg-[var(--surface-elevated)]/40 p-4 text-sm text-[var(--text)]"
+                >
+                  Assets
+                </Link>
+                <Link
+                  href="/findings"
+                  className="rounded-2xl border border-[var(--border)] bg-[var(--surface-elevated)]/40 p-4 text-sm text-[var(--text)]"
+                >
+                  Findings
+                </Link>
+                <Link
+                  href="/overview"
+                  className="rounded-2xl border border-[var(--border)] bg-[var(--surface-elevated)]/40 p-4 text-sm text-[var(--text)]"
+                >
+                  Overview
+                </Link>
+              </>
+            )}
           </div>
         </div>
       </section>
@@ -603,24 +673,30 @@ export default function OnboardingPageClient() {
               </p>
             </div>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => void handleSeedDemo()}
-              disabled={!isAdmin || busyAction === 'demo-seed'}
-              className="btn-secondary text-sm"
-            >
-              {busyAction === 'demo-seed' ? 'Refreshing...' : 'Seed demo'}
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleResetDemo()}
-              disabled={!isAdmin || busyAction === 'demo-reset'}
-              className="btn-primary text-sm"
-            >
-              {busyAction === 'demo-reset' ? 'Resetting...' : 'Reset demo'}
-            </button>
-          </div>
+          {isAdmin ? (
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void handleSeedDemo()}
+                disabled={busyAction === 'demo-seed'}
+                className="btn-secondary text-sm"
+              >
+                {busyAction === 'demo-seed' ? 'Refreshing...' : 'Seed demo'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleResetDemo()}
+                disabled={busyAction === 'demo-reset'}
+                className="btn-primary text-sm"
+              >
+                {busyAction === 'demo-reset' ? 'Resetting...' : 'Reset demo'}
+              </button>
+            </div>
+          ) : (
+            <p className="text-sm leading-7 text-[var(--text-muted)]">
+              Demo reset controls are reserved for admins.
+            </p>
+          )}
         </div>
         {!isAdmin && (
           <p className="mt-4 text-sm text-[var(--muted)]">

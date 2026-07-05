@@ -360,7 +360,12 @@ export default function AttackSurfacePage() {
         {exposures.length === 0 ? (
           <p className="text-sm text-[var(--muted)]">No exposure records yet.</p>
         ) : (
-          <div className="overflow-x-auto">
+          <div
+            className="overflow-x-auto"
+            tabIndex={0}
+            role="region"
+            aria-label="External exposure findings"
+          >
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-[var(--border)] text-left text-xs uppercase tracking-[0.16em] text-[var(--muted)]">
@@ -493,7 +498,12 @@ export default function AttackSurfacePage() {
         {relationships.length === 0 ? (
           <p className="text-sm text-[var(--muted)]">No relationships defined.</p>
         ) : (
-          <div className="overflow-x-auto">
+          <div
+            className="overflow-x-auto"
+            tabIndex={0}
+            role="region"
+            aria-label="Discovered attack surface services"
+          >
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-[var(--border)] text-left text-xs uppercase tracking-[0.16em] text-[var(--muted)]">

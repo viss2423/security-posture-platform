@@ -1,6 +1,8 @@
 import Nav from '@/components/Nav';
 import ApiStatusBanner from '@/components/ApiStatusBanner';
 import FilterBar from '@/components/FilterBar';
+import ViewerPreviewGate from '@/components/ViewerPreviewGate';
+import WorkspaceRail from '@/components/WorkspaceRail';
 import { AuthProvider } from '@/contexts/AuthContext';
 import type { PostureSummary } from '@/lib/api';
 import { requireServerSession, withServerSession } from '@/lib/session';
@@ -17,25 +19,33 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     summary = null;
   }
 
+  const scoreNum = summary?.posture_score_avg != null ? Math.round(Number(summary.posture_score_avg)) : null;
+  const stripColor =
+    scoreNum == null ? 'var(--surface-elevated)' :
+    scoreNum >= 75   ? 'var(--green)' :
+    scoreNum >= 50   ? 'var(--amber)' :
+    'var(--red)';
+
   return (
     <AuthProvider initialUser={user}>
-      <ApiStatusBanner />
-      <div className="relative min-h-screen w-full overflow-x-clip px-3 py-4 sm:px-5 lg:px-6 xl:px-8 2xl:px-10">
-        <div className="pointer-events-none absolute inset-x-0 top-0 h-[24rem] bg-[radial-gradient(circle_at_top_left,rgba(22,142,196,0.14),transparent_42%),radial-gradient(circle_at_top_right,rgba(31,183,166,0.12),transparent_38%)]" />
-        <div className="pointer-events-none absolute left-[-6rem] top-24 h-[26rem] w-[26rem] rounded-full bg-cyan-300/12 blur-3xl" />
-        <div className="pointer-events-none absolute right-[-5rem] top-10 h-[28rem] w-[28rem] rounded-full bg-emerald-300/10 blur-3xl" />
-        <div className="pointer-events-none absolute bottom-[-6rem] left-[22%] h-[24rem] w-[24rem] rounded-full bg-orange-300/10 blur-3xl" />
-        <div className="pointer-events-none absolute inset-x-[8%] top-[14rem] h-px bg-gradient-to-r from-transparent via-cyan-200/50 to-transparent" />
+      {/* Nav renders fixed elements (icon rail + secondary panel + mobile bar) */}
+      <Nav initialSummary={summary} />
 
-        <div className="relative mx-auto max-w-[1880px] space-y-5 pb-10">
-          <Nav initialSummary={summary} />
-          <div className="space-y-5">
-            <FilterBar />
-            <div className="rounded-[2.2rem] border border-[var(--border)] bg-[rgba(255,255,255,0.72)] p-2 shadow-[var(--shadow-heavy)] backdrop-blur-2xl sm:p-3">
-              <div className="rounded-[1.7rem] border border-white/55 bg-[linear-gradient(180deg,rgba(255,255,255,0.92),rgba(247,243,237,0.82))] px-1 py-2 sm:px-2 sm:py-3">
-                <div className="relative pb-8">{children}</div>
-              </div>
+      {/* Content area — pl-12 leaves room for the fixed 48px icon rail on desktop */}
+      <div className="min-h-screen pl-0 pt-12 lg:pl-12 lg:pt-0">
+        {/* 3px posture status strip — pulses when score is critical */}
+        <div
+          className={`h-[3px] w-full transition-colors duration-700${scoreNum != null && scoreNum < 50 ? ' animate-pulse' : ''}`}
+          style={{ background: stripColor }}
+        />
+        <ApiStatusBanner />
+        <div className="mx-auto max-w-[1600px] p-4 sm:p-6 lg:p-8">
+          <FilterBar />
+          <div className="mt-5 flex gap-6 xl:items-start">
+            <div className="min-w-0 flex-1 space-y-5">
+              <ViewerPreviewGate>{children}</ViewerPreviewGate>
             </div>
+            <WorkspaceRail summary={summary} />
           </div>
         </div>
       </div>

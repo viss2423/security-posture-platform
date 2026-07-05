@@ -1,0 +1,48 @@
+version: '3.8'
+
+# free-claude-code proxy — routes Claude Code → NVIDIA NIM / OpenRouter / Ollama
+# Access: http://localhost:8082 (local) or http://<VM_IP>:8082 (remote)
+#
+# Set ANTHROPIC_BASE_URL=http://<VM_IP>:8082 and ANTHROPIC_AUTH_TOKEN=freecc
+# in your local shell, then run `claude` as normal.
+
+services:
+  claude-proxy:
+    build:
+      context: ./build/free-claude-code
+      dockerfile: Dockerfile
+    image: free-claude-code-proxy:local
+    ports:
+      - '8082:8082'
+    environment:
+      # ── Primary: NVIDIA NIM (40 req/min free, no card) ─────────────────────
+      NVIDIA_NIM_API_KEY: ${NVIDIA_NIM_API_KEY}
+      MODEL_OPUS: nvidia_nim/moonshotai/kimi-k2-thinking
+      MODEL_SONNET: nvidia_nim/mistralai/devstral-small-2505
+      MODEL_HAIKU: nvidia_nim/moonshotai/kimi-k2.5
+
+      # ── Fallback: OpenRouter free models (29 free models, 200 req/day each) ─
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      # Uncomment to switch primary to OpenRouter:
+      # MODEL_OPUS: open_router/deepseek/deepseek-r1-0528:free
+      # MODEL_SONNET: open_router/openai/gpt-oss-120b:free
+      # MODEL_HAIKU: open_router/stepfun/step-3.5-flash:free
+
+      # Auth token Claude Code must send (you set this locally)
+      ANTHROPIC_AUTH_TOKEN: freecc
+
+      HOST: '0.0.0.0'
+      PORT: '8082'
+    restart: unless-stopped
+
+  # ClaudeSlim — 60-85% token compression proxy (sits between Claude Code and claude-proxy)
+  # Claude Code → claudeslim:8083 → claude-proxy:8082 → NVIDIA NIM
+  claudeslim:
+    image: ghcr.io/apolloraines/claudeslim:latest
+    ports:
+      - '8083:8083'
+    environment:
+      UPSTREAM_URL: http://claude-proxy:8082
+      PORT: '8083'
+    depends_on: [claude-proxy]
+    restart: unless-stopped

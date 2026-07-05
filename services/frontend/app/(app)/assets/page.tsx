@@ -38,6 +38,7 @@ export default async function AssetsPage({ searchParams }: PageProps) {
   if (result.error) {
     return (
       <main className="page-shell overflow-visible">
+        <h1 className="page-title mb-5">Asset Inventory</h1>
         <div className="mb-6 alert-error animate-in" role="alert">
           {friendlyApiMessage(result.error)}
           <ApiDownHint />
@@ -49,6 +50,7 @@ export default async function AssetsPage({ searchParams }: PageProps) {
   if (!result.data || result.data.items.length === 0) {
     return (
       <main className="page-shell overflow-visible">
+        <h1 className="page-title mb-5">Asset Inventory</h1>
         <EmptyState
           icon={<span className="text-2xl font-bold text-[var(--muted)]">0</span>}
           title="No assets yet"

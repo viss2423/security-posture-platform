@@ -50,7 +50,12 @@ export default function UsersPage() {
 
       {data && data.items.length > 0 && (
         <div className="card overflow-hidden p-0 animate-in">
-          <div className="overflow-x-auto">
+          <div
+            className="overflow-x-auto"
+            tabIndex={0}
+            role="region"
+            aria-label="User access list"
+          >
             <table className="w-full border-collapse text-sm">
               <thead>
                 <tr className="border-b border-[var(--border)] bg-[var(--surface-elevated)]">

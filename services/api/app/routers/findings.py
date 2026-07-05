@@ -20,7 +20,13 @@ router = APIRouter()
 
 VALID_STATUS = ("open", "in_progress", "remediated", "accepted_risk")
 VALID_RISK_LEVELS = ("critical", "high", "medium", "low", "unscored")
-SENSITIVE_FINDING_FIELDS_FOR_VIEWER = {"evidence", "accepted_risk_reason"}
+OPERATOR_ROLES = {"admin", "analyst"}
+SENSITIVE_FINDING_FIELDS_FOR_VIEWER = {
+    "accepted_risk_by",
+    "accepted_risk_reason",
+    "evidence",
+    "risk_label_created_by",
+}
 REPOSITORY_SCAN_SOURCES = ("osv_scanner", "trivy_fs")
 SOURCE_LABELS = {
     "osv_scanner": "OSV Scanner",
@@ -46,6 +52,40 @@ def _serialize_datetime_value(value: Any) -> Any:
     if hasattr(value, "isoformat"):
         return value.isoformat()
     return value
+
+
+def _viewer_demo_clause(role: str, *, tags_expr: str) -> str:
+    if role in OPERATOR_ROLES:
+        return ""
+    return f" AND 'demo' = ANY({tags_expr})"
+
+
+def _get_visible_asset_for_role(db: Session, asset_key: str, role: str) -> dict[str, Any] | None:
+    visibility_clause = _viewer_demo_clause(role, tags_expr="tags")
+    row = (
+        db.execute(
+            text(
+                """
+                SELECT asset_id, asset_key, name, asset_type, environment, criticality
+                FROM assets
+                WHERE asset_key = :asset_key
+                """
+                + visibility_clause
+            ),
+            {"asset_key": asset_key},
+        )
+        .mappings()
+        .first()
+    )
+    return dict(row) if row else None
+
+
+def _redact_repository_job(row: dict[str, Any], role: str) -> dict[str, Any]:
+    item = dict(row)
+    if role == "viewer":
+        item["job_params_json"] = {}
+        item["requested_by"] = None
+    return item
 
 
 @router.get("/")
@@ -85,6 +125,8 @@ def list_findings(
     if asset_key:
         conditions.append("a.asset_key = :asset_key")
         params["asset_key"] = asset_key
+    if role not in OPERATOR_ROLES:
+        conditions.append("'demo' = ANY(a.tags)")
     where = " AND ".join(conditions)
     q = text(f"""
       SELECT
@@ -162,21 +204,9 @@ def get_repository_summary(
     recent_limit: int = Query(8, ge=1, le=20),
     db: Session = Depends(get_db),
     _user: str = Depends(require_auth),
+    role: str = Depends(get_current_role),
 ):
-    asset = (
-        db.execute(
-            text(
-                """
-                SELECT asset_id, asset_key, name, asset_type, environment, criticality
-                FROM assets
-                WHERE asset_key = :asset_key
-                """
-            ),
-            {"asset_key": asset_key},
-        )
-        .mappings()
-        .first()
-    )
+    asset = _get_visible_asset_for_role(db, asset_key, role)
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
 
@@ -355,7 +385,7 @@ def get_repository_summary(
     )
     latest_jobs = []
     for row in job_rows:
-        item = dict(row)
+        item = _redact_repository_job(dict(row), role)
         for key in ("created_at", "started_at", "finished_at"):
             item[key] = _serialize_datetime_value(item.get(key))
         if isinstance(item.get("job_params_json"), str):
@@ -384,7 +414,7 @@ def get_dependency_risk(
     asset_key: str = Query("secplat-repo", description="Repository asset key"),
     remediation_limit: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
-    _user: str = Depends(require_auth),
+    _user: str = Depends(require_role(["admin", "analyst"])),
 ):
     asset = (
         db.execute(
@@ -900,7 +930,7 @@ class CreateRiskLabelBody(BaseModel):
 def list_finding_risk_labels(
     finding_id: int,
     db: Session = Depends(get_db),
-    _user: str = Depends(require_auth),
+    _user: str = Depends(require_role(["admin", "analyst"])),
 ):
     finding = (
         db.execute(

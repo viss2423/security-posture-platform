@@ -1,0 +1,20 @@
+name = "security-posture-platform"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+pages_build_output_dir = ".vercel/output/static"
+
+[vars]
+NODE_ENV = "production"
+
+# Add runtime secrets via `wrangler pages secret put <KEY>` — never commit real values here
+# NEXT_PUBLIC_API_URL        → your Oracle VM public IP / domain
+# NEXT_PUBLIC_SUPABASE_URL   → your Supabase project URL
+# NEXT_PUBLIC_SUPABASE_ANON_KEY → your Supabase anon key
+
+[[rules]]
+type = "Text"
+globs = ["**/*.html"]
+
+[[rules]]
+type = "Text"
+globs = ["**/*.css", "**/*.js"]

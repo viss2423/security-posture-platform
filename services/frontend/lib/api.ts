@@ -99,11 +99,11 @@ export async function apiFetch<T>(path: string, options?: RequestInit): Promise<
   return res.json();
 }
 
-export type AuthConfig = { oidc_enabled: boolean };
+export type AuthConfig = { oidc_enabled: boolean; self_registration?: boolean };
 
 export async function getAuthConfig(): Promise<AuthConfig> {
   const res = await fetch(API + '/auth/config', { cache: 'no-store' });
-  if (!res.ok) return { oidc_enabled: false };
+  if (!res.ok) return { oidc_enabled: false, self_registration: false };
   return res.json();
 }
 
@@ -3109,4 +3109,62 @@ export async function detectPostureAnomalies(persist: boolean = true): Promise<{
     method: 'POST',
     body: JSON.stringify({ persist }),
   });
+}
+
+
+// ── SOC 2 Compliance Evidence (GitHub connector) ──────────────────────────
+
+export type Soc2EvidenceItem = {
+  finding_id: number;
+  title: string;
+  severity: string;
+  status: string;  // open | in_progress | remediated | accepted_risk
+  evidence: string | null;
+  remediation: string | null;
+  repo: string | null;
+  check_type: string | null;
+  first_seen: string | null;
+  last_seen: string | null;
+};
+
+export type Soc2ControlEvidence = {
+  control_id: string;
+  name: string;
+  description: string;
+  status: 'pass' | 'fail' | 'not_applicable';
+  total_checks: number;
+  open_count: number;
+  remediated_count: number;
+  evidence: Soc2EvidenceItem[];
+};
+
+export type Soc2EvidenceReport = {
+  report_id: string;
+  generated_at: string;
+  source: string;
+  scan_ran: boolean;
+  scope: {
+    asset_count: number;
+    total_findings: number;
+    open_findings: number;
+    remediated_findings: number;
+  };
+  score: {
+    pass: number;
+    fail: number;
+    not_applicable: number;
+    percentage: number | null;
+  };
+  controls: Soc2ControlEvidence[];
+};
+
+export async function getSoc2Evidence(): Promise<Soc2EvidenceReport> {
+  return apiFetch<Soc2EvidenceReport>('/compliance/soc2/evidence');
+}
+
+export async function downloadSoc2EvidencePdf(): Promise<void> {
+  await downloadFromApi(
+    `${API}/compliance/soc2/evidence.pdf`,
+    'secplat-soc2-evidence-report.pdf'
+  );
 }

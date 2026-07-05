@@ -302,7 +302,7 @@ export default function IncidentsPage() {
       )}
 
       {data && visibleItems.length > 0 && (
-        <section className="canvas-split">
+        <section className="grid gap-4 2xl:grid-cols-[minmax(0,1.7fr)_minmax(18rem,0.7fr)]">
           <section className="section-panel animate-in overflow-hidden p-0">
             <div className="overflow-x-auto">
               <table className="w-full border-collapse text-sm">
@@ -379,7 +379,7 @@ export default function IncidentsPage() {
 
           <aside className="section-panel animate-in h-fit">
             <h2 className="section-title mb-3">Priority rail</h2>
-            <div className="space-y-2">
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5 2xl:grid-cols-1">
               {statusDistribution.map((entry) => (
                 <div
                   key={entry.status}

@@ -532,7 +532,12 @@ export default function AutomationPage() {
         {runs.length === 0 ? (
           <p className="text-sm text-[var(--muted)]">No automation runs yet.</p>
         ) : (
-          <div className="overflow-x-auto">
+          <div
+            className="overflow-x-auto"
+            tabIndex={0}
+            role="region"
+            aria-label="Automation workflow runs"
+          >
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-[var(--border)] text-left text-xs uppercase tracking-[0.16em] text-[var(--muted)]">

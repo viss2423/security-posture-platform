@@ -1,0 +1,125 @@
+name: Security — Enhanced Scanning
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    # Full scan every Sunday at 02:00 UTC
+    - cron: '0 2 * * 0'
+
+jobs:
+  bearer-sast:
+    name: Bearer SAST (OWASP Top 10 + data flow)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bearer scan
+        uses: bearer/bearer-action@v1
+        with:
+          path: .
+          format: sarif
+          output: bearer.sarif
+          exit-code: '1'
+          severity: critical,high
+          # Scan all source — skip test fixtures and vendor dirs
+          skip-path: 'node_modules,.venv,artifacts,lab-data'
+
+      - name: Upload Bearer SARIF to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: bearer.sarif
+          category: bearer
+
+  trivy:
+    name: Trivy (containers + filesystem + secrets)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-fs.sarif
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+          ignore-unfixed: true
+          skip-dirs: 'node_modules,.venv,artifacts'
+
+      - name: Upload Trivy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+  nuclei:
+    name: Nuclei (CVE template scan)
+    runs-on: ubuntu-latest
+    # Only run on schedule or push to main — too slow for every PR
+    if: github.event_name == 'schedule' || github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nuclei
+        run: |
+          go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+          nuclei -update-templates -silent
+
+      - name: Nuclei template scan (local repo files)
+        run: |
+          nuclei \
+            -target . \
+            -tags exposure,config,token \
+            -severity critical,high \
+            -o nuclei-results.txt \
+            -silent || true
+
+      - name: Upload Nuclei results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuclei-results-${{ github.run_number }}
+          path: nuclei-results.txt
+          retention-days: 30
+
+  dependency-audit:
+    name: Dependency audit (npm + pip)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: services/frontend/package-lock.json
+
+      - name: npm audit (frontend)
+        working-directory: services/frontend
+        # --audit-level=high: fail on high+ severity
+        run: npm audit --audit-level=high --omit=dev
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: pip-audit (backend services)
+        run: |
+          pip install pip-audit
+          find services -name 'requirements*.txt' | while read f; do
+            echo "=== Auditing $f ==="
+            pip-audit -r "$f" --severity high || exit 1
+          done

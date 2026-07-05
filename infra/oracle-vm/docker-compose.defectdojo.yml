@@ -1,0 +1,96 @@
+version: '3.8'
+
+# DefectDojo — open-source vulnerability management & aggregation
+# Aggregates findings from 200+ scanners, deduplicates, maps to compliance frameworks.
+# Access: http://<VM_IP>:8080  default creds: admin / defectdojo (change on first login)
+
+services:
+  defectdojo-nginx:
+    image: defectdojo/defectdojo-nginx:latest
+    depends_on:
+      - defectdojo-uwsgi
+    environment:
+      NGINX_METRICS_ENABLED: 'false'
+    ports:
+      - '8080:8080'
+      - '8443:8443'
+    volumes:
+      - defectdojo-media:/app/media
+    restart: unless-stopped
+    networks: [defectdojo]
+
+  defectdojo-uwsgi:
+    image: defectdojo/defectdojo-django:latest
+    depends_on:
+      - defectdojo-postgres
+      - defectdojo-redis
+      - defectdojo-celery-beat
+      - defectdojo-celery-worker
+    environment:
+      DD_DATABASE_URL: postgresql://defectdojo:${DEFECTDOJO_DB_PASSWORD}@defectdojo-postgres:5432/defectdojo
+      DD_CELERY_BROKER_URL: redis://defectdojo-redis:6379/0
+      DD_SECRET_KEY: ${DEFECTDOJO_SECRET_KEY}
+      DD_CREDENTIAL_AES_256_KEY: ${DEFECTDOJO_AES_KEY}
+      DD_ALLOWED_HOSTS: '*'
+      DD_DJANGO_METRICS_ENABLED: 'False'
+      DD_SESSION_COOKIE_HTTPONLY: 'True'
+      DD_CSRF_COOKIE_HTTPONLY: 'True'
+      DD_SECURE_SSL_REDIRECT: 'False'
+      DD_INITIALIZE: 'true'
+    volumes:
+      - defectdojo-media:/app/media
+    entrypoint: ['/wait-for-it.sh', 'defectdojo-postgres:5432', '-t', '30', '--', '/entrypoint-uwsgi.sh']
+    restart: unless-stopped
+    networks: [defectdojo]
+
+  defectdojo-celery-beat:
+    image: defectdojo/defectdojo-django:latest
+    depends_on:
+      - defectdojo-postgres
+      - defectdojo-redis
+    environment:
+      DD_DATABASE_URL: postgresql://defectdojo:${DEFECTDOJO_DB_PASSWORD}@defectdojo-postgres:5432/defectdojo
+      DD_CELERY_BROKER_URL: redis://defectdojo-redis:6379/0
+      DD_SECRET_KEY: ${DEFECTDOJO_SECRET_KEY}
+      DD_CREDENTIAL_AES_256_KEY: ${DEFECTDOJO_AES_KEY}
+    entrypoint: ['/wait-for-it.sh', 'defectdojo-postgres:5432', '-t', '30', '--', '/entrypoint-celery-beat.sh']
+    restart: unless-stopped
+    networks: [defectdojo]
+
+  defectdojo-celery-worker:
+    image: defectdojo/defectdojo-django:latest
+    depends_on:
+      - defectdojo-postgres
+      - defectdojo-redis
+    environment:
+      DD_DATABASE_URL: postgresql://defectdojo:${DEFECTDOJO_DB_PASSWORD}@defectdojo-postgres:5432/defectdojo
+      DD_CELERY_BROKER_URL: redis://defectdojo-redis:6379/0
+      DD_SECRET_KEY: ${DEFECTDOJO_SECRET_KEY}
+      DD_CREDENTIAL_AES_256_KEY: ${DEFECTDOJO_AES_KEY}
+    entrypoint: ['/wait-for-it.sh', 'defectdojo-postgres:5432', '-t', '30', '--', '/entrypoint-celery-worker.sh']
+    restart: unless-stopped
+    networks: [defectdojo]
+
+  defectdojo-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: defectdojo
+      POSTGRES_USER: defectdojo
+      POSTGRES_PASSWORD: ${DEFECTDOJO_DB_PASSWORD}
+    volumes:
+      - defectdojo-postgres:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks: [defectdojo]
+
+  defectdojo-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks: [defectdojo]
+
+volumes:
+  defectdojo-media:
+  defectdojo-postgres:
+
+networks:
+  defectdojo:
+    driver: bridge

@@ -1,17 +1,11 @@
 import type { Metadata } from 'next';
-import { Instrument_Sans, Instrument_Serif, JetBrains_Mono } from 'next/font/google';
+import { Instrument_Sans, JetBrains_Mono } from 'next/font/google';
 import './globals.css';
 
 const instrumentSans = Instrument_Sans({
   subsets: ['latin'],
   variable: '--font-sans',
   display: 'swap',
-});
-const instrumentSerif = Instrument_Serif({
-  subsets: ['latin'],
-  variable: '--font-display',
-  display: 'swap',
-  weight: '400',
 });
 const jetbrainsMono = JetBrains_Mono({
   subsets: ['latin'],
@@ -20,9 +14,32 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'SecPlat | Security Posture Platform',
+  title: 'SecPlat — Open-Source Security Posture & SOC 2 Compliance',
   description:
-    'Customer-ready security posture operations across exposure, detections, incidents, and governance.',
+    'Run a read-only GitHub scan and get an auditor-ready SOC 2 evidence report in under a minute. Open-source platform with risk scoring, alert triage, attack simulation, and policy-as-code.',
+  openGraph: {
+    title: 'SecPlat — Open-Source Security Posture & SOC 2 Compliance',
+    description:
+      'Run a read-only GitHub scan and get an auditor-ready SOC 2 evidence report in under a minute.',
+    url: 'https://github.com/viss2423/security-posture-platform',
+    siteName: 'SecPlat',
+    type: 'website',
+    images: [
+      {
+        url: 'https://github.com/viss2423.png',
+        width: 460,
+        height: 460,
+        alt: 'SecPlat — Open-Source Security Posture & SOC 2 Compliance',
+      },
+    ],
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'SecPlat — Open-Source Security Posture & SOC 2 Compliance',
+    description:
+      'Run a read-only GitHub scan and get an auditor-ready SOC 2 evidence report in under a minute.',
+    images: ['https://github.com/viss2423.png'],
+  },
 };
 
 export default function RootLayout({
@@ -33,7 +50,8 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${instrumentSans.variable} ${instrumentSerif.variable} ${jetbrainsMono.variable}`}
+      data-scroll-behavior="smooth"
+      className={`${instrumentSans.variable} ${jetbrainsMono.variable}`}
     >
       <body className="font-sans antialiased text-[var(--text)] selection:bg-[var(--selection-bg)] selection:text-[var(--selection-text)]">
         {children}

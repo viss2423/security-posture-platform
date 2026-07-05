@@ -5,14 +5,21 @@ import { Command } from 'cmdk';
 import { ArrowRight, Compass, Search, Sparkles } from 'lucide-react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
+import { useAuth } from '@/contexts/AuthContext';
 import { getVisibleNavGroups } from '@/lib/navigation';
 
-export default function CommandPalette({ isAdmin }: { isAdmin: boolean }) {
+export default function CommandPalette({
+  showTrigger = true,
+}: {
+  showTrigger?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const router = useRouter();
   const pathname = usePathname();
+  const { user } = useAuth();
+  const role = user?.role ?? 'viewer';
 
-  const groups = useMemo(() => getVisibleNavGroups(isAdmin), [isAdmin]);
+  const groups = useMemo(() => getVisibleNavGroups(role), [role]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -31,21 +38,23 @@ export default function CommandPalette({ isAdmin }: { isAdmin: boolean }) {
 
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
-      <Dialog.Trigger asChild>
-        <button
-          type="button"
-          className="group inline-flex items-center gap-2 rounded-[1rem] border border-[var(--border)] bg-white px-3 py-2 text-sm text-[var(--text-muted)] transition hover:border-cyan-300/20 hover:text-[var(--text)]"
-        >
-          <Search size={15} className="text-[var(--cyan-strong)] transition group-hover:scale-110" />
-          Jump anywhere
-          <kbd className="hidden rounded-md border border-cyan-300/18 bg-cyan-300/08 px-1.5 py-0.5 text-[11px] font-semibold text-[var(--cyan-strong)] sm:inline">
-            Ctrl K
-          </kbd>
-        </button>
-      </Dialog.Trigger>
+      {showTrigger && (
+        <Dialog.Trigger asChild>
+          <button
+            type="button"
+            className="group inline-flex items-center gap-2 rounded-[1rem] border border-[var(--border)] bg-[var(--surface-soft)] px-3 py-2 text-sm text-[var(--text-muted)] transition hover:border-[var(--accent)]/30 hover:text-[var(--text)]"
+          >
+            <Search size={15} className="text-[var(--accent)] transition group-hover:scale-110" />
+            Jump anywhere
+            <kbd className="hidden rounded-md border border-[var(--accent)]/20 bg-[var(--accent-dim)] px-1.5 py-0.5 text-[11px] font-semibold text-[var(--accent)] sm:inline">
+              Ctrl K
+            </kbd>
+          </button>
+        </Dialog.Trigger>
+      )}
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[80] bg-[rgba(22,25,35,0.14)] backdrop-blur-md" />
-        <Dialog.Content className="fixed left-1/2 top-[7%] z-[90] w-[min(94vw,52rem)] -translate-x-1/2 overflow-hidden rounded-[2rem] border border-[var(--border)] bg-[rgba(255,255,255,0.97)] shadow-[0_36px_80px_-36px_rgba(21,26,41,0.22)] focus:outline-none">
+        <Dialog.Overlay className="fixed inset-0 z-[80] bg-[rgba(7,11,18,0.72)] backdrop-blur-md" />
+        <Dialog.Content className="fixed left-1/2 top-[7%] z-[90] w-[min(94vw,52rem)] -translate-x-1/2 overflow-hidden rounded-[2rem] border border-[var(--border)] bg-[var(--surface-elevated)] shadow-[0_40px_90px_-30px_rgba(0,0,0,0.8)] focus:outline-none">
           <Dialog.Title className="sr-only">Command Palette</Dialog.Title>
           <Dialog.Description className="sr-only">
             Search and jump to any SecPlat page.

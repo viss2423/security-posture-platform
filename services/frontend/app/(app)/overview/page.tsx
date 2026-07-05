@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { EmptyState, ApiDownHint } from '@/components/EmptyState';
+import GettingStartedBanner from '@/components/GettingStartedBanner';
 import OverviewAnomaliesPanel from '@/components/OverviewAnomaliesPanel';
 import { ProgressRing } from '@/components/ProgressRing';
 import { friendlyApiMessage } from '@/lib/apiError';
@@ -36,13 +37,13 @@ type PageProps = {
 function riskBadgeClass(level?: string | null): string {
   switch ((level || '').toLowerCase()) {
     case 'critical':
-      return 'bg-[var(--red)] text-white';
+      return 'bg-red-600 text-white';
     case 'high':
-      return 'bg-orange-600 text-white';
+      return 'bg-orange-700 text-white';
     case 'medium':
       return 'bg-yellow-500 text-black';
     case 'low':
-      return 'bg-blue-500 text-white';
+      return 'bg-blue-600 text-white';
     default:
       return 'bg-[var(--muted)]/20 text-[var(--muted)]';
   }
@@ -51,73 +52,97 @@ function riskBadgeClass(level?: string | null): string {
 function TrendChart({ points }: { points: TrendPoint[] }) {
   if (points.length === 0) {
     return (
-      <p className="py-8 text-center text-sm text-[var(--muted)]">
-        No snapshot data for this range. Save a report snapshot to see trend.
-      </p>
+      <div className="flex flex-col items-center justify-center py-10 text-center">
+        <div className="mb-2 text-[var(--text-subtle)]">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12" /></svg>
+        </div>
+        <p className="text-sm text-[var(--text-subtle)]">No snapshot data for this range.</p>
+        <p className="mt-1 text-xs text-[var(--text-subtle)]">Save a report snapshot to see trend.</p>
+      </div>
     );
   }
 
   const scores = points
-    .map((point) =>
-      point.posture_score_avg != null ? Number(point.posture_score_avg) : null
-    )
-    .filter((score): score is number => score != null);
+    .map((p) => p.posture_score_avg != null ? Number(p.posture_score_avg) : null)
+    .filter((s): s is number => s != null);
   const min = Math.min(0, ...scores);
   const max = Math.max(100, ...scores);
   const rangeY = max - min || 1;
   const width = 600;
   const height = 160;
-  const padding = { top: 8, right: 8, bottom: 24, left: 32 };
-  const chartWidth = width - padding.left - padding.right;
-  const chartHeight = height - padding.top - padding.bottom;
-  const xScale = (index: number) =>
-    padding.left +
-    (points.length > 1 ? (index / (points.length - 1)) * chartWidth : chartWidth / 2);
-  const yScale = (value: number) =>
-    padding.top + chartHeight - ((value - min) / rangeY) * chartHeight;
-  const pathD = points
-    .map((point, index) => {
-      const value =
-        point.posture_score_avg != null ? Number(point.posture_score_avg) : null;
-      if (value == null) return null;
-      return `${index === 0 ? 'M' : 'L'} ${xScale(index)} ${yScale(value)}`;
-    })
-    .filter(Boolean)
-    .join(' ');
+  const pad = { top: 12, right: 12, bottom: 28, left: 36 };
+  const cw = width - pad.left - pad.right;
+  const ch = height - pad.top - pad.bottom;
+  const xs = (i: number) => pad.left + (points.length > 1 ? (i / (points.length - 1)) * cw : cw / 2);
+  const ys = (v: number) => pad.top + ch - ((v - min) / rangeY) * ch;
+
+  const lineParts: string[] = [];
+  points.forEach((p, i) => {
+    const v = p.posture_score_avg != null ? Number(p.posture_score_avg) : null;
+    if (v == null) return;
+    lineParts.push(`${lineParts.length === 0 ? 'M' : 'L'} ${xs(i)} ${ys(v)}`);
+  });
+  const lineD = lineParts.join(' ');
+  const lastValid = (() => {
+    for (let i = points.length - 1; i >= 0; i--) {
+      const v = points[i].posture_score_avg != null ? Number(points[i].posture_score_avg) : null;
+      if (v != null) return { x: xs(i), y: ys(v), v };
+    }
+    return null;
+  })();
+  const areaD = lineD
+    ? `${lineD} L ${xs(points.length - 1)} ${pad.top + ch} L ${xs(0)} ${pad.top + ch} Z`
+    : '';
+
+  /* horizontal grid lines at 25 / 50 / 75 */
+  const gridLines = [25, 50, 75].map((val) => ({ val, y: ys(val) }));
 
   return (
     <div className="overflow-x-auto">
-      <svg
-        viewBox={`0 0 ${width} ${height}`}
-        className="h-40 min-w-full"
-        preserveAspectRatio="none"
-      >
-        {pathD && (
-          <path
-            d={pathD}
-            fill="none"
-            stroke="var(--green)"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
+      <svg viewBox={`0 0 ${width} ${height}`} className="h-44 min-w-full" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%"   stopColor="var(--green)" stopOpacity="0.22" />
+            <stop offset="100%" stopColor="var(--green)" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+
+        {/* grid */}
+        {gridLines.map(({ val, y }) => (
+          <g key={val}>
+            <line x1={pad.left} y1={y} x2={pad.left + cw} y2={y}
+              stroke="rgba(255,255,255,0.05)" strokeWidth="1" strokeDasharray="4 4" />
+            <text x={pad.left - 4} y={y + 4} fontSize="9" fill="var(--text-subtle)" textAnchor="end">
+              {val}
+            </text>
+          </g>
+        ))}
+
+        {/* axes */}
+        <line x1={pad.left} y1={pad.top} x2={pad.left} y2={pad.top + ch}
+          stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
+        <line x1={pad.left} y1={pad.top + ch} x2={pad.left + cw} y2={pad.top + ch}
+          stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
+
+        {/* area fill */}
+        {areaD && <path d={areaD} fill="url(#trendFill)" />}
+
+        {/* line */}
+        {lineD && (
+          <path d={lineD} fill="none" stroke="var(--green)"
+            strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
         )}
-        <line
-          x1={padding.left}
-          y1={padding.top}
-          x2={padding.left}
-          y2={padding.top + chartHeight}
-          stroke="var(--border)"
-          strokeWidth="1"
-        />
-        <line
-          x1={padding.left}
-          y1={padding.top + chartHeight}
-          x2={padding.left + chartWidth}
-          y2={padding.top + chartHeight}
-          stroke="var(--border)"
-          strokeWidth="1"
-        />
+
+        {/* last-point indicator */}
+        {lastValid && (
+          <>
+            <circle cx={lastValid.x} cy={lastValid.y} r="4" fill="var(--surface)" stroke="var(--green)" strokeWidth="2" />
+            <circle cx={lastValid.x} cy={lastValid.y} r="1.5" fill="var(--green)" />
+            <text x={lastValid.x + 7} y={lastValid.y + 4} fontSize="9.5" fill="var(--green)" fontWeight="600">
+              {Math.round(lastValid.v)}
+            </text>
+          </>
+        )}
       </svg>
     </div>
   );
@@ -134,6 +159,11 @@ function getErrorMessage(error: unknown): string {
 function isOptionalRepositorySummaryError(message: string | null): boolean {
   const normalized = (message || '').toLowerCase();
   return normalized.includes('asset not found') || normalized.includes('404');
+}
+
+function isPermissionError(message: string | null): boolean {
+  const normalized = (message || '').toLowerCase();
+  return normalized.includes('insufficient permissions') || normalized.includes('403');
 }
 
 function buildTopRiskSections(rows: Finding[]) {
@@ -268,14 +298,31 @@ export default async function OverviewPage({ searchParams }: PageProps) {
     threatIntelSummaryResult.status === 'rejected'
       ? getErrorMessage(threatIntelSummaryResult.reason)
       : null;
+  const suppressViewerOperatorErrors = !user.canMutate;
   const errors = [
     overviewResult.status === 'rejected' ? getErrorMessage(overviewResult.reason) : null,
-    trendResult.status === 'rejected' ? getErrorMessage(trendResult.reason) : null,
+    suppressViewerOperatorErrors &&
+    trendResult.status === 'rejected' &&
+    isPermissionError(getErrorMessage(trendResult.reason))
+      ? null
+      : trendResult.status === 'rejected'
+        ? getErrorMessage(trendResult.reason)
+        : null,
     findingsResult.status === 'rejected' ? getErrorMessage(findingsResult.reason) : null,
-    anomaliesResult.status === 'rejected' ? getErrorMessage(anomaliesResult.reason) : null,
+    suppressViewerOperatorErrors &&
+    anomaliesResult.status === 'rejected' &&
+    isPermissionError(getErrorMessage(anomaliesResult.reason))
+      ? null
+      : anomaliesResult.status === 'rejected'
+        ? getErrorMessage(anomaliesResult.reason)
+        : null,
     isOptionalRepositorySummaryError(repositorySummaryError) ? null : repositorySummaryError,
-    telemetrySummaryError,
-    threatIntelSummaryError,
+    suppressViewerOperatorErrors && isPermissionError(telemetrySummaryError)
+      ? null
+      : telemetrySummaryError,
+    suppressViewerOperatorErrors && isPermissionError(threatIntelSummaryError)
+      ? null
+      : threatIntelSummaryError,
   ].filter(Boolean) as string[];
   const { topRiskFindings, topRiskAssets } = buildTopRiskSections(findings);
   const strip = overview?.executive_strip;
@@ -287,97 +334,196 @@ export default async function OverviewPage({ searchParams }: PageProps) {
     !Number.isNaN(scoreNum) &&
     scoreNum >= 0 &&
     scoreNum <= 100;
+  const scoreColor =
+    scoreNum == null ? 'var(--text-subtle)' :
+    scoreNum >= 75 ? 'var(--green)' :
+    scoreNum >= 50 ? 'var(--amber)' :
+    'var(--red)';
+  const trendDir = strip?.score_trend_vs_yesterday;
+  const trendColor = trendDir === 'up' ? 'var(--green)' : trendDir === 'down' ? 'var(--red)' : 'var(--text-subtle)';
+  const trendLabel = trendDir === 'up' ? '↑ Improving' : trendDir === 'down' ? '↓ Declining' : '→ Stable';
 
   return (
     <main className="page-shell">
+      <GettingStartedBanner />
       <section className="page-hero animate-in">
         <div className="hero-grid">
           <div>
-            <span className="stat-chip-strong">Executive overview</span>
-            <h1 className="hero-title">Executive Overview</h1>
-            <p className="hero-copy">
-              See coverage, rising risk, and the next best action across the customer estate.
-            </p>
-            <div className="mt-4 flex flex-wrap gap-2">
-              <Link href="/alerts" className="btn-secondary text-sm">
-                Open alerts
-              </Link>
-              <Link href="/findings" className="btn-secondary text-sm">
-                Open findings
-              </Link>
-              <Link href="/telemetry" className="btn-secondary text-sm">
-                Open telemetry
-              </Link>
+            <h1 className="sr-only">Security posture overview</h1>
+            {/* Live status badge */}
+            <span className="live-pill">
+              <span className="dot-online" />
+              Live · Security Posture
+            </span>
+
+            {/* Giant posture score */}
+            <div className="mt-5 flex items-end gap-4">
+              <span
+                className="text-[5.5rem] font-black leading-none tabular-nums animate-count"
+                style={{
+                  color: scoreColor,
+                  textShadow: `0 0 40px ${scoreColor}55, 0 0 80px ${scoreColor}22`,
+                }}
+              >
+                {scoreNum != null ? scoreNum : '--'}
+              </span>
+              <div className="mb-4 flex flex-col gap-1">
+                <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--text-subtle)]">
+                  Posture score
+                </span>
+                <span className="text-sm font-semibold" style={{ color: trendColor }}>
+                  {trendLabel}
+                </span>
+              </div>
             </div>
-            <div className="mt-6 grid gap-3 sm:grid-cols-3">
-              <div className="signal-card">
-                <p className="text-[10px] uppercase tracking-[0.14em] text-[var(--muted)]">
-                  Customer answer
-                </p>
-                <p className="mt-2 text-sm font-medium text-[var(--text)]">
-                  What assets are we protecting right now?
-                </p>
-              </div>
-              <div className="signal-card">
-                <p className="text-[10px] uppercase tracking-[0.14em] text-[var(--muted)]">
-                  Customer answer
-                </p>
-                <p className="mt-2 text-sm font-medium text-[var(--text)]">
-                  What risk is moving up fastest?
-                </p>
-              </div>
-              <div className="signal-card">
-                <p className="text-[10px] uppercase tracking-[0.14em] text-[var(--muted)]">
-                  Customer answer
-                </p>
-                <p className="mt-2 text-sm font-medium text-[var(--text)]">
-                  Where should the team act next?
-                </p>
-              </div>
+
+            {/* Score progress bar */}
+            <div
+              className="mt-1 h-1.5 w-full overflow-hidden rounded-full"
+              style={{ background: 'rgba(255,255,255,0.06)' }}
+            >
+              <div
+                className="h-full rounded-full transition-all duration-1000"
+                style={{
+                  width: `${scoreNum ?? 0}%`,
+                  background: scoreColor,
+                  boxShadow: `0 0 8px ${scoreColor}66`,
+                }}
+              />
+            </div>
+
+            {/* G / A / R status chips */}
+            <div className="mt-4 flex flex-wrap gap-2">
+              <span
+                className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold"
+                style={{ color: 'var(--green)', borderColor: 'rgba(52,211,153,0.28)', background: 'rgba(52,211,153,0.08)' }}
+              >
+                <span className="dot-online" />
+                {strip?.green ?? 0} Healthy
+              </span>
+              <span
+                className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold"
+                style={{ color: 'var(--amber)', borderColor: 'rgba(251,191,36,0.28)', background: 'rgba(251,191,36,0.08)' }}
+              >
+                <span className="dot-warning" />
+                {strip?.amber ?? 0} Degraded
+              </span>
+              <span
+                className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold"
+                style={{ color: 'var(--red)', borderColor: 'rgba(248,113,113,0.28)', background: 'rgba(248,113,113,0.08)' }}
+              >
+                <span className="dot-critical" />
+                {strip?.red ?? 0} Critical
+              </span>
+              {user.canMutate && strip != null && strip.alerts_firing > 0 && (
+                <Link
+                  href="/alerts"
+                  className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-bold transition-colors hover:border-[var(--red)]/60"
+                  style={{ color: 'var(--red)', borderColor: 'rgba(248,113,113,0.42)', background: 'rgba(248,113,113,0.14)' }}
+                >
+                  ⚡ {strip.alerts_firing} alert{strip.alerts_firing === 1 ? '' : 's'} firing
+                </Link>
+              )}
+            </div>
+
+            {/* Action buttons */}
+            <div className="mt-5 flex flex-wrap gap-2">
+              {user.canMutate ? (
+                <Link href="/alerts" className="btn-primary text-sm">
+                  View alerts
+                </Link>
+              ) : (
+                <Link href="/assets" className="btn-primary text-sm">
+                  Browse assets
+                </Link>
+              )}
+              <Link href="/findings" className="btn-secondary text-sm">
+                All findings
+              </Link>
+              {user.canMutate ? (
+                <Link href="/telemetry" className="btn-secondary text-sm">
+                  Telemetry
+                </Link>
+              ) : (
+                <Link href="/onboarding" className="btn-secondary text-sm">
+                  Launch checklist
+                </Link>
+              )}
             </div>
           </div>
           <div className="hero-stat-grid">
             <div className="hero-stat">
               <p className="hero-stat-label">Visible findings</p>
-              <p className="hero-stat-value">{findings.length}</p>
+              <p className="hero-stat-value text-[var(--red)]">{findings.length}</p>
+              <div className="risk-bar-wrap mt-2">
+                <div className="risk-bar-fill red" style={{ width: `${Math.min(100, findings.length * 5)}%` }} />
+              </div>
             </div>
             <div className="hero-stat">
               <p className="hero-stat-label">Anomalies queued</p>
-              <p className="hero-stat-value">{anomalies.length}</p>
+              <p className="hero-stat-value text-[var(--amber)]">{anomalies.length}</p>
+              <div className="risk-bar-wrap mt-2">
+                <div className="risk-bar-fill amber" style={{ width: `${Math.min(100, anomalies.length * 10)}%` }} />
+              </div>
             </div>
             <div className="hero-stat">
               <p className="hero-stat-label">Trend window</p>
-              <p className="hero-stat-value">{trendRange.toUpperCase()}</p>
+              <p className="hero-stat-value text-[var(--accent)]">{trendRange.toUpperCase()}</p>
             </div>
             <div className="hero-stat">
               <p className="hero-stat-label">Assets monitored</p>
               <p className="hero-stat-value">{strip?.total_assets ?? 0}</p>
+              <div className="mt-2 flex items-center gap-1.5">
+                <span className="dot-online" />
+                <span className="text-[10px] text-[var(--text-subtle)]">live</span>
+              </div>
             </div>
           </div>
         </div>
       </section>
 
       <section className="command-lane animate-in">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--text-subtle)]">
+            Live status
+          </span>
+          <span className="live-pill">
+            <span className="dot-online" />
+            Updated now
+          </span>
+        </div>
         <div className="command-lane-grid">
           <span className="command-pill-strong">
-            Posture score{' '}
-            {strip?.posture_score_avg != null
-              ? Math.round(Number(strip.posture_score_avg))
-              : '--'}
+            Score {scoreNum != null ? scoreNum : '--'}
+          </span>
+          <span className="command-pill" style={{ color: trendColor }}>
+            {trendLabel}
+          </span>
+          <span className="command-pill">{strip?.total_assets ?? 0} assets</span>
+          {user.canMutate && strip != null && strip.alerts_firing > 0 ? (
+            <Link
+              href="/alerts"
+              className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-bold transition-colors hover:border-[var(--red)]/60"
+              style={{ color: 'var(--red)', borderColor: 'rgba(248,113,113,0.35)', background: 'rgba(248,113,113,0.12)' }}
+            >
+              ⚡ {strip.alerts_firing} firing
+            </Link>
+          ) : (
+            <span className="command-pill" style={{ color: 'var(--green)' }}>No alerts</span>
+          )}
+          <span className="command-pill">{findings.length} findings</span>
+          <span className="command-pill">{anomalies.length} anomalies</span>
+          <span className="command-pill">
+            <span style={{ color: 'var(--green)' }}>{strip?.green ?? 0}G</span>
+            {' · '}
+            <span style={{ color: 'var(--amber)' }}>{strip?.amber ?? 0}A</span>
+            {' · '}
+            <span style={{ color: 'var(--red)' }}>{strip?.red ?? 0}R</span>
           </span>
           <span className="command-pill">
-            Trend window{' '}
-            {trendRange === '24h' ? '24 hours' : trendRange === '30d' ? '30 days' : '7 days'}
+            {trendRange === '24h' ? '24h' : trendRange === '30d' ? '30 days' : '7 days'} window
           </span>
-          <span className="command-pill">Assets {strip?.total_assets ?? 0}</span>
-          <span className="command-pill">Alerts {strip?.alerts_firing ?? 0}</span>
-          <span className="command-pill">Findings {findings.length}</span>
-          <span className="command-pill">Anomalies {anomalies.length}</span>
         </div>
-        <p className="mt-3 text-sm text-[var(--text-muted)]">
-          This page is built to answer the first three customer questions in under a minute:
-          coverage, pressure, and next action.
-        </p>
       </section>
 
       {errors[0] && (
@@ -483,7 +629,7 @@ export default async function OverviewPage({ searchParams }: PageProps) {
                       href={buildOverviewHref(range, filters)}
                       className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${
                         trendRange === range
-                          ? 'bg-[var(--green)] text-white'
+                          ? 'bg-[var(--green)] text-black'
                           : 'bg-[var(--border)]/50 text-[var(--muted)] hover:bg-[var(--border)]'
                       }`}
                     >
@@ -516,10 +662,12 @@ export default async function OverviewPage({ searchParams }: PageProps) {
             </section>
           </div>
 
-          <OverviewAnomaliesPanel
-            initialAnomalies={anomalies}
-            canMutate={user.canMutate}
-          />
+          {user.canMutate && (
+            <OverviewAnomaliesPanel
+              initialAnomalies={anomalies}
+              canMutate={user.canMutate}
+            />
+          )}
 
           {repositorySummary && (
             <section className="section-panel animate-in">
@@ -544,9 +692,11 @@ export default async function OverviewPage({ searchParams }: PageProps) {
                   >
                     Open asset
                   </Link>
-                  <Link href="/jobs" className="btn-secondary text-sm">
-                    Run scan
-                  </Link>
+                  {user.canMutate && (
+                    <Link href="/jobs" className="btn-secondary text-sm">
+                      Run scan
+                    </Link>
+                  )}
                 </div>
               </div>
 
@@ -668,12 +818,16 @@ export default async function OverviewPage({ searchParams }: PageProps) {
                           className="rounded-xl border border-[var(--border)] p-3"
                         >
                           <div className="flex items-center justify-between gap-3">
-                            <Link
-                              href="/jobs"
-                              className="font-medium text-[var(--text)] hover:text-[var(--green)] hover:underline"
-                            >
-                              Job {job.job_id}
-                            </Link>
+                            {user.canMutate ? (
+                              <Link
+                                href="/jobs"
+                                className="font-medium text-[var(--text)] hover:text-[var(--green)] hover:underline"
+                              >
+                                Job {job.job_id}
+                              </Link>
+                            ) : (
+                              <span className="font-medium text-[var(--text)]">Job {job.job_id}</span>
+                            )}
                             <span
                               className={`rounded-full px-2 py-0.5 text-xs font-medium uppercase ${
                                 job.status === 'done'
@@ -1012,41 +1166,38 @@ export default async function OverviewPage({ searchParams }: PageProps) {
                 {topRiskFindings.length === 0 ? (
                   <p className="text-sm text-[var(--muted)]">No scored findings yet.</p>
                 ) : (
-                  <ul className="space-y-3">
-                    {topRiskFindings.map((finding) => (
-                      <li
-                        key={finding.finding_id}
-                        className="flex flex-wrap items-start justify-between gap-3 rounded border border-[var(--border)] p-3"
-                      >
-                        <div className="min-w-0 flex-1">
-                          <p className="font-medium text-[var(--text)]">{finding.title}</p>
-                          <p className="mt-1 text-xs text-[var(--muted)]">
-                            {finding.asset_key ? (
-                              <Link
-                                href={`/assets/${encodeURIComponent(finding.asset_key)}`}
-                                className="hover:text-[var(--green)] hover:underline"
-                              >
-                                {finding.asset_name || finding.asset_key}
-                              </Link>
-                            ) : (
-                              'Unlinked asset'
-                            )}
-                            {finding.category ? ` / ${finding.category}` : ''}
-                          </p>
-                        </div>
-                        <div className="text-right">
-                          <span
-                            className={`inline-block rounded px-2 py-0.5 text-xs font-semibold uppercase ${riskBadgeClass(finding.risk_level)}`}
-                          >
-                            {finding.risk_level || 'risk'}{' '}
-                            {Math.round(Number(finding.risk_score ?? 0))}
-                          </span>
-                          <p className="mt-1 text-[11px] capitalize text-[var(--muted)]">
-                            {finding.status.replace('_', ' ')}
-                          </p>
-                        </div>
-                      </li>
-                    ))}
+                  <ul className="space-y-2">
+                    {topRiskFindings.map((finding) => {
+                      const level = (finding.risk_level || '').toLowerCase();
+                      const severityClass =
+                        level === 'critical' ? 'severity-critical' :
+                        level === 'high' ? 'severity-high' :
+                        level === 'medium' ? 'severity-medium' :
+                        level === 'low' ? 'severity-low' : '';
+                      return (
+                        <li key={finding.finding_id} className={`data-row ${severityClass}`}>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-medium text-[var(--text)]">{finding.title}</p>
+                            <p className="mt-0.5 text-xs text-[var(--text-muted)]">
+                              {finding.asset_key ? (
+                                <Link href={`/assets/${encodeURIComponent(finding.asset_key)}`} className="hover:text-[var(--accent)]">
+                                  {finding.asset_name || finding.asset_key}
+                                </Link>
+                              ) : 'Unlinked asset'}
+                              {finding.category ? ` · ${finding.category}` : ''}
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <span className={`inline-block rounded-md px-2 py-0.5 text-[11px] font-semibold uppercase ${riskBadgeClass(finding.risk_level)}`}>
+                              {finding.risk_level || 'risk'} {Math.round(Number(finding.risk_score ?? 0))}
+                            </span>
+                            <p className="mt-0.5 text-[10px] capitalize text-[var(--text-subtle)]">
+                              {finding.status.replace('_', ' ')}
+                            </p>
+                          </div>
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </div>
@@ -1055,34 +1206,38 @@ export default async function OverviewPage({ searchParams }: PageProps) {
                 {topRiskAssets.length === 0 ? (
                   <p className="text-sm text-[var(--muted)]">No scored assets yet.</p>
                 ) : (
-                  <ul className="space-y-3">
-                    {topRiskAssets.map((asset) => (
-                      <li
-                        key={asset.asset_key}
-                        className="flex flex-wrap items-start justify-between gap-3 rounded border border-[var(--border)] p-3"
-                      >
-                        <div className="min-w-0 flex-1">
-                          <Link
-                            href={`/assets/${encodeURIComponent(asset.asset_key)}`}
-                            className="font-medium text-[var(--text)] hover:text-[var(--green)] hover:underline"
-                          >
-                            {asset.asset_name}
-                          </Link>
-                          <p className="mt-1 text-xs text-[var(--muted)]">
-                            {asset.active_findings} active finding
-                            {asset.active_findings === 1 ? '' : 's'}
-                          </p>
-                        </div>
-                        <div className="text-right">
-                          <span
-                            className={`inline-block rounded px-2 py-0.5 text-xs font-semibold uppercase ${riskBadgeClass(asset.risk_level)}`}
-                          >
-                            {asset.risk_level || 'risk'}{' '}
-                            {Math.round(asset.max_risk_score)}
-                          </span>
-                        </div>
-                      </li>
-                    ))}
+                  <ul className="space-y-2">
+                    {topRiskAssets.map((asset) => {
+                      const level = (asset.risk_level || '').toLowerCase();
+                      const severityClass =
+                        level === 'critical' ? 'severity-critical' :
+                        level === 'high' ? 'severity-high' :
+                        level === 'medium' ? 'severity-medium' :
+                        level === 'low' ? 'severity-low' : '';
+                      return (
+                        <li key={asset.asset_key} className={`data-row ${severityClass}`}>
+                          <div className="min-w-0 flex-1">
+                            <Link href={`/assets/${encodeURIComponent(asset.asset_key)}`} className="text-sm font-medium text-[var(--text)] hover:text-[var(--accent)]">
+                              {asset.asset_name}
+                            </Link>
+                            <p className="mt-0.5 text-xs text-[var(--text-muted)]">
+                              {asset.active_findings} active finding{asset.active_findings === 1 ? '' : 's'}
+                            </p>
+                            <div className="risk-bar-wrap mt-2">
+                              <div className="risk-bar-fill" style={{
+                                width: `${Math.round(asset.max_risk_score)}%`,
+                                background: level === 'critical' ? 'var(--red)' : level === 'high' ? 'var(--orange)' : level === 'medium' ? 'var(--amber)' : 'var(--green)',
+                              }} />
+                            </div>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <span className={`inline-block rounded-md px-2 py-0.5 text-[11px] font-semibold uppercase ${riskBadgeClass(asset.risk_level)}`}>
+                              {asset.risk_level || 'risk'} {Math.round(asset.max_risk_score)}
+                            </span>
+                          </div>
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </div>

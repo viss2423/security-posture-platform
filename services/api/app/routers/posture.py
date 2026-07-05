@@ -19,7 +19,7 @@ from app.audit import log_audit
 from app.db import get_db
 from app.queue import publish_correlation_event, publish_notify
 from app.request_context import current_tenant_id, request_id_ctx
-from app.routers.auth import require_auth, require_role
+from app.routers.auth import get_current_role, require_auth, require_role
 from app.schemas.posture import (
     AssetDetailResponse,
     AssetState,
@@ -115,11 +115,13 @@ def _get_asset_metadata_batch(db: Session, asset_keys: list[str]) -> dict[str, d
         return {}
     placeholders = ", ".join(f":k{i}" for i in range(len(asset_keys)))
     params = {f"k{i}": k for i, k in enumerate(asset_keys)}
-    q = text(f"""  # nosemgrep
+    q = text(  # nosemgrep
+        f"""
       SELECT asset_key, name, owner, environment, criticality
       FROM assets
       WHERE asset_key IN ({placeholders})
-    """)
+    """
+    )
     rows = db.execute(q, params).mappings().all()
     out = {}
     for r in rows:
@@ -451,15 +453,45 @@ def _summarize_posture_items(items: list[dict]) -> dict:
     }
 
 
+OPERATOR_ROLES = {"admin", "analyst"}
+
+
+def _demo_asset_keys(db: Session) -> set[str]:
+    """Asset keys tagged as demo data - the only assets viewer-role users may see."""
+    rows = db.execute(text("SELECT asset_key FROM assets WHERE 'demo' = ANY(tags)")).all()
+    return {r[0] for r in rows}
+
+
+def _scope_items_for_role(db: Session, role: str, items: list[dict]) -> list[dict]:
+    """Viewer-role users get a demo sandbox: only demo-tagged assets are visible.
+    Admin and analyst see everything."""
+    if role in OPERATOR_ROLES:
+        return items
+    demo_keys = _demo_asset_keys(db)
+    return [d for d in items if (d.get("asset_id") or d.get("asset_key")) in demo_keys]
+
+
+def _ensure_asset_visible_for_role(db: Session, role: str, asset_key: str) -> None:
+    if role in OPERATOR_ROLES:
+        return
+    visible = db.execute(
+        text("SELECT 1 FROM assets WHERE asset_key = :asset_key AND 'demo' = ANY(tags)"),
+        {"asset_key": asset_key},
+    ).first()
+    if not visible:
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+
 def _get_filtered_posture_list(
     db: Session,
     environment: str | None = None,
     criticality: str | None = None,
     owner: str | None = None,
     status: str | None = None,
+    role: str = "admin",
 ) -> list[dict]:
     """Fetch posture list from OpenSearch, merge with Postgres metadata, apply filters. Returns list of merged dicts."""
-    items = _build_merged_posture_items(db)
+    items = _scope_items_for_role(db, role, _build_merged_posture_items(db))
     env_list = _parse_multi_param(environment)
     crit_list = _parse_multi_param(criticality)
     owner_list = _parse_multi_param(owner)
@@ -476,10 +508,11 @@ def list_posture(
     status: str | None = Query(None, description="Filter by status (green,amber,red)"),
     db: Session = Depends(get_db),
     _user: str = Depends(require_auth),
+    role: str = Depends(get_current_role),
 ):
     """List current posture for all assets (canonical schema). Enriched with Postgres. Optional filters: environment, criticality, owner, status. ?format=csv for CSV export."""
     items = _get_filtered_posture_list(
-        db, environment=environment, criticality=criticality, owner=owner, status=status
+        db, environment=environment, criticality=criticality, owner=owner, status=status, role=role
     )
     if format == "csv":
         out = io.StringIO()
@@ -573,13 +606,14 @@ def posture_overview(
     status: str | None = Query(None),
     db: Session = Depends(get_db),
     _user: str = Depends(require_auth),
+    role: str = Depends(get_current_role),
 ):
     """
     Executive overview: strip (score, assets, alerts, trend vs yesterday), top drivers (worst assets, by reason, recently updated).
     Same filters as /posture and /summary.
     """
     items = _get_filtered_posture_list(
-        db, environment=environment, criticality=criticality, owner=owner, status=status
+        db, environment=environment, criticality=criticality, owner=owner, status=status, role=role
     )
     summary = _summarize_posture_items(items)
     total_assets = summary["total_assets"]
@@ -591,25 +625,26 @@ def posture_overview(
     # Trend vs yesterday: compare to snapshot closest to now()-24h
     score_trend_vs_yesterday: str | None = None  # "up" | "down" | "same" | null
     risk_change_24h: int | None = None  # delta red count
-    q_snap = text("""
-      SELECT posture_score_avg, red, created_at
-      FROM posture_report_snapshots
-      WHERE created_at <= now() - interval '23 hours'
-      ORDER BY created_at DESC
-      LIMIT 1
-    """)
-    row = db.execute(q_snap).mappings().first()
-    if row:
-        prev_score = row.get("posture_score_avg")
-        prev_red = row.get("red") or 0
-        if posture_score_avg is not None and prev_score is not None:
-            if posture_score_avg > prev_score:
-                score_trend_vs_yesterday = "up"
-            elif posture_score_avg < prev_score:
-                score_trend_vs_yesterday = "down"
-            else:
-                score_trend_vs_yesterday = "same"
-        risk_change_24h = by_state.get("red", 0) - prev_red
+    if role in OPERATOR_ROLES:
+        q_snap = text("""
+          SELECT posture_score_avg, red, created_at
+          FROM posture_report_snapshots
+          WHERE created_at <= now() - interval '23 hours'
+          ORDER BY created_at DESC
+          LIMIT 1
+        """)
+        row = db.execute(q_snap).mappings().first()
+        if row:
+            prev_score = row.get("posture_score_avg")
+            prev_red = row.get("red") or 0
+            if posture_score_avg is not None and prev_score is not None:
+                if posture_score_avg > prev_score:
+                    score_trend_vs_yesterday = "up"
+                elif posture_score_avg < prev_score:
+                    score_trend_vs_yesterday = "down"
+                else:
+                    score_trend_vs_yesterday = "same"
+            risk_change_24h = by_state.get("red", 0) - prev_red
 
     # Top drivers: worst 5 by score, by reason counts, recently updated (last_seen desc)
     worst_assets = sorted(
@@ -672,7 +707,7 @@ def posture_overview(
 def posture_trend(
     range: str = Query("7d", description="24h, 7d, or 30d"),
     db: Session = Depends(get_db),
-    _user: str = Depends(require_auth),
+    _user: str = Depends(require_role(["admin", "analyst"])),
 ):
     """Time series of posture from report snapshots for charts. Points: created_at, posture_score_avg, green, amber, red."""
     interval = "24 hours" if range == "24h" else "7 days" if range == "7d" else "30 days"
@@ -701,7 +736,7 @@ def posture_trend(
 @router.get("/reports/summary", response_model=ReportSummary)
 def reports_summary(
     period: str = Query("24h", description="24h or 7d"),
-    _user: str = Depends(require_auth),
+    _user: str = Depends(require_role(["admin", "analyst"])),
 ):
     """Weekly/summary report: uptime %, posture score, avg latency, top incidents (down assets). Unfiltered."""
     return _build_report_summary(period)
@@ -755,7 +790,7 @@ def reports_snapshot(
 def reports_history(
     limit: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
-    _user: str = Depends(require_auth),
+    _user: str = Depends(require_role(["admin", "analyst"])),
 ):
     """List stored report snapshots, newest first."""
     q = text("""
@@ -772,7 +807,7 @@ def reports_history(
 def reports_history_one(
     snapshot_id: int,
     db: Session = Depends(get_db),
-    _user: str = Depends(require_auth),
+    _user: str = Depends(require_role(["admin", "analyst"])),
 ):
     """Get one stored report snapshot by id."""
     q = text("""
@@ -1043,7 +1078,7 @@ def reports_executive_pdf(
     ),
     period: str = Query("24h", description="24h or 7d (used when snapshot_id is not set)"),
     db: Session = Depends(get_db),
-    _user: str = Depends(require_auth),
+    _user: str = Depends(require_role(["admin", "analyst"])),
 ):
     """Download Executive Security Posture Report (corporate format): Page 1 summary + trend, Page 2 red/amber, Page 3 trends."""
     report_id = str(uuid.uuid4())
@@ -1209,7 +1244,7 @@ def reports_what_changed(
         None, description="Snapshot id to compare to; omit for current state"
     ),
     db: Session = Depends(get_db),
-    _user: str = Depends(require_auth),
+    _user: str = Depends(require_role(["admin", "analyst"])),
 ):
     """Compare two snapshots or a snapshot vs current. Returns deltas and incidents added/removed."""
     q_one = text("""
@@ -1333,10 +1368,11 @@ def posture_summary(
     status: str | None = Query(None),
     db: Session = Depends(get_db),
     _user: str = Depends(require_auth),
+    role: str = Depends(get_current_role),
 ):
     """Summary counts and down_assets. Optional filters: environment, criticality, owner, status."""
     items = _get_filtered_posture_list(
-        db, environment=environment, criticality=criticality, owner=owner, status=status
+        db, environment=environment, criticality=criticality, owner=owner, status=status, role=role
     )
     summary = _summarize_posture_items(items)
     return PostureSummary(
@@ -1351,7 +1387,7 @@ def posture_summary(
 @router.post("/alert/send")
 def posture_alert_send(
     db: Session = Depends(get_db),
-    user: str = Depends(require_auth),
+    user: str = Depends(require_role(["admin", "analyst"])),
 ):
     """
     Check current posture; if any assets are down, send notification.
@@ -1459,8 +1495,10 @@ def get_posture_detail(
     hours: int = Query(24, ge=1, le=168),
     db: Session = Depends(get_db),
     _user: str = Depends(require_auth),
+    role: str = Depends(get_current_role),
 ):
     """Extended detail: state + timeline + evidence + recommendations + completeness/SLO. State enriched with Postgres owner/criticality."""
+    _ensure_asset_visible_for_role(db, role, asset_key)
     try:
         raw = _fetch_status_doc(asset_key)
     except httpx.RequestError as e:
@@ -1610,8 +1648,14 @@ def get_posture_detail(
 
 
 @router.get("/{asset_key}", response_model=AssetState)
-def get_posture(asset_key: str, db: Session = Depends(get_db), _user: str = Depends(require_auth)):
+def get_posture(
+    asset_key: str,
+    db: Session = Depends(get_db),
+    _user: str = Depends(require_auth),
+    role: str = Depends(get_current_role),
+):
     """Get current posture for one asset (canonical schema). Enriched with Postgres owner/criticality."""
+    _ensure_asset_visible_for_role(db, role, asset_key)
     try:
         raw = _fetch_status_doc(asset_key)
     except httpx.RequestError as e:

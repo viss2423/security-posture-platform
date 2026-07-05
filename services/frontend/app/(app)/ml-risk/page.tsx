@@ -6,6 +6,7 @@ import {
   bootstrapRiskModelLabels,
   createFindingRiskLabel,
   createRiskModelSnapshot,
+  getAssets,
   getDependencyRiskSummary,
   getRiskModelEvaluation,
   getRiskModelSnapshot,
@@ -37,13 +38,13 @@ function driftSeverityClass(level: string): string {
 function riskBadgeClass(level?: string | null): string {
   switch ((level || '').toLowerCase()) {
     case 'critical':
-      return 'bg-[var(--red)] text-white';
+      return 'bg-red-600 text-white';
     case 'high':
-      return 'bg-orange-600 text-white';
+      return 'bg-orange-700 text-white';
     case 'medium':
       return 'bg-yellow-500 text-black';
     case 'low':
-      return 'bg-blue-500 text-white';
+      return 'bg-blue-600 text-white';
     default:
       return 'bg-[var(--muted)]/20 text-[var(--muted)]';
   }
@@ -150,7 +151,12 @@ export default function MlRiskPage() {
       getRiskModelStatus(),
       getRiskModelEvaluation({ review_limit: 12, threshold: thresholdOverride }),
       listRiskModelSnapshots({ limit: 12 }),
-      getDependencyRiskSummary('secplat-repo', 20),
+      // Discover a real repository asset instead of assuming a fixed key,
+      // so this works against any deployment (and never 404s when none exists).
+      getAssets().then((assets) => {
+        const repo = assets.find((asset) => asset.asset_type === 'repository' && asset.asset_key);
+        return repo?.asset_key ? getDependencyRiskSummary(repo.asset_key, 20) : null;
+      }),
     ])
       .then(([statusOut, evaluationOut, snapshotsOut, dependencyOut]) => {
         const primaryError =
@@ -334,71 +340,96 @@ export default function MlRiskPage() {
       <section className="page-hero animate-in">
         <div className="hero-grid">
           <div>
-            <h1 className="hero-title">Scoring Studio</h1>
+            <span className="live-pill">
+              <span className={status?.current_scoring_mode === 'ml' ? 'dot-online' : 'dot-warning'} />
+              {status?.current_scoring_mode === 'ml' ? 'AI mode active' : 'Rule-based mode'}
+            </span>
+
+            <div className="mt-5 flex min-w-0 flex-wrap items-end gap-4">
+              <span
+                className="text-[3.25rem] font-black leading-none tabular-nums animate-count sm:text-[5.5rem]"
+                style={{
+                  color: evaluation?.labeled_evaluation.precision != null ? 'var(--green)' : 'var(--text-subtle)',
+                  textShadow: evaluation?.labeled_evaluation.precision != null ? '0 0 40px var(--green)55, 0 0 80px var(--green)22' : 'none',
+                }}
+              >
+                {formatPct(evaluation?.labeled_evaluation.precision)}
+              </span>
+              <div className="mb-4 flex flex-col gap-1">
+                <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--text-subtle)]">
+                  AI accuracy
+                </span>
+                <span className="text-sm text-[var(--text-muted)]">
+                  Correctly identifies real threats
+                </span>
+              </div>
+            </div>
+
+            <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full" style={{ background: 'rgba(255,255,255,0.06)' }}>
+              <div
+                className="h-full rounded-full transition-all duration-1000"
+                style={{
+                  width: `${Math.round((evaluation?.labeled_evaluation.precision ?? 0) * 100)}%`,
+                  background: 'var(--green)',
+                  boxShadow: '0 0 8px var(--green)66',
+                }}
+              />
+            </div>
+
+            <h1 className="mt-5 text-xl font-bold text-[var(--text-strong)]">AI Risk Engine</h1>
             <p className="hero-copy">
-              Tune the scoring model, review drift, and improve prioritization with analyst
-              feedback.
+              Your AI learns from your team&apos;s decisions to automatically prioritize which findings need immediate action — reducing alert noise so analysts focus on what actually matters.
             </p>
+
             <div className="mt-4 flex flex-wrap gap-2">
               <Link href="/findings" className="btn-secondary text-sm">
-                Back to risk review
+                View findings
               </Link>
               {canMutate && (
-                <button
-                  type="button"
-                  onClick={handleBootstrap}
-                  disabled={busy !== null}
-                  className="btn-secondary text-sm"
-                >
-                  {busy === 'bootstrap' ? 'Bootstrapping...' : 'Bootstrap labels'}
+                <button type="button" onClick={handleBootstrap} disabled={busy !== null} className="btn-secondary text-sm">
+                  {busy === 'bootstrap' ? 'Seeding...' : 'Seed AI with findings'}
                 </button>
               )}
               {canMutate && (
-                <button
-                  type="button"
-                  onClick={handleSnapshot}
-                  disabled={busy !== null}
-                  className="btn-secondary text-sm"
-                >
-                  {busy === 'snapshot' ? 'Saving snapshot...' : 'Save snapshot'}
+                <button type="button" onClick={handleSnapshot} disabled={busy !== null} className="btn-secondary text-sm">
+                  {busy === 'snapshot' ? 'Saving...' : 'Save checkpoint'}
                 </button>
               )}
               {isAdmin && (
-                <button
-                  type="button"
-                  onClick={handleTrain}
-                  disabled={busy !== null}
-                  className="btn-primary text-sm"
-                >
-                  {busy === 'train' ? 'Training...' : 'Train model'}
+                <button type="button" onClick={handleTrain} disabled={busy !== null} className="btn-primary text-sm">
+                  {busy === 'train' ? 'Training...' : 'Retrain AI'}
                 </button>
               )}
             </div>
           </div>
           <div className="hero-stat-grid">
             <div className="hero-stat">
-              <p className="hero-stat-label">Scoring mode</p>
-              <p className="hero-stat-value">
-                {status?.current_scoring_mode === 'ml' ? 'ML' : 'Heuristic'}
+              <p className="hero-stat-label">AI mode</p>
+              <p className="hero-stat-value" style={{ color: status?.current_scoring_mode === 'ml' ? 'var(--green)' : 'var(--amber)' }}>
+                {status?.current_scoring_mode === 'ml' ? 'Active' : 'Basic'}
+              </p>
+              <p className="mt-1 text-[11px] text-[var(--text-subtle)]">
+                {status?.current_scoring_mode === 'ml' ? 'Machine learning on' : 'Rule-based fallback'}
               </p>
             </div>
             <div className="hero-stat">
-              <p className="hero-stat-label">Active threshold</p>
-              <p className="hero-stat-value">{formatThreshold(activeThreshold)}</p>
+              <p className="hero-stat-label">Findings reviewed</p>
+              <p className="hero-stat-value">{evaluation?.labeled_evaluation.rows ?? '--'}</p>
+              <p className="mt-1 text-[11px] text-[var(--text-subtle)]">Used to train AI</p>
             </div>
             <div className="hero-stat">
-              <p className="hero-stat-label">Precision</p>
-              <p className="hero-stat-value">
-                {formatPct(evaluation?.labeled_evaluation.precision)}
+              <p className="hero-stat-label">Threats caught</p>
+              <p className="hero-stat-value" style={{ color: 'var(--green)' }}>
+                {formatPct(evaluation?.labeled_evaluation.recall)}
               </p>
+              <p className="mt-1 text-[11px] text-[var(--text-subtle)]">Of all real threats</p>
             </div>
             <div className="hero-stat">
-              <p className="hero-stat-label">Drift PSI</p>
-              <p className="hero-stat-value">
-                {evaluation?.drift.score_distribution_psi != null
-                  ? Number(evaluation.drift.score_distribution_psi).toFixed(3)
-                  : '-'}
+              <p className="hero-stat-label">Need your review</p>
+              <p className="hero-stat-value" style={{ color: (evaluation?.review_queue?.length ?? 0) > 0 ? 'var(--amber)' : 'var(--green)' }}>
+                {evaluation?.review_queue?.length ?? '--'}
               </p>
+              <p className="mt-1 text-[11px] text-[var(--text-subtle)]">Awaiting feedback</p>
             </div>
           </div>
         </div>
@@ -419,7 +450,7 @@ export default function MlRiskPage() {
 
       {loading && !status && !evaluation ? (
         <div className="card">
-          <p className="text-sm text-[var(--muted)]">Loading scoring studio...</p>
+          <p className="text-sm text-[var(--muted)]">Loading AI engine...</p>
         </div>
       ) : (
         <>
@@ -427,16 +458,16 @@ export default function MlRiskPage() {
             <section className="section-panel animate-in">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
-                  <h2 className="section-title mb-2">Live model status</h2>
+                  <h2 className="section-title mb-2">AI Status</h2>
                   <div className="flex flex-wrap gap-2">
                     <span
                       className={`inline-block rounded px-2 py-0.5 text-xs font-semibold uppercase ${
                         status.current_scoring_mode === 'ml'
-                          ? 'bg-[var(--green)] text-white'
+                          ? 'bg-[var(--green)] text-black'
                           : 'bg-[var(--muted)]/20 text-[var(--muted)]'
                       }`}
                     >
-                      {status.current_scoring_mode === 'ml' ? 'ML active' : 'Heuristic active'}
+                      {status.current_scoring_mode === 'ml' ? 'AI mode on' : 'Rule-based mode'}
                     </span>
                     <span
                       className={`inline-block rounded px-2 py-0.5 text-xs font-semibold uppercase ${
@@ -445,16 +476,9 @@ export default function MlRiskPage() {
                           : 'bg-[var(--amber)]/20 text-[var(--amber)]'
                       }`}
                     >
-                      {status.readiness.status === 'ready' ? 'Ready to scale' : 'More labels needed'}
-                    </span>
-                    <span className="inline-block rounded bg-[var(--surface-elevated)] px-2 py-0.5 text-xs font-semibold uppercase text-[var(--muted)]">
-                      {status.model_metadata?.algorithm || 'no algorithm'}
-                    </span>
-                    <span className="inline-block rounded bg-[var(--surface-elevated)] px-2 py-0.5 text-xs font-semibold uppercase text-[var(--muted)]">
-                      threshold {formatThreshold(status.model_metadata?.active_threshold)}
+                      {status.readiness.status === 'ready' ? 'AI ready' : 'Needs more feedback'}
                     </span>
                   </div>
-                  <p className="mt-3 text-xs text-[var(--muted)]">Signature: {status.scoring_signature}</p>
                   {status.model_metadata?.trained_at && (
                     <p className="mt-1 text-xs text-[var(--muted)]">
                       Trained {formatDateTime(status.model_metadata.trained_at)}
@@ -485,34 +509,34 @@ export default function MlRiskPage() {
             <>
               <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
                 <MetricCard
-                  label="Labeled rows"
+                  label="Findings reviewed"
                   value={evaluation.labeled_evaluation.rows}
-                  subtext="Current labeled evaluation set"
+                  subtext="Used to train your AI"
                 />
                 <MetricCard
-                  label="Active threshold"
+                  label="Decision confidence"
                   value={formatThreshold(evaluation.threshold)}
-                  subtext={`Recommended ${formatThreshold(evaluation.recommended_threshold)}`}
+                  subtext={`Suggested ${formatThreshold(evaluation.recommended_threshold)}`}
                 />
                 <MetricCard
-                  label="Precision"
+                  label="Threat accuracy"
                   value={formatPct(evaluation.labeled_evaluation.precision)}
-                  subtext="Positive prediction precision"
+                  subtext="Correctly flagged threats"
                 />
                 <MetricCard
-                  label="Recall"
+                  label="Threat coverage"
                   value={formatPct(evaluation.labeled_evaluation.recall)}
-                  subtext="Positive class recall"
+                  subtext="Real threats found"
                 />
                 <MetricCard
-                  label="F1"
+                  label="Overall score"
                   value={formatPct(evaluation.labeled_evaluation.f1)}
-                  subtext={`Threshold source ${evaluation.threshold_source || 'recommended'}`}
+                  subtext="Accuracy + coverage balance"
                 />
                 <MetricCard
-                  label="Brier"
+                  label="Confidence quality"
                   value={formatPct(evaluation.calibration.brier_score)}
-                  subtext="Probability calibration error"
+                  subtext="How reliable predictions are"
                 />
               </section>
 
@@ -617,8 +641,8 @@ export default function MlRiskPage() {
                           <li key={item.finding_id} className="rounded-xl border border-[var(--border)] p-3">
                             <div className="flex items-start justify-between gap-3">
                               <div className="min-w-0 flex-1">
-                                <p className="font-medium text-[var(--text)]">{item.title}</p>
-                                <p className="mt-1 text-xs text-[var(--muted)]">
+                                <p className="break-words font-medium text-[var(--text)]">{item.title}</p>
+                                <p className="mt-1 break-words text-xs text-[var(--muted)]">
                                   {item.package_name || 'package'}{item.package_version ? `@${item.package_version}` : ''}
                                   {item.fixed_version ? ` -> ${item.fixed_version}` : ''}
                                 </p>
@@ -662,6 +686,7 @@ export default function MlRiskPage() {
                     <div className="flex flex-wrap items-center gap-3">
                       <input
                         type="range"
+                        aria-label="Risk score threshold slider"
                         min="0.05"
                         max="0.95"
                         step="0.01"
@@ -671,6 +696,7 @@ export default function MlRiskPage() {
                       />
                       <input
                         type="number"
+                        aria-label="Risk score threshold value"
                         min="0.05"
                         max="0.95"
                         step="0.01"
@@ -1059,13 +1085,13 @@ export default function MlRiskPage() {
               <section className="section-panel animate-in">
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <h2 className="section-title">Analyst review queue</h2>
+                    <h2 className="section-title">Help AI learn</h2>
                     <p className="mt-1 text-sm text-[var(--muted)]">
-                      Prioritize unlabeled findings closest to the current decision boundary.
+                      These findings are hardest for AI to classify. Your feedback makes it smarter.
                     </p>
                   </div>
                   <span className="text-xs text-[var(--muted)]">
-                    Threshold {Math.round(evaluation.threshold * 100)} / 100
+                    {evaluation.review_queue.length} awaiting feedback
                   </span>
                 </div>
                 {evaluation.review_queue.length === 0 ? (
@@ -1078,10 +1104,10 @@ export default function MlRiskPage() {
                       <li key={item.finding_id} className="rounded-xl border border-[var(--border)] p-4">
                         <div className="flex flex-wrap items-start justify-between gap-4">
                           <div className="min-w-0 flex-1">
-                            <p className="font-medium text-[var(--text)]">
+                            <p className="break-words font-medium text-[var(--text)]">
                               {item.title || item.finding_key || `Finding ${item.finding_id}`}
                             </p>
-                            <p className="mt-1 text-xs text-[var(--muted)]">
+                            <p className="mt-1 break-words text-xs text-[var(--muted)]">
                               {item.asset_key ? (
                                 <Link
                                   href={`/assets/${encodeURIComponent(item.asset_key)}`}
@@ -1096,11 +1122,7 @@ export default function MlRiskPage() {
                               {item.severity ? ` / ${item.severity}` : ''}
                             </p>
                             <p className="mt-2 text-xs text-[var(--muted)]">
-                              Predicted probability {formatPct(item.predicted_probability)} | review priority{' '}
-                              {(item.uncertainty * 100).toFixed(1)}%
-                              {item.distance_from_threshold != null
-                                ? ` | distance ${(item.distance_from_threshold * 100).toFixed(1)} pts from boundary`
-                                : ''}
+                              AI confidence: {formatPct(item.predicted_probability)} · Your call helps AI improve
                             </p>
                           </div>
                           <div className="text-right">
@@ -1117,11 +1139,11 @@ export default function MlRiskPage() {
                                   type="button"
                                   onClick={() => handleLabel(item.finding_id, 'incident_worthy')}
                                   disabled={labelingKey === `${item.finding_id}:incident_worthy`}
-                                  className="btn-secondary text-xs"
+                                  className="btn-primary text-xs"
                                 >
                                   {labelingKey === `${item.finding_id}:incident_worthy`
                                     ? 'Saving...'
-                                    : 'Incident-worthy'}
+                                    : 'Yes, investigate'}
                                 </button>
                                 <button
                                   type="button"
@@ -1129,7 +1151,7 @@ export default function MlRiskPage() {
                                   disabled={labelingKey === `${item.finding_id}:benign`}
                                   className="btn-secondary text-xs"
                                 >
-                                  {labelingKey === `${item.finding_id}:benign` ? 'Saving...' : 'Benign'}
+                                  {labelingKey === `${item.finding_id}:benign` ? 'Saving...' : 'No, ignore'}
                                 </button>
                               </div>
                             )}

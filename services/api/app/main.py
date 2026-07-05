@@ -4,7 +4,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -27,6 +27,7 @@ from .routers import (
     attack_surface,
     auth,
     automation,
+    compliance,
     cyber_range,
     detections,
     findings,
@@ -47,6 +48,7 @@ from .routers import (
     threat_intel,
 )
 from .routers import audit as audit_router
+from .routers.auth import require_role
 from .settings import settings
 from .stability import capture_api_runtime_snapshot, materialize_sli_sample
 from .telemetry import (
@@ -301,6 +303,14 @@ app.add_middleware(MetricsMiddleware)
 app.add_middleware(RequestLogMiddleware)
 register_error_handlers(app)
 
+# Routers below are mounted in two tiers:
+#  - Open tier: available to every authenticated user (viewers get demo-scoped data
+#    inside the endpoints themselves — see posture/assets/findings).
+#  - Operator tier: the operator's real security data (alerts, incidents, telemetry,
+#    jobs, audit, compliance evidence, ...). Gated to analyst/admin at mount time so
+#    no individual endpoint inside these routers can be forgotten.
+_operator_only = [Depends(require_role(["admin", "analyst"]))]
+
 app.include_router(health.router)
 app.include_router(platform.router)
 app.include_router(security.router)
@@ -309,24 +319,25 @@ app.include_router(assets.router)
 app.include_router(posture.router)
 app.include_router(retention.router)
 app.include_router(privacy.router)
-app.include_router(audit_router.router)
-app.include_router(alerts.router)
-app.include_router(automation.router)
-app.include_router(attack_surface.router)
-app.include_router(attack_graph.router)
-app.include_router(incidents.router)
-app.include_router(jobs.router, prefix="/jobs", tags=["jobs"])
+app.include_router(audit_router.router, dependencies=_operator_only)
+app.include_router(alerts.router, dependencies=_operator_only)
+app.include_router(automation.router, dependencies=_operator_only)
+app.include_router(attack_surface.router, dependencies=_operator_only)
+app.include_router(attack_graph.router, dependencies=_operator_only)
+app.include_router(incidents.router, dependencies=_operator_only)
+app.include_router(jobs.router, prefix="/jobs", tags=["jobs"], dependencies=_operator_only)
 app.include_router(jobs.internal_router)
 app.include_router(findings.router, prefix="/findings", tags=["findings"])
-app.include_router(policy.router)
-app.include_router(integrations.router)
-app.include_router(suppression.router)
-app.include_router(threat_intel.router)
-app.include_router(telemetry.router)
-app.include_router(risk.router)
-app.include_router(attack_lab.router)
-app.include_router(cyber_range.router)
-app.include_router(detections.router)
-app.include_router(ai.router)
-app.include_router(ai_feedback.router)
-app.include_router(risk_ml.router)
+app.include_router(policy.router, dependencies=_operator_only)
+app.include_router(integrations.router, dependencies=_operator_only)
+app.include_router(suppression.router, dependencies=_operator_only)
+app.include_router(threat_intel.router, dependencies=_operator_only)
+app.include_router(telemetry.router, dependencies=_operator_only)
+app.include_router(risk.router, dependencies=_operator_only)
+app.include_router(attack_lab.router, dependencies=_operator_only)
+app.include_router(compliance.router, dependencies=_operator_only)
+app.include_router(cyber_range.router, dependencies=_operator_only)
+app.include_router(detections.router, dependencies=_operator_only)
+app.include_router(ai.router, dependencies=_operator_only)
+app.include_router(ai_feedback.router, dependencies=_operator_only)
+app.include_router(risk_ml.router, dependencies=_operator_only)

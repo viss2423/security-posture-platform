@@ -51,13 +51,13 @@ function isOptionalRepositorySummaryError(message: string | null): boolean {
 function severityBadgeClass(value?: string | null): string {
   switch ((value || '').toLowerCase()) {
     case 'critical':
-      return 'bg-[var(--red)] text-white';
+      return 'bg-red-600 text-white';
     case 'high':
-      return 'bg-orange-600 text-white';
+      return 'bg-orange-700 text-white';
     case 'medium':
       return 'bg-yellow-500 text-black';
     case 'low':
-      return 'bg-blue-500 text-white';
+      return 'bg-blue-600 text-white';
     default:
       return 'bg-[var(--muted)]/20 text-[var(--muted)]';
   }
@@ -339,7 +339,7 @@ export default function AssetDetailPage() {
                 onClick={() => setActiveTab(id)}
                 className={`rounded-full px-4 py-2 text-sm font-medium transition ${
                   activeTab === id
-                    ? 'bg-[var(--green)] text-white shadow-lg shadow-[var(--green-glow)]'
+                    ? 'bg-[var(--green)] text-black shadow-lg shadow-[var(--green-glow)]'
                     : 'border border-[var(--border)] bg-[var(--surface-elevated)] text-[var(--muted)] hover:bg-[var(--surface)]'
                 }`}
               >

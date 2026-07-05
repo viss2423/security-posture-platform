@@ -1,0 +1,108 @@
+version: '3.8'
+
+# Auth stack — SuperTokens (app users) + Keycloak (enterprise SSO) + Authelia (admin gateway)
+#
+# Ports:
+#   3567  — SuperTokens core API
+#   8180  — Keycloak admin console
+#   9091  — Authelia portal
+#
+# SuperTokens dashboard: use the supertokens-auth-react SDK or curl the core API
+# Keycloak admin: http://<VM_IP>:8180  admin / ${KEYCLOAK_ADMIN_PASSWORD}
+# Authelia portal: http://<VM_IP>:9091
+
+services:
+  # ── SuperTokens ────────────────────────────────────────────────────────────
+  supertokens:
+    image: registry.supertokens.io/supertokens/supertokens-postgresql:9.3
+    depends_on:
+      auth-postgres:
+        condition: service_healthy
+    ports:
+      - '3567:3567'
+    environment:
+      POSTGRESQL_CONNECTION_URI: postgresql://supertokens:${AUTH_DB_PASSWORD}@auth-postgres:5432/supertokens
+      # API key for your app to talk to SuperTokens core
+      API_KEYS: ${SUPERTOKENS_API_KEY}
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'bash', '-c', 'curl -sf http://localhost:3567/hello']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [auth]
+
+  # ── Keycloak (enterprise SSO / SAML / OIDC) ────────────────────────────────
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0.7
+    command: start-dev --http-port=8180
+    depends_on:
+      auth-postgres:
+        condition: service_healthy
+    ports:
+      - '8180:8180'
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://auth-postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${AUTH_DB_PASSWORD}
+      KC_HOSTNAME_STRICT: 'false'
+      KC_HTTP_ENABLED: 'true'
+      KC_PROXY: edge
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -sf http://localhost:8180/health/ready || exit 1']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks: [auth]
+
+  # ── Authelia (MFA gateway for admin dashboards) ─────────────────────────────
+  authelia:
+    image: authelia/authelia:4.38.19
+    depends_on: [auth-redis]
+    ports:
+      - '9091:9091'
+    volumes:
+      - ./config/authelia:/config
+    environment:
+      AUTHELIA_JWT_SECRET: ${AUTHELIA_JWT_SECRET}
+      AUTHELIA_SESSION_SECRET: ${AUTHELIA_SESSION_SECRET}
+      AUTHELIA_STORAGE_ENCRYPTION_KEY: ${AUTHELIA_STORAGE_KEY}
+      AUTHELIA_STORAGE_LOCAL_PATH: /config/db.sqlite3
+      AUTHELIA_SESSION_REDIS_HOST: auth-redis
+      AUTHELIA_SESSION_REDIS_PORT: '6379'
+    restart: unless-stopped
+    networks: [auth]
+
+  # ── Shared Postgres for SuperTokens + Keycloak ──────────────────────────────
+  auth-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${AUTH_DB_PASSWORD}
+      POSTGRES_MULTIPLE_DATABASES: supertokens,keycloak
+    volumes:
+      - auth-postgres:/var/lib/postgresql/data
+      - ./config/postgres/init-multiple-dbs.sh:/docker-entrypoint-initdb.d/init-multiple-dbs.sh
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks: [auth]
+
+  auth-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks: [auth]
+
+volumes:
+  auth-postgres:
+
+networks:
+  auth:
+    driver: bridge

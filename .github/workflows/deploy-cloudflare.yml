@@ -1,0 +1,54 @@
+name: Deploy — Cloudflare Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-cloudflare-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: services/frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: services/frontend
+        run: npm ci
+
+      - name: Install next-on-pages
+        working-directory: services/frontend
+        run: npm install --save-dev @cloudflare/next-on-pages
+
+      - name: Build (Next.js → Cloudflare Workers)
+        working-directory: services/frontend
+        run: npx @cloudflare/next-on-pages
+        env:
+          NODE_ENV: production
+          # Public env vars for the frontend bundle — set these in CF Pages dashboard too
+          NEXT_PUBLIC_API_URL: ${{ secrets.CF_API_URL }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
+          projectName: security-posture-platform
+          directory: services/frontend/.vercel/output/static
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+          wranglerVersion: '3'

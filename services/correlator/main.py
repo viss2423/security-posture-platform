@@ -4,80 +4,26 @@ import hashlib
 import json
 import logging
 import os
-import socket
-import sys
 import time
-from contextlib import contextmanager
 from datetime import UTC, datetime
 
 import httpx
 import redis
-from simple_metrics import SimpleMetrics, start_metrics_server
-
-_STANDARD_ATTRS = {
-    "name",
-    "msg",
-    "args",
-    "levelname",
-    "levelno",
-    "pathname",
-    "filename",
-    "module",
-    "exc_info",
-    "exc_text",
-    "stack_info",
-    "lineno",
-    "funcName",
-    "created",
-    "msecs",
-    "relativeCreated",
-    "thread",
-    "threadName",
-    "processName",
-    "process",
-}
-
-
-class JsonFormatter(logging.Formatter):
-    def __init__(self, service: str) -> None:
-        super().__init__()
-        self.service = service
-
-    def format(self, record: logging.LogRecord) -> str:
-        payload = {
-            "ts": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-            "level": record.levelname.lower(),
-            "logger": record.name,
-            "message": record.getMessage(),
-            "service": self.service,
-            "pid": os.getpid(),
-        }
-        for key, value in record.__dict__.items():
-            if key in _STANDARD_ATTRS or key in payload:
-                continue
-            try:
-                json.dumps({key: value})
-                payload[key] = value
-            except Exception:
-                payload[key] = str(value)
-        if record.exc_info:
-            payload["exception"] = self.formatException(record.exc_info)
-        return json.dumps(payload, ensure_ascii=True)
-
-
-def configure_logging() -> None:
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(JsonFormatter(service="secplat-correlator"))
-    root = logging.getLogger()
-    root.handlers = [handler]
-    root.setLevel(logging.INFO)
+from secplat_telemetry import (
+    SimpleMetrics,
+    configure_logging,
+    configure_otel,
+    inject_context,
+    start_metrics_server,
+    start_span,
+)
 
 
 class NonRetryableMessageError(Exception):
     """Payload/content errors that should not be retried."""
 
 
-configure_logging()
+configure_logging(service_name="secplat-correlator")
 logger = logging.getLogger("correlator")
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
@@ -100,14 +46,10 @@ STREAM_CLAIM_IDLE_MS = int(
 CORRELATOR_METRICS_PORT = int(os.getenv("CORRELATOR_METRICS_PORT", "9102"))
 
 _token: str | None = None
-_otel_configured = False
-_otel_enabled = False
-_tracer = None
-_propagator = None
 metrics = SimpleMetrics("secplat-correlator")
 
 
-class _NoopSpan:
+class _RetainedForCompat:
     def set_attribute(self, _key: str, _value: object) -> None:
         return None
 

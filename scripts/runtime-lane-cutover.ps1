@@ -51,6 +51,15 @@ function Test-K8ClusterAvailable {
     }
 }
 
+function Test-DockerAvailable {
+    try {
+        docker info 2>$null | Out-Null
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        return $false
+    }
+}
+
 function Get-ComposeActiveServices {
     $running = @()
     try {
@@ -104,7 +113,8 @@ function Stop-ComposeLane {
 
 function Stop-K8Lane {
     if (-not (Test-K8ClusterAvailable)) {
-        throw "Kubernetes is not reachable from the current kubectl context. Start or enable the cluster before switching lanes."
+        Write-Output "Kubernetes is not reachable; nothing to stop."
+        return
     }
     foreach ($name in $k8Deployments) {
         kubectl -n $k8Namespace get deployment $name 2>$null | Out-Null
@@ -169,6 +179,9 @@ function Set-K8CronJobsSuspend {
 }
 
 if ($To -eq "compose") {
+    if (-not (Test-DockerAvailable)) {
+        throw "Docker Engine is not running. Start Docker Desktop and wait for it to be ready, then retry."
+    }
     $oppositeDeployments = Get-K8ActiveDeployments
     $oppositeCronJobs = Get-K8ActiveCronJobs
     if ((($oppositeDeployments.Count -gt 0) -or ($oppositeCronJobs.Count -gt 0)) -and -not $StopOtherLane) {
@@ -193,6 +206,9 @@ if ($To -eq "compose") {
     exit 0
 }
 
+if (-not (Test-DockerAvailable)) {
+    throw "Docker Engine is not running. Start Docker Desktop and wait for it to be ready, then retry."
+}
 $oppositeCompose = Get-ComposeActiveServices
 if ($oppositeCompose.Count -gt 0 -and -not $StopOtherLane) {
     Write-Error "Preflight failed: active Compose lane detected ($($oppositeCompose -join ', ')). Use -StopOtherLane to continue."

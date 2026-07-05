@@ -165,8 +165,8 @@ export default function SuppressionPage() {
                 />
               </div>
               <div className="grid gap-3 sm:grid-cols-2">
-                <input className="input" type="datetime-local" value={mwStart} onChange={(e) => setMwStart(e.target.value)} />
-                <input className="input" type="datetime-local" value={mwEnd} onChange={(e) => setMwEnd(e.target.value)} />
+                <input aria-label="Maintenance window start" className="input" type="datetime-local" value={mwStart} onChange={(e) => setMwStart(e.target.value)} />
+                <input aria-label="Maintenance window end" className="input" type="datetime-local" value={mwEnd} onChange={(e) => setMwEnd(e.target.value)} />
               </div>
               <div className="flex items-center gap-3">
                 <button type="button" className="btn-primary" disabled={!canCreateMw || loading} onClick={createMw}>
@@ -226,7 +226,7 @@ export default function SuppressionPage() {
           {canMutate ? (
             <div className="mt-6 grid gap-3">
               <div className="grid gap-3 sm:grid-cols-2">
-                <select className="input" value={ruleScope} onChange={(e) => setRuleScope(e.target.value as Scope)}>
+                <select aria-label="Suppression rule scope" className="input" value={ruleScope} onChange={(e) => setRuleScope(e.target.value as Scope)}>
                   <option value="asset">Asset</option>
                   <option value="finding">Finding</option>
                   <option value="all">All</option>
@@ -240,8 +240,8 @@ export default function SuppressionPage() {
                 />
               </div>
               <div className="grid gap-3 sm:grid-cols-2">
-                <input className="input" type="datetime-local" value={ruleStart} onChange={(e) => setRuleStart(e.target.value)} />
-                <input className="input" type="datetime-local" value={ruleEnd} onChange={(e) => setRuleEnd(e.target.value)} />
+                <input aria-label="Suppression rule start" className="input" type="datetime-local" value={ruleStart} onChange={(e) => setRuleStart(e.target.value)} />
+                <input aria-label="Suppression rule end" className="input" type="datetime-local" value={ruleEnd} onChange={(e) => setRuleEnd(e.target.value)} />
               </div>
               <input
                 className="input"

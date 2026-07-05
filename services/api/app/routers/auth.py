@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import secrets
 import time
 from datetime import UTC, datetime, timedelta
@@ -281,7 +282,14 @@ class RefreshTokenBody(BaseModel):
     refresh_token: str
 
 
+class RegisterBody(BaseModel):
+    username: str
+    password: str
+
+
 VALID_USER_ROLES = {"viewer", "analyst", "admin"}
+
+USERNAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{2,63}")
 
 
 def _normalize_username(username: str) -> str:
@@ -419,6 +427,60 @@ async def login(
     )
     db.commit()
     raise HTTPException(status_code=401, detail="Invalid username or password")
+
+
+@router.post("/register", response_model=Token)
+async def register(request: Request, body: RegisterBody, db: Session = Depends(get_db)):
+    """Public self-service signup: creates a viewer account and signs the user in."""
+    if not settings.ALLOW_SELF_REGISTRATION:
+        raise HTTPException(status_code=403, detail="Self-registration is disabled")
+
+    req_id = request_id_ctx.get("")
+    key = f"register:{_client_id(request)}"
+    if not await check_rate_limit(key, settings.RATE_LIMIT_LOGIN_PER_MINUTE, 60.0):
+        raise HTTPException(status_code=429, detail="Too many signup attempts. Try again later.")
+
+    username = _normalize_username(body.username)
+    if not USERNAME_PATTERN.fullmatch(username):
+        raise HTTPException(
+            status_code=400,
+            detail="Username must be 3-64 characters: letters, digits, dot, dash, or underscore",
+        )
+    if username.lower() == settings.ADMIN_USERNAME.lower():
+        raise HTTPException(status_code=409, detail="username already taken")
+    password_hash = _password_hash_or_none(body.password)
+    if password_hash is None:
+        raise HTTPException(status_code=400, detail="password required")
+
+    row = (
+        db.execute(
+            text(
+                """
+                INSERT INTO users(username, role, password_hash, disabled)
+                VALUES (:username, 'viewer', :password_hash, FALSE)
+                ON CONFLICT (username) DO NOTHING
+                RETURNING username
+                """
+            ),
+            {"username": username, "password_hash": password_hash},
+        )
+        .mappings()
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=409, detail="username already taken")
+
+    audit.info("action=register user=%s success=true request_id=%s", username, req_id)
+    log_audit(
+        db,
+        "user.register",
+        user_name=username,
+        details={"role": "viewer", "method": "self_service"},
+        request_id=req_id or None,
+    )
+    token_pair = _issue_token_pair(db, username=username, role="viewer", request=request)
+    db.commit()
+    return token_pair
 
 
 @router.post("/refresh", response_model=Token)
@@ -1090,7 +1152,10 @@ def _verify_state(state: str) -> dict | None:
 @router.get("/config")
 def auth_config():
     """Public: whether OIDC is enabled (frontend uses this to show SSO button)."""
-    return {"oidc_enabled": _oidc_enabled()}
+    return {
+        "oidc_enabled": _oidc_enabled(),
+        "self_registration": bool(settings.ALLOW_SELF_REGISTRATION),
+    }
 
 
 @router.get("/oidc/login")
@@ -1222,6 +1287,39 @@ async def oidc_callback(
         .mappings()
         .first()
     )
+    if not row and settings.OIDC_AUTO_PROVISION and username.lower() != settings.ADMIN_USERNAME.lower():
+        # First-time SSO sign-in: auto-create a viewer account (SSO-only, no password).
+        # ON CONFLICT covers the case where the username exists but is disabled — we
+        # must not resurrect or sign in a disabled account, so no row means reject below.
+        row = (
+            db.execute(
+                text(
+                    """
+                    INSERT INTO users(username, role, password_hash, disabled)
+                    VALUES (:username, 'viewer', NULL, FALSE)
+                    ON CONFLICT (username) DO NOTHING
+                    RETURNING role
+                    """
+                ),
+                {"username": username},
+            )
+            .mappings()
+            .first()
+        )
+        if row:
+            audit.info(
+                "action=oidc_callback auto_provisioned username=%s request_id=%s",
+                username,
+                req_id,
+            )
+            log_audit(
+                db,
+                "user.register",
+                user_name=username,
+                details={"role": "viewer", "method": "oidc_auto_provision"},
+                request_id=req_id or None,
+            )
+
     if not row:
         audit.info(
             "action=oidc_callback user_not_found username=%s request_id=%s", username, req_id

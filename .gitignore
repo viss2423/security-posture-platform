@@ -51,3 +51,7 @@ services/artifacts/
 
 # Local AI-assistant settings (personal)
 .claude/
+
+# Local agent/MCP tooling (machine-specific paths)
+.mcp.json
+gitnexus-mcp.cmd

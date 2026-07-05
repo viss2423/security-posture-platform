@@ -17,6 +17,7 @@ _ASSETS_CACHE_TTL = 30
 router = APIRouter(prefix="/assets", tags=["assets"])
 
 ALLOWED_TYPES = {"user", "host", "external_web", "app"}
+OPERATOR_ROLES = {"admin", "analyst"}
 SENSITIVE_ASSET_FIELDS_FOR_VIEWER = {
     "owner_email",
     "verification_token",
@@ -47,6 +48,13 @@ def _redact_asset(row: dict, role: str) -> dict:
     return out
 
 
+def _asset_visibility_sql(role: str, *, where: bool) -> str:
+    if role in OPERATOR_ROLES:
+        return ""
+    clause = "'demo' = ANY(tags)"
+    return f" WHERE {clause}" if where else f" AND {clause}"
+
+
 @router.get("/")
 def list_assets(
     db: Session = Depends(get_db),
@@ -58,6 +66,7 @@ def list_assets(
     if cached is not None:
         return cached
 
+    visibility_sql = _asset_visibility_sql(role, where=True)
     q = text("""
       SELECT
         asset_id,
@@ -82,6 +91,9 @@ def list_assets(
         created_at,
         updated_at
       FROM assets
+    """
+        + visibility_sql
+        + """
       ORDER BY asset_id DESC
     """)
     rows = db.execute(q).mappings().all()
@@ -97,6 +109,7 @@ def get_asset(
     _user: str = Depends(require_auth),
     role: str = Depends(get_current_role),
 ):
+    visibility_sql = _asset_visibility_sql(role, where=False)
     q = text("""
       SELECT
         asset_id,
@@ -121,8 +134,9 @@ def get_asset(
         created_at,
         updated_at
       FROM assets
-      WHERE asset_id=:id
-    """)
+      WHERE asset_id=:id"""
+        + visibility_sql
+    )
     row = db.execute(q, {"id": asset_id}).mappings().first()
     if not row:
         raise HTTPException(status_code=404, detail="Asset not found")
@@ -136,6 +150,7 @@ def get_asset_by_key(
     _user: str = Depends(require_auth),
     role: str = Depends(get_current_role),
 ):
+    visibility_sql = _asset_visibility_sql(role, where=False)
     q = text("""
       SELECT
         asset_id,
@@ -160,8 +175,9 @@ def get_asset_by_key(
         created_at,
         updated_at
       FROM assets
-      WHERE asset_key=:k
-    """)
+      WHERE asset_key=:k"""
+        + visibility_sql
+    )
     row = db.execute(q, {"k": asset_key}).mappings().first()
     if not row:
         raise HTTPException(status_code=404, detail="Asset not found")
@@ -324,12 +340,14 @@ def update_asset_by_key(
             set_parts.append(f"{k} = :{k}")
             params[k] = v
 
-    uq = text(f"""  # nosemgrep
+    uq = text(  # nosemgrep
+        f"""
       UPDATE assets
       SET {", ".join(set_parts)}
       WHERE asset_key=:k
       RETURNING asset_id, asset_key, type, name, owner, environment, criticality, verified, updated_at
-    """)
+    """
+    )
 
     try:
         row = db.execute(uq, params).mappings().first()

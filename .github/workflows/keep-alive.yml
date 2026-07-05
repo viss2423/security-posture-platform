@@ -1,0 +1,56 @@
+name: Keep-alive — Supabase + Oracle VM ping
+
+on:
+  schedule:
+    # Every 5 days at 12:00 UTC — Supabase pauses inactive projects after 7 days
+    - cron: '0 12 */5 * *'
+  workflow_dispatch:
+
+jobs:
+  ping-supabase:
+    name: Ping Supabase (prevent 7-day pause)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Health check REST API
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            "${{ secrets.SUPABASE_URL }}/rest/v1/" \
+            -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}")
+          echo "Supabase responded: $STATUS"
+          if [ "$STATUS" != "200" ]; then
+            echo "::warning::Supabase returned $STATUS — check project status"
+          fi
+
+      - name: Ping storage endpoint
+        run: |
+          curl -s -o /dev/null -w "Storage: %{http_code}\n" \
+            "${{ secrets.SUPABASE_URL }}/storage/v1/bucket" \
+            -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_SERVICE_KEY }}"
+
+  ping-oracle-vm:
+    name: Ping Oracle VM services
+    runs-on: ubuntu-latest
+    # Only runs if you set ORACLE_VM_HOST secret
+    if: ${{ secrets.ORACLE_VM_HOST != '' }}
+    steps:
+      - name: Ping SuperTokens
+        run: |
+          curl -sf --max-time 10 \
+            "http://${{ secrets.ORACLE_VM_HOST }}:3567/hello" \
+            && echo "SuperTokens: OK" \
+            || echo "::warning::SuperTokens unreachable"
+
+      - name: Ping DefectDojo
+        run: |
+          curl -sf --max-time 10 \
+            "http://${{ secrets.ORACLE_VM_HOST }}:8080/api/v2/" \
+            && echo "DefectDojo: OK" \
+            || echo "::warning::DefectDojo unreachable"
+
+      - name: Ping free-claude-code proxy
+        run: |
+          curl -sf --max-time 10 \
+            "http://${{ secrets.ORACLE_VM_HOST }}:8082/health" \
+            && echo "Claude proxy: OK" \
+            || echo "::warning::Claude proxy unreachable"

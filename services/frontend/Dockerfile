@@ -11,6 +11,7 @@ ARG API_URL=http://api:8000
 ARG NEXT_PUBLIC_GRAFANA_URL=http://localhost:3001
 ENV API_URL=$API_URL
 ENV NEXT_PUBLIC_GRAFANA_URL=$NEXT_PUBLIC_GRAFANA_URL
+ENV NEXT_OUTPUT_STANDALONE=1
 RUN npm run build
 
 FROM node:20-alpine AS runner
@@ -21,9 +22,8 @@ ENV API_URL=http://api:8000
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/public ./app/public
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./app/.next/static
-WORKDIR /app/app
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 USER nextjs
 EXPOSE 3000
 ENV PORT=3000

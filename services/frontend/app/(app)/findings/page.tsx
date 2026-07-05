@@ -26,10 +26,10 @@ import { useAuth } from '@/contexts/AuthContext';
 
 const SEVERITY_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
 const SEVERITY_COLORS: Record<string, string> = {
-  critical: 'bg-[var(--red)] text-white',
-  high: 'bg-orange-600 text-white',
+  critical: 'bg-red-600 text-white',
+  high: 'bg-orange-700 text-white',
   medium: 'bg-yellow-500 text-black',
-  low: 'bg-blue-500 text-white',
+  low: 'bg-blue-600 text-white',
   info: 'bg-gray-500 text-white',
 };
 
@@ -66,13 +66,13 @@ function isFallbackProvider(provider?: string | null): boolean {
 function riskBadgeClass(level?: string | null): string {
   switch ((level || '').toLowerCase()) {
     case 'critical':
-      return 'bg-[var(--red)] text-white';
+      return 'bg-red-600 text-white';
     case 'high':
-      return 'bg-orange-600 text-white';
+      return 'bg-orange-700 text-white';
     case 'medium':
       return 'bg-yellow-500 text-black';
     case 'low':
-      return 'bg-blue-500 text-white';
+      return 'bg-blue-600 text-white';
     default:
       return 'bg-[var(--muted)]/20 text-[var(--muted)]';
   }
@@ -565,7 +565,7 @@ export default function FindingsPage() {
                 <span
                   className={`inline-block rounded px-2 py-0.5 text-xs font-semibold uppercase ${
                     modelStatus.current_scoring_mode === 'ml'
-                      ? 'bg-[var(--green)] text-white'
+                      ? 'bg-[var(--green)] text-black'
                       : 'bg-[var(--muted)]/20 text-[var(--muted)]'
                   }`}
                 >
@@ -826,7 +826,9 @@ export default function FindingsPage() {
                         {f.status.replace('_', ' ')}
                       </span>
                     </div>
-                    <h2 className="text-lg font-semibold text-[var(--text)]">{f.title}</h2>
+                    <h2 className="text-lg font-semibold text-[var(--text)] [overflow-wrap:anywhere]">
+                      {f.title}
+                    </h2>
                     <p className="mt-2 text-sm text-[var(--muted)]">
                       {f.asset_key ? (
                         <Link href={`/assets/${encodeURIComponent(f.asset_key)}`} className="font-medium text-[var(--green)] hover:underline">

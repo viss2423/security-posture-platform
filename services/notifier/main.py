@@ -3,85 +3,26 @@
 import json
 import logging
 import os
-import socket
-import sys
 import time
-from contextlib import contextmanager
 from datetime import UTC, datetime
+from secplat_telemetry import (
+    SimpleMetrics,
+    configure_logging,
+    configure_otel,
+    inject_context,
+    start_metrics_server,
+    start_span,
+)
+
+configure_logging(service_name="secplat-notifier")
+logger = logging.getLogger("notifier")
 
 import httpx
 import redis
-from simple_metrics import SimpleMetrics, start_metrics_server
-
-_STANDARD_ATTRS = {
-    "name",
-    "msg",
-    "args",
-    "levelname",
-    "levelno",
-    "pathname",
-    "filename",
-    "module",
-    "exc_info",
-    "exc_text",
-    "stack_info",
-    "lineno",
-    "funcName",
-    "created",
-    "msecs",
-    "relativeCreated",
-    "thread",
-    "threadName",
-    "processName",
-    "process",
-}
-
-
-class JsonFormatter(logging.Formatter):
-    def __init__(self, service: str) -> None:
-        super().__init__()
-        self.service = service
-
-    def format(self, record: logging.LogRecord) -> str:
-        payload = {
-            "ts": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-            "level": record.levelname.lower(),
-            "logger": record.name,
-            "message": record.getMessage(),
-            "service": self.service,
-            "pid": os.getpid(),
-        }
-        for key, value in record.__dict__.items():
-            if key in _STANDARD_ATTRS or key in payload:
-                continue
-            try:
-                json.dumps({key: value})
-                payload[key] = value
-            except Exception:
-                payload[key] = str(value)
-        if record.exc_info:
-            payload["exception"] = self.formatException(record.exc_info)
-        return json.dumps(payload, ensure_ascii=True)
-
-
-def configure_logging() -> None:
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(JsonFormatter(service="secplat-notifier"))
-    root = logging.getLogger()
-    root.handlers = [handler]
-    root.setLevel(logging.INFO)
-
 
 class NonRetryableMessageError(Exception):
     """Payload/config errors that should go directly to DLQ."""
 
-
-configure_logging()
-logger = logging.getLogger("notifier")
-_otel_configured = False
-_otel_enabled = False
-_tracer = None
-_propagator = None
 metrics = SimpleMetrics("secplat-notifier")
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
@@ -106,107 +47,13 @@ TWILIO_WHATSAPP_FROM = (os.environ.get("TWILIO_WHATSAPP_FROM") or "").strip()
 WHATSAPP_ALERT_TO = (os.environ.get("WHATSAPP_ALERT_TO") or "").strip()
 
 
-class _NoopSpan:
-    def set_attribute(self, _key: str, _value: object) -> None:
-        return None
-
-    def record_exception(self, _exc: Exception) -> None:
-        return None
-
-
-def configure_otel() -> bool:
-    global _otel_configured, _otel_enabled, _tracer, _propagator
-    if _otel_configured:
-        return _otel_enabled
-    _otel_configured = True
-    if str(os.getenv("OTEL_ENABLED", "false")).strip().lower() != "true":
-        return False
-    endpoint = str(os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "") or "").strip()
-    if not endpoint:
-        return False
-    try:
-        from opentelemetry import propagate, trace
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-        from opentelemetry.sdk.resources import Resource
-        from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor
-    except Exception:
-        logger.debug("notifier otel dependencies unavailable", exc_info=True)
-        return False
-    try:
-        resource = Resource.create(
-            {
-                "service.name": "secplat-notifier",
-                "service.instance.id": f"{socket.gethostname()}:{os.getpid()}",
-                "deployment.environment": str(os.getenv("ENV", "dev") or "dev"),
-            }
-        )
-        provider = TracerProvider(resource=resource)
-        exporter = OTLPSpanExporter(endpoint=endpoint)
-        provider.add_span_processor(BatchSpanProcessor(exporter))
-        trace.set_tracer_provider(provider)
-        _tracer = trace.get_tracer("secplat-notifier")
-        _propagator = propagate
-        _otel_enabled = True
-        return True
-    except Exception:
-        logger.debug("notifier otel initialization failed", exc_info=True)
-        _tracer = None
-        _propagator = None
-        _otel_enabled = False
-        return False
-
-
-def inject_context(carrier: dict[str, object]) -> dict[str, object]:
-    if not carrier or not _otel_enabled or _propagator is None:
-        return carrier
-    try:
-        _propagator.inject(carrier=carrier)
-    except Exception:
-        logger.debug("notifier otel inject failed", exc_info=True)
-    return carrier
-
-
-def _extract_context(context_carrier: dict[str, object] | None = None):
-    if not context_carrier or not _otel_enabled or _propagator is None:
-        return None
-    try:
-        return _propagator.extract(carrier=context_carrier)
-    except Exception:
-        logger.debug("notifier otel extract failed", exc_info=True)
-        return None
-
-
-@contextmanager
-def start_span(
-    name: str,
-    *,
-    attributes: dict[str, object] | None = None,
-    context_carrier: dict[str, object] | None = None,
-):
-    if not _otel_enabled or _tracer is None:
-        yield _NoopSpan()
-        return
-    span_kwargs: dict[str, object] = {}
-    extracted = _extract_context(context_carrier)
-    if extracted is not None:
-        span_kwargs["context"] = extracted
-    with _tracer.start_as_current_span(name, **span_kwargs) as span:
-        for key, value in (attributes or {}).items():
-            if value is not None:
-                span.set_attribute(str(key), value)
-        yield span
-
-
 def _slack_configured() -> bool:
     return bool(SLACK_WEBHOOK_URL)
-
 
 def _whatsapp_configured() -> bool:
     return bool(
         TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_WHATSAPP_FROM and WHATSAPP_ALERT_TO
     )
-
 
 def send_slack(down_assets: list[str]) -> bool:
     if not _slack_configured():
@@ -231,7 +78,6 @@ def send_slack(down_assets: list[str]) -> bool:
     except Exception as e:
         logger.warning("slack send failed: %s", e)
         return False
-
 
 def send_whatsapp(down_assets: list[str]) -> bool:
     if not _whatsapp_configured():
@@ -273,14 +119,12 @@ def send_whatsapp(down_assets: list[str]) -> bool:
         logger.warning("whatsapp send failed: %s", e)
         return False
 
-
 def _ensure_stream_group(r: redis.Redis) -> None:
     try:
         r.xgroup_create(STREAM_NOTIFY, GROUP, id="0", mkstream=True)
     except redis.ResponseError as e:
         if "BUSYGROUP" not in str(e):
             raise
-
 
 def _read_one_from_stream(r: redis.Redis) -> tuple[str, str, dict] | None:
     """
@@ -309,13 +153,11 @@ def _read_one_from_stream(r: redis.Redis) -> tuple[str, str, dict] | None:
             return ("new", msg_id, dict(fields))
     return None
 
-
 def _parse_attempts(fields: dict) -> int:
     try:
         return max(0, int(fields.get("attempts", "0")))
     except Exception:
         return 0
-
 
 def _ack_stream(r: redis.Redis, msg_id: str) -> None:
     try:
@@ -332,12 +174,10 @@ def _ack_stream(r: redis.Redis, msg_id: str) -> None:
             },
         )
 
-
 def _requeue_stream_message(r: redis.Redis, fields: dict, attempts: int) -> None:
     payload = {k: str(v) for k, v in fields.items()}
     payload["attempts"] = str(attempts)
     r.xadd(STREAM_NOTIFY, payload, maxlen=10_000)
-
 
 def _publish_dlq(
     r: redis.Redis,
@@ -362,7 +202,6 @@ def _publish_dlq(
     r.xadd(STREAM_DLQ, payload, maxlen=10_000)
     metrics.inc_counter("secplat_notifier_events_dlq_total")
 
-
 def _parse_down_assets(raw: object, trace_id: str | None) -> list[str]:
     if isinstance(raw, list):
         return [str(x).strip() for x in raw if str(x).strip()]
@@ -383,7 +222,6 @@ def _parse_down_assets(raw: object, trace_id: str | None) -> list[str]:
     if isinstance(parsed, list):
         return [str(x).strip() for x in parsed if str(x).strip()]
     return [str(parsed).strip()] if str(parsed).strip() else []
-
 
 def handle_notify(payload: dict) -> list[str]:
     trace_id = (payload.get("trace_id") or "").strip() or None
@@ -410,7 +248,6 @@ def handle_notify(payload: dict) -> list[str]:
     if not sent:
         raise RuntimeError("notification_delivery_failed")
     return down_assets
-
 
 def main() -> None:
     configure_otel()
@@ -572,7 +409,6 @@ def main() -> None:
             else:
                 logger.warning("redis response error: %s", e)
             time.sleep(2)
-
 
 if __name__ == "__main__":
     main()

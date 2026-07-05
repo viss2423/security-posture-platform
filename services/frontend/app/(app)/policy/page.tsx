@@ -435,10 +435,13 @@ export default function PolicyPage() {
   return (
     <main className="page-shell">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <p className="max-w-2xl text-sm text-[var(--text-muted)]">
-          Manage policy bundles, run evaluations, and review AI summaries without staring at raw
-          evidence first.
-        </p>
+        <div>
+          <h1 className="page-title">Policy</h1>
+          <p className="mt-1 max-w-2xl text-sm text-[var(--text-muted)]">
+            Manage policy bundles, run evaluations, and review AI summaries without staring at raw
+            evidence first.
+          </p>
+        </div>
         {canMutate && (
           <button type="button" onClick={() => setShowCreate(true)} className="btn-primary">
             New bundle

@@ -6,81 +6,23 @@ Replaces build_asset_status.sh. Runs in a loop (e.g. every 60s).
 import json
 import logging
 import os
-import socket
 import sys
 import time
-from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 
 import httpx
-from simple_metrics import SimpleMetrics, start_metrics_server
+from secplat_telemetry import (
+    SimpleMetrics,
+    configure_logging,
+    configure_otel,
+    inject_context,
+    start_metrics_server,
+    start_span,
+)
 
-_STANDARD_ATTRS = {
-    "name",
-    "msg",
-    "args",
-    "levelname",
-    "levelno",
-    "pathname",
-    "filename",
-    "module",
-    "exc_info",
-    "exc_text",
-    "stack_info",
-    "lineno",
-    "funcName",
-    "created",
-    "msecs",
-    "relativeCreated",
-    "thread",
-    "threadName",
-    "processName",
-    "process",
-}
-
-
-class JsonFormatter(logging.Formatter):
-    def __init__(self, service: str) -> None:
-        super().__init__()
-        self.service = service
-
-    def format(self, record: logging.LogRecord) -> str:
-        payload = {
-            "ts": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-            "level": record.levelname.lower(),
-            "logger": record.name,
-            "message": record.getMessage(),
-            "service": self.service,
-            "pid": os.getpid(),
-        }
-        for key, value in record.__dict__.items():
-            if key in _STANDARD_ATTRS or key in payload:
-                continue
-            try:
-                json.dumps({key: value})
-                payload[key] = value
-            except Exception:
-                payload[key] = str(value)
-        if record.exc_info:
-            payload["exception"] = self.formatException(record.exc_info)
-        return json.dumps(payload, ensure_ascii=True)
-
-
-def configure_logging() -> None:
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(JsonFormatter(service="secplat-deriver"))
-    root = logging.getLogger()
-    root.handlers = [handler]
-    root.setLevel(logging.INFO)
-
-
-configure_logging()
+configure_logging(service_name="secplat-deriver")
 logger = logging.getLogger("deriver")
-_otel_configured = False
-_otel_enabled = False
-_tracer = None
-_propagator = None
 metrics = SimpleMetrics("secplat-deriver")
 
 OPENSEARCH_URL = os.environ.get("OPENSEARCH_URL", "http://localhost:9200").rstrip("/")
@@ -90,79 +32,6 @@ STATUS_INDEX = os.environ.get("STATUS_INDEX", "secplat-asset-status")
 STALE_THRESHOLD_SECONDS = int(os.environ.get("STALE_THRESHOLD_SECONDS", "300"))
 DERIVER_INTERVAL_SECONDS = int(os.environ.get("DERIVER_INTERVAL_SECONDS", "60"))
 DERIVER_METRICS_PORT = int(os.getenv("DERIVER_METRICS_PORT", "9104"))
-
-
-class _NoopSpan:
-    def set_attribute(self, _key: str, _value: object) -> None:
-        return None
-
-    def record_exception(self, _exc: Exception) -> None:
-        return None
-
-
-def configure_otel() -> bool:
-    global _otel_configured, _otel_enabled, _tracer, _propagator
-    if _otel_configured:
-        return _otel_enabled
-    _otel_configured = True
-    if str(os.getenv("OTEL_ENABLED", "false")).strip().lower() != "true":
-        return False
-    endpoint = str(os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "") or "").strip()
-    if not endpoint:
-        return False
-    try:
-        from opentelemetry import propagate, trace
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-        from opentelemetry.sdk.resources import Resource
-        from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor
-    except Exception:
-        logger.debug("deriver otel dependencies unavailable", exc_info=True)
-        return False
-    try:
-        resource = Resource.create(
-            {
-                "service.name": "secplat-deriver",
-                "service.instance.id": f"{socket.gethostname()}:{os.getpid()}",
-                "deployment.environment": str(os.getenv("ENV", "dev") or "dev"),
-            }
-        )
-        provider = TracerProvider(resource=resource)
-        exporter = OTLPSpanExporter(endpoint=endpoint)
-        provider.add_span_processor(BatchSpanProcessor(exporter))
-        trace.set_tracer_provider(provider)
-        _tracer = trace.get_tracer("secplat-deriver")
-        _propagator = propagate
-        _otel_enabled = True
-        return True
-    except Exception:
-        logger.debug("deriver otel initialization failed", exc_info=True)
-        _tracer = None
-        _propagator = None
-        _otel_enabled = False
-        return False
-
-
-def inject_context(carrier: dict[str, object]) -> dict[str, object]:
-    if not carrier or not _otel_enabled or _propagator is None:
-        return carrier
-    try:
-        _propagator.inject(carrier=carrier)
-    except Exception:
-        logger.debug("deriver otel inject failed", exc_info=True)
-    return carrier
-
-
-@contextmanager
-def start_span(name: str, *, attributes: dict[str, object] | None = None):
-    if not _otel_enabled or _tracer is None:
-        yield _NoopSpan()
-        return
-    with _tracer.start_as_current_span(name) as span:
-        for key, value in (attributes or {}).items():
-            if value is not None:
-                span.set_attribute(str(key), value)
-        yield span
 
 
 def _get(path: str, **kwargs: Any) -> dict:

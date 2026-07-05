@@ -54,13 +54,13 @@ function severityColor(s: string): string {
 function riskBadgeClass(level?: string | null): string {
   switch ((level || '').toLowerCase()) {
     case 'critical':
-      return 'bg-[var(--red)] text-white';
+      return 'bg-red-600 text-white';
     case 'high':
-      return 'bg-orange-600 text-white';
+      return 'bg-orange-700 text-white';
     case 'medium':
       return 'bg-yellow-500 text-black';
     case 'low':
-      return 'bg-blue-500 text-white';
+      return 'bg-blue-600 text-white';
     default:
       return 'bg-[var(--muted)]/20 text-[var(--muted)]';
   }
@@ -672,7 +672,7 @@ export default function IncidentDetailPage() {
                 disabled={loadingStatus || incident.status === status}
                 className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${
                   incident.status === status
-                    ? 'bg-[var(--green)] text-white'
+                    ? 'bg-[var(--green)] text-black'
                     : 'bg-[var(--border)]/50 text-[var(--muted)] hover:bg-[var(--border)]'
                 }`}
               >

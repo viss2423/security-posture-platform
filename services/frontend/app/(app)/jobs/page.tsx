@@ -296,6 +296,7 @@ export default function JobsPage() {
       <section className="page-hero animate-in">
         <div className="hero-grid">
           <div>
+            <h1 className="sr-only">Scan jobs</h1>
             <span className="live-pill">
               <span className={activeJobs > 0 ? 'dot-warning' : 'dot-online'} />
               {activeJobs > 0 ? `${activeJobs} running` : 'Idle'}
@@ -328,7 +329,7 @@ export default function JobsPage() {
             <div className="mt-4 flex flex-wrap gap-2">
               {statusCounts.failed > 0 && (
                 <span
-                  className="inline-flex animate-pulse items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-bold"
+                  className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-bold"
                   style={{ color: 'var(--red)', borderColor: 'rgba(248,113,113,0.42)', background: 'rgba(248,113,113,0.14)' }}
                 >
                   ⚡ {statusCounts.failed} failed — needs triage

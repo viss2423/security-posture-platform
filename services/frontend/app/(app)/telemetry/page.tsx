@@ -278,6 +278,7 @@ export default function TelemetryPage() {
               aria-label="Search events"
             />
             <select
+              aria-label="Filter by telemetry source"
               value={sourceFilter}
               onChange={(event) => setSourceFilter(event.target.value)}
               className="input text-sm"

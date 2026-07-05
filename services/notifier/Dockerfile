@@ -1,7 +1,8 @@
 FROM python:3.11-slim
 WORKDIR /app
-COPY requirements.txt /app/
+COPY services/notifier/requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
-COPY main.py /app/main.py
-COPY simple_metrics.py /app/simple_metrics.py
+COPY services/shared/ /app/shared/
+RUN pip install --no-cache-dir /app/shared/secplat_telemetry
+COPY services/notifier/main.py /app/main.py
 CMD ["python", "main.py"]

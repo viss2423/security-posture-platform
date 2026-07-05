@@ -2,10 +2,12 @@
 
 import { useEffect, useState } from 'react';
 import { KeyRound, ShieldCheck, Sparkles, Workflow } from 'lucide-react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
 type LoginFormProps = {
   oidcEnabled: boolean;
+  selfRegistration?: boolean;
 };
 
 async function createSession(body: Record<string, string>) {
@@ -29,13 +31,43 @@ async function createSession(body: Record<string, string>) {
   }
 }
 
-export default function LoginForm({ oidcEnabled }: LoginFormProps) {
+async function registerAccount(username: string, password: string) {
+  const res = await fetch('/api/auth/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    let message = text || 'Signup failed';
+    try {
+      const data = JSON.parse(text);
+      if (typeof data?.detail === 'string') message = data.detail;
+      else if (typeof data?.error === 'string') message = data.error;
+    } catch {
+      /* keep text */
+    }
+    throw new Error(message);
+  }
+  const tokens = JSON.parse(text) as { access_token?: string; refresh_token?: string };
+  if (!tokens.access_token) {
+    throw new Error('Signup succeeded but no session token was returned');
+  }
+  const payload: Record<string, string> = { access_token: tokens.access_token };
+  if (tokens.refresh_token) payload.refresh_token = tokens.refresh_token;
+  await createSession(payload);
+}
+
+export default function LoginForm({ oidcEnabled, selfRegistration = false }: LoginFormProps) {
   const router = useRouter();
+  const [mode, setMode] = useState<'signin' | 'register'>('signin');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [syncingToken, setSyncingToken] = useState(false);
+  const registering = mode === 'register';
 
   useEffect(() => {
     const hash = typeof window !== 'undefined' ? window.location.hash.slice(1) : '';
@@ -79,100 +111,124 @@ export default function LoginForm({ oidcEnabled }: LoginFormProps) {
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     setError('');
+    if (registering) {
+      if (password !== confirmPassword) {
+        setError('Passwords do not match');
+        return;
+      }
+      if (password.length < 8) {
+        setError('Password must be at least 8 characters');
+        return;
+      }
+    }
     setLoading(true);
     try {
-      await createSession({ username, password });
-      router.replace('/overview');
+      if (registering) {
+        await registerAccount(username.trim(), password);
+      } else {
+        await createSession({ username, password });
+      }
+      // Brand-new accounts start on the guided checklist; returning users go to the overview.
+      router.replace(registering ? '/onboarding' : '/overview');
       router.refresh();
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : 'Login failed');
+      setError(
+        submitError instanceof Error
+          ? submitError.message
+          : registering
+            ? 'Signup failed'
+            : 'Login failed'
+      );
     } finally {
       setLoading(false);
     }
   }
 
+  function toggleMode() {
+    setMode((current) => (current === 'signin' ? 'register' : 'signin'));
+    setError('');
+    setConfirmPassword('');
+  }
+
   return (
-    <div className="auth-stage flex items-center justify-center px-4 py-10 sm:px-6 lg:px-10">
-      <div className="relative z-[1] grid w-full max-w-7xl gap-6 lg:grid-cols-[minmax(0,1.2fr)_minmax(25rem,0.8fr)]">
-        <section className="auth-panel surface-noise data-scan hidden p-8 lg:block xl:p-10">
+    <div className="auth-stage flex items-center justify-center px-4 py-8 sm:px-6 lg:px-10">
+      <div className="relative z-[1] grid w-full max-w-6xl items-center gap-6 lg:grid-cols-[minmax(0,1.08fr)_minmax(25rem,0.92fr)]">
+        <section className="auth-panel surface-noise data-scan hidden max-w-none p-8 lg:block xl:p-10">
           <div className="inline-flex items-center gap-2 rounded-full border border-cyan-300/18 bg-cyan-300/08 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--cyan-strong)]">
             <Sparkles size={11} />
             Customer-ready security platform
           </div>
 
-          <div className="mt-8 max-w-2xl">
-            <h1 className="text-[3rem] leading-[0.96] tracking-[-0.05em] text-[var(--text)] xl:text-[4.3rem]">
-              See posture, signals, and response in one premium platform.
-            </h1>
-            <p className="mt-5 max-w-2xl text-base leading-8 text-[var(--text-muted)]">
+          <div className="mt-7 max-w-2xl">
+            <h2 className="text-[2.8rem] leading-[0.98] tracking-[-0.05em] text-[var(--text)] xl:text-[3.5rem]">
+              See posture, signals, and response in one place.
+            </h2>
+            <p className="mt-5 max-w-xl text-[15px] leading-7 text-[var(--text-muted)]">
               SecPlat brings exposure visibility, telemetry, detection workflows, and executive
-              reporting into a single customer-facing control plane.
+              reporting into one clear operating view.
             </p>
           </div>
 
-          <div className="mt-8 grid gap-4 sm:grid-cols-3">
-            <article className="card-glass surface-noise rounded-[1.5rem] p-4">
-              <div className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-[1rem] border border-cyan-300/18 bg-cyan-300/08 text-[var(--cyan-strong)]">
-                <ShieldCheck size={17} />
+          <div className="mt-7 grid gap-3">
+            <article className="card-glass surface-noise flex items-start gap-4 rounded-xl p-4">
+              <div className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-cyan-300/18 bg-cyan-300/08 text-[var(--cyan-strong)]">
+                <ShieldCheck size={18} />
               </div>
-              <h2 className="text-base font-semibold text-[var(--text)]">Continuous visibility</h2>
-              <p className="mt-2 text-sm leading-6 text-[var(--text-muted)]">
-                One live view of asset health, exposure, and the risks that actually need action.
-              </p>
+              <div>
+                <h3 className="text-sm font-semibold text-[var(--text)]">Continuous visibility</h3>
+                <p className="mt-1 text-[13px] leading-5 text-[var(--text-muted)]">
+                  Follow asset health, exposure, and the risks that need action.
+                </p>
+              </div>
             </article>
-            <article className="card-glass surface-noise rounded-[1.5rem] p-4">
-              <div className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-[1rem] border border-emerald-300/18 bg-emerald-300/08 text-[var(--green)]">
-                <Workflow size={17} />
+            <article className="card-glass surface-noise flex items-start gap-4 rounded-xl p-4">
+              <div className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-emerald-300/18 bg-emerald-300/08 text-[var(--green)]">
+                <Workflow size={18} />
               </div>
-              <h2 className="text-base font-semibold text-[var(--text)]">Guided workflows</h2>
-              <p className="mt-2 text-sm leading-6 text-[var(--text-muted)]">
-                Move from finding to incident to remediation without losing the underlying context.
-              </p>
+              <div>
+                <h3 className="text-sm font-semibold text-[var(--text)]">Guided response</h3>
+                <p className="mt-1 text-[13px] leading-5 text-[var(--text-muted)]">
+                  Move from finding to incident to remediation without losing context.
+                </p>
+              </div>
             </article>
-            <article className="card-glass surface-noise rounded-[1.5rem] p-4">
-              <div className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-[1rem] border border-amber-300/18 bg-amber-300/08 text-[var(--amber)]">
-                <KeyRound size={17} />
+            <article className="card-glass surface-noise flex items-start gap-4 rounded-xl p-4">
+              <div className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-amber-300/18 bg-amber-300/08 text-[var(--amber)]">
+                <KeyRound size={18} />
               </div>
-              <h2 className="text-base font-semibold text-[var(--text)]">Fast access</h2>
-              <p className="mt-2 text-sm leading-6 text-[var(--text-muted)]">
-                Sign in with credentials or SSO and land directly in the operating view that matters.
-              </p>
+              <div>
+                <h3 className="text-sm font-semibold text-[var(--text)]">Secure access</h3>
+                <p className="mt-1 text-[13px] leading-5 text-[var(--text-muted)]">
+                  Use local credentials or configured SSO to reach your workspace.
+                </p>
+              </div>
             </article>
           </div>
 
-          <div className="mt-8 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(16rem,0.8fr)]">
-            <div className="rounded-[1.6rem] border border-[var(--border)] bg-white/84 p-5">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
-                What customers understand instantly
-              </p>
-              <ul className="mt-4 space-y-3 text-sm leading-6 text-[var(--text-muted)]">
-                <li>What assets are being monitored</li>
-                <li>What risk is rising right now</li>
-                <li>What alerts and incidents need attention</li>
-              </ul>
-            </div>
-            <div className="rounded-[1.6rem] border border-[var(--border)] bg-white/84 p-5">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
-                Access model
-              </p>
-              <p className="mt-4 text-sm leading-7 text-[var(--text-muted)]">
-                Secure platform access with local authentication today and SSO when configured.
-              </p>
-            </div>
+          <div className="mt-7 flex flex-wrap gap-x-6 gap-y-2 border-t border-[var(--border)] pt-5 text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--text-subtle)]">
+            <span>Live asset posture</span>
+            <span>Prioritized risk</span>
+            <span>Actionable incidents</span>
           </div>
         </section>
 
-        <section className="auth-panel surface-noise p-6 sm:p-8">
+        <section className="auth-panel surface-noise max-w-none p-6 sm:p-8 lg:self-center">
           <div className="mx-auto w-full max-w-md">
             <div className="mb-6">
-              <div className="mb-4 inline-flex h-12 w-12 items-center justify-center rounded-[1.1rem] border border-[var(--border)] bg-white text-[0.95rem] font-black uppercase tracking-[0.18em] text-[var(--text)] shadow-[var(--shadow-soft)]">
+              <Link
+                href="/"
+                aria-label="Return to the SecPlat product overview"
+                className="mb-4 inline-flex h-12 w-12 items-center justify-center rounded-[1.1rem] border border-[var(--accent)]/40 bg-[var(--accent)] text-[0.95rem] font-black uppercase tracking-[0.18em] text-[#07090e] shadow-[var(--shadow-glow-accent)] transition-transform hover:-translate-y-0.5"
+              >
                 SP
-              </div>
-              <h2 className="text-[2.4rem] leading-none tracking-[-0.04em] text-[var(--text)]">
-                Sign in to SecPlat
-              </h2>
+              </Link>
+              <h1 className="text-[2.15rem] leading-none tracking-[-0.04em] text-[var(--text)] sm:text-[2.4rem]">
+                {registering ? 'Create your account' : 'Sign in to SecPlat'}
+              </h1>
               <p className="mt-3 text-sm leading-7 text-[var(--text-muted)]">
-                Access your customer-facing security posture platform.
+                {registering
+                  ? 'Set up a free account and start exploring the platform right away.'
+                  : 'Access your security posture workspace.'}
               </p>
             </div>
 
@@ -207,10 +263,31 @@ export default function LoginForm({ oidcEnabled }: LoginFormProps) {
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
                   required
-                  autoComplete="current-password"
+                  minLength={registering ? 8 : undefined}
+                  autoComplete={registering ? 'new-password' : 'current-password'}
                   className="input"
                 />
               </div>
+              {registering && (
+                <div>
+                  <label
+                    htmlFor="confirm-password"
+                    className="mb-2 block text-sm font-medium text-[var(--text-muted)]"
+                  >
+                    Confirm password
+                  </label>
+                  <input
+                    id="confirm-password"
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(event) => setConfirmPassword(event.target.value)}
+                    required
+                    minLength={8}
+                    autoComplete="new-password"
+                    className="input"
+                  />
+                </div>
+              )}
 
               {error && (
                 <p className="alert-error" role="alert">
@@ -224,8 +301,29 @@ export default function LoginForm({ oidcEnabled }: LoginFormProps) {
                 className="btn-primary flex w-full items-center justify-center gap-2 py-3.5"
               >
                 <KeyRound size={15} />
-                {syncingToken ? 'Completing SSO...' : loading ? 'Signing in...' : 'Sign in'}
+                {syncingToken
+                  ? 'Completing SSO...'
+                  : loading
+                    ? registering
+                      ? 'Creating account...'
+                      : 'Signing in...'
+                    : registering
+                      ? 'Create account'
+                      : 'Sign in'}
               </button>
+
+              {selfRegistration && (
+                <p className="text-center text-sm text-[var(--text-muted)]">
+                  {registering ? 'Already have an account?' : 'New to SecPlat?'}{' '}
+                  <button
+                    type="button"
+                    onClick={toggleMode}
+                    className="font-semibold text-[var(--accent)] hover:underline"
+                  >
+                    {registering ? 'Sign in' : 'Create an account'}
+                  </button>
+                </p>
+              )}
 
               {oidcEnabled && (
                 <div className="relative my-5">
@@ -250,6 +348,15 @@ export default function LoginForm({ oidcEnabled }: LoginFormProps) {
                 </a>
               )}
             </form>
+
+            <div className="mt-6 border-t border-[var(--border)] pt-5 text-center">
+              <Link
+                href="/"
+                className="text-xs font-medium text-[var(--text-muted)] transition-colors hover:text-[var(--accent)]"
+              >
+                Learn what SecPlat protects
+              </Link>
+            </div>
           </div>
         </section>
       </div>

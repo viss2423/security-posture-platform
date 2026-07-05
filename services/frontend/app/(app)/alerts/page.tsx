@@ -960,7 +960,7 @@ export default function AlertsPage() {
             onClick={() => setActiveTab(id)}
             className={`rounded-full px-4 py-2 text-sm font-medium transition ${
               activeTab === id
-              ? 'bg-[var(--green)] text-white shadow-lg shadow-[var(--green-glow)]'
+              ? 'bg-[var(--green)] text-black shadow-lg shadow-[var(--green-glow)]'
               : 'border border-[var(--border)] bg-[var(--surface-elevated)] text-[var(--muted)] hover:bg-[var(--surface)]'
             }`}
           >
@@ -1017,9 +1017,13 @@ export default function AlertsPage() {
           </div>
         ) : (
           <ul className="space-y-4">
-            {list.map((item) => (
+            {list.map((item, index) => (
               <AlertRow
-                key={item.asset_key}
+                key={
+                  item.alert_id != null
+                    ? `alert-${item.alert_id}`
+                    : `${activeTab}-${item.asset_key}-${item.first_seen_at ?? index}`
+                }
                 item={item}
                 onAck={handleAck}
                 onSuppress={handleSuppress}

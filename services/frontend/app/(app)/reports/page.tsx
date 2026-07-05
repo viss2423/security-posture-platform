@@ -79,9 +79,17 @@ export default function ReportsPage() {
   };
 
   useEffect(() => {
+    if (!canMutate) {
+      setSummary(null);
+      setHistory([]);
+      setViewSnapshot(null);
+      setWhatChangedResult(null);
+      setError(null);
+      return;
+    }
     loadSummary();
     loadHistory();
-  }, []);
+  }, [canMutate]);
 
   async function handleDownloadCsv() {
     setLoadingCsv(true);
@@ -163,6 +171,17 @@ export default function ReportsPage() {
       })),
     [history]
   );
+
+  if (!canMutate) {
+    return (
+      <main className="page-shell view-stack">
+        <EmptyState
+          title="Reporting is limited to operator accounts"
+          description="Viewer accounts stay in a demo-scoped exploration mode and do not get access to live snapshots, report history, or executive exports."
+        />
+      </main>
+    );
+  }
 
   return (
     <main className="page-shell view-stack">
@@ -336,6 +355,7 @@ export default function ReportsPage() {
           </p>
           <div className="space-y-2">
             <select
+              aria-label="Compare from snapshot"
               value={whatChangedFromId}
               onChange={(event) =>
                 setWhatChangedFromId(event.target.value === '' ? '' : Number(event.target.value))
@@ -350,6 +370,7 @@ export default function ReportsPage() {
               ))}
             </select>
             <select
+              aria-label="Compare to snapshot"
               value={whatChangedToId === 'current' ? 'current' : whatChangedToId}
               onChange={(event) =>
                 setWhatChangedToId(event.target.value === 'current' ? 'current' : Number(event.target.value))

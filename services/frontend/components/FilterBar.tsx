@@ -1,20 +1,20 @@
 'use client';
 
-import { ChevronDown, Filter, RotateCcw, SlidersHorizontal, Sparkles } from 'lucide-react';
+import { Filter, X } from 'lucide-react';
 import { useEffect, useMemo, useState, useTransition } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import type { PostureFilters } from '@/lib/api';
 import { parsePostureFilters, writePostureFilters } from '@/lib/postureFilters';
 
-const ENV_OPTIONS = ['', 'dev', 'staging', 'prod'];
-const CRIT_OPTIONS = ['', 'high', 'medium', 'low'];
-const STATUS_OPTIONS = ['', 'green', 'amber', 'red'];
+const ENV_OPTIONS = ['dev', 'staging', 'prod'];
+const CRIT_OPTIONS = ['high', 'medium', 'low'];
+const STATUS_OPTIONS = ['green', 'amber', 'red'];
 
 export default function FilterBar() {
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [expanded, setExpanded] = useState(false);
+  const [open, setOpen] = useState(false);
   const [isPending, startTransition] = useTransition();
 
   const currentFilters = useMemo(
@@ -42,12 +42,7 @@ export default function FilterBar() {
       criticality: currentFilters.criticality ?? '',
       status: currentFilters.status ?? '',
     });
-  }, [
-    currentFilters.criticality,
-    currentFilters.environment,
-    currentFilters.owner,
-    currentFilters.status,
-  ]);
+  }, [currentFilters.criticality, currentFilters.environment, currentFilters.owner, currentFilters.status]);
 
   const hasAny =
     Boolean(currentFilters.environment) ||
@@ -55,16 +50,10 @@ export default function FilterBar() {
     Boolean(currentFilters.owner) ||
     Boolean(currentFilters.status);
 
-  useEffect(() => {
-    if (hasAny) {
-      setExpanded(true);
-    }
-  }, [hasAny]);
-
-  const activeFilters = [
+  const activeChips = [
     currentFilters.owner ? `Owner: ${currentFilters.owner}` : null,
-    currentFilters.environment ? `Environment: ${currentFilters.environment}` : null,
-    currentFilters.criticality ? `Criticality: ${currentFilters.criticality}` : null,
+    currentFilters.environment ? `Env: ${currentFilters.environment}` : null,
+    currentFilters.criticality ? `Crit: ${currentFilters.criticality}` : null,
     currentFilters.status ? `Status: ${currentFilters.status}` : null,
   ].filter(Boolean) as string[];
 
@@ -89,160 +78,151 @@ export default function FilterBar() {
       criticality: draft.criticality || undefined,
       status: draft.status || undefined,
     });
+    setOpen(false);
   };
 
   const handleReset = () => {
     setDraft({ owner: '', environment: '', criticality: '', status: '' });
     applyFilters({});
+    setOpen(false);
   };
 
   const fieldClass =
-    'w-full rounded-[1.05rem] border border-[var(--border)] bg-white px-4 py-3 text-sm text-[var(--text)] transition focus:outline-none focus:ring-2 focus:ring-[var(--green)]/25';
+    'w-full rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-subtle)] transition focus:outline-none focus:ring-2 focus:ring-[var(--accent-ring)] focus:border-[var(--accent)]';
 
   return (
-    <section className="rounded-[2rem] border border-[var(--border)] bg-[rgba(255,255,255,0.76)] p-4 shadow-[var(--shadow-soft)] backdrop-blur-2xl sm:p-5">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setExpanded((value) => !value)}
-              className="inline-flex items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-300/10 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--cyan-strong)] transition hover:border-cyan-300/28"
-            >
-              <Filter size={13} />
-              Refine the story
-              <ChevronDown
-                size={14}
-                className={`transition ${expanded ? 'rotate-180' : ''}`}
-              />
-            </button>
-            <span className="stat-chip">
-              <SlidersHorizontal size={12} className="text-[var(--cyan-strong)]" />
-              {activeFilters.length === 0 ? 'No active filters' : `${activeFilters.length} active`}
+    <div className="mb-5">
+      {/* Compact toolbar */}
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
+            open || hasAny
+              ? 'border-[var(--accent)]/30 bg-[var(--accent-dim)] text-[var(--accent)]'
+              : 'border-[var(--border)] bg-[var(--surface)] text-[var(--text-muted)] hover:border-[var(--border-strong)] hover:text-[var(--text)]'
+          }`}
+        >
+          <Filter size={12} />
+          Filters
+          {activeChips.length > 0 && (
+            <span className="flex h-4 min-w-[16px] items-center justify-center rounded-full bg-[var(--accent)] px-1 text-[9px] font-bold text-[#07090e]">
+              {activeChips.length}
             </span>
-            <span className="stat-chip">
-              <Sparkles size={12} className="text-[var(--cyan-strong)]" />
-              Applied across posture-heavy views
-            </span>
-          </div>
-
-          <p className="mt-3 max-w-3xl text-sm leading-6 text-[var(--text-muted)]">
-            Focus the product on a customer segment, owner, environment, or health state before
-            you share a story or a report.
-          </p>
-
-          {activeFilters.length > 0 && (
-            <div className="mt-3 flex flex-wrap gap-2">
-              {activeFilters.map((filter) => (
-                <span key={filter} className="command-pill">
-                  {filter}
-                </span>
-              ))}
-            </div>
           )}
-        </div>
+        </button>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={() => setExpanded((value) => !value)} className="btn-secondary">
-            {expanded ? 'Hide filters' : 'Show filters'}
-          </button>
+        {activeChips.map((chip) => (
+          <span
+            key={chip}
+            className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--surface-elevated)] px-2 py-1 text-[11px] text-[var(--text-muted)]"
+          >
+            {chip}
+          </span>
+        ))}
+
+        {hasAny && (
           <button
             type="button"
             onClick={handleReset}
-            disabled={isPending || (!hasAny && !hasDraftChanges)}
-            className="btn-secondary"
+            disabled={isPending}
+            className="inline-flex items-center gap-1 text-[11px] text-[var(--text-subtle)] transition hover:text-[var(--text)]"
           >
-            <RotateCcw size={14} />
-            Reset
+            <X size={11} />
+            Clear
           </button>
-          <button
-            type="button"
-            onClick={handleApply}
-            disabled={!hasDraftChanges || isPending}
-            className="btn-primary"
-          >
-            {isPending ? 'Applying...' : 'Apply'}
-          </button>
-        </div>
+        )}
       </div>
 
-      {expanded && (
-        <div className="mt-5 grid gap-4 border-t border-[var(--border)] pt-5 lg:grid-cols-4">
-          <label className="space-y-2">
-            <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
-              Owner
-            </span>
-            <input
-              className={fieldClass}
-              value={draft.owner}
-              onChange={(event) => setDraft((current) => ({ ...current, owner: event.target.value }))}
-              placeholder="e.g. platform-team"
-              aria-label="Owner"
-            />
-          </label>
-
-          <label className="space-y-2">
-            <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
-              Environment
-            </span>
-            <select
-              className={fieldClass}
-              value={draft.environment}
-              onChange={(event) =>
-                setDraft((current) => ({ ...current, environment: event.target.value }))
-              }
-              aria-label="Environment"
+      {/* Expandable panel */}
+      {open && (
+        <div className="animate-in mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+          <p className="mb-4 text-xs text-[var(--text-subtle)]">
+            Scope the view by owner, environment, criticality, or health state.
+          </p>
+          <div className="grid gap-4 lg:grid-cols-4">
+            <label className="space-y-1.5">
+              <span className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--text-subtle)]">
+                Owner
+              </span>
+              <input
+                className={fieldClass}
+                value={draft.owner}
+                onChange={(e) => setDraft((c) => ({ ...c, owner: e.target.value }))}
+                placeholder="e.g. platform-team"
+              />
+            </label>
+            <label className="space-y-1.5">
+              <span className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--text-subtle)]">
+                Environment
+              </span>
+              <select
+                className={fieldClass}
+                value={draft.environment}
+                onChange={(e) => setDraft((c) => ({ ...c, environment: e.target.value }))}
+              >
+                <option value="">All environments</option>
+                {ENV_OPTIONS.map((v) => (
+                  <option key={v} value={v}>
+                    {v}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="space-y-1.5">
+              <span className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--text-subtle)]">
+                Criticality
+              </span>
+              <select
+                className={fieldClass}
+                value={draft.criticality}
+                onChange={(e) => setDraft((c) => ({ ...c, criticality: e.target.value }))}
+              >
+                <option value="">All criticality</option>
+                {CRIT_OPTIONS.map((v) => (
+                  <option key={v} value={v}>
+                    {v}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="space-y-1.5">
+              <span className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--text-subtle)]">
+                Health status
+              </span>
+              <select
+                className={fieldClass}
+                value={draft.status}
+                onChange={(e) => setDraft((c) => ({ ...c, status: e.target.value }))}
+              >
+                <option value="">All statuses</option>
+                {STATUS_OPTIONS.map((v) => (
+                  <option key={v} value={v}>
+                    {v}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="mt-4 flex justify-end gap-2 border-t border-[var(--border)] pt-3">
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="btn-secondary text-xs"
             >
-              <option value="">All environments</option>
-              {ENV_OPTIONS.filter(Boolean).map((value) => (
-                <option key={value} value={value}>
-                  {value}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="space-y-2">
-            <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
-              Criticality
-            </span>
-            <select
-              className={fieldClass}
-              value={draft.criticality}
-              onChange={(event) =>
-                setDraft((current) => ({ ...current, criticality: event.target.value }))
-              }
-              aria-label="Criticality"
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleApply}
+              disabled={!hasDraftChanges || isPending}
+              className="btn-primary text-xs"
             >
-              <option value="">All criticality</option>
-              {CRIT_OPTIONS.filter(Boolean).map((value) => (
-                <option key={value} value={value}>
-                  {value}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="space-y-2">
-            <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
-              Status
-            </span>
-            <select
-              className={fieldClass}
-              value={draft.status}
-              onChange={(event) => setDraft((current) => ({ ...current, status: event.target.value }))}
-              aria-label="Status"
-            >
-              <option value="">All statuses</option>
-              {STATUS_OPTIONS.filter(Boolean).map((value) => (
-                <option key={value} value={value}>
-                  {value}
-                </option>
-              ))}
-            </select>
-          </label>
+              {isPending ? 'Applying...' : 'Apply'}
+            </button>
+          </div>
         </div>
       )}
-    </section>
+    </div>
   );
 }
