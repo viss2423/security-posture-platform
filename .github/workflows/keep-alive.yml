@@ -1,59 +1,66 @@
 name: Keep-alive — Supabase + Oracle VM ping
 
 on:
-  schedule:
-    # Every 5 days at 12:00 UTC — Supabase pauses inactive projects after 7 days
-    - cron: '0 12 */5 * *'
+  # Manual-only until hosting infra (Supabase / Oracle VM) and its secrets are
+  # configured. Re-enable the schedule below once those secrets exist, so the
+  # keep-alive pings actually have somewhere to reach. Run on demand from the
+  # Actions tab meanwhile.
   workflow_dispatch:
+  # schedule:
+  #   # Every 5 days at 12:00 UTC — Supabase pauses inactive projects after 7 days
+  #   - cron: '0 12 */5 * *'
 
 jobs:
   ping-supabase:
     name: Ping Supabase (prevent 7-day pause)
     runs-on: ubuntu-latest
-    # Skip cleanly until Supabase is configured, so this never fails on an
-    # unconfigured repo.
-    if: ${{ secrets.SUPABASE_URL != '' }}
     steps:
       - name: Health check REST API
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
+          if [ -z "$SUPABASE_URL" ]; then
+            echo "SUPABASE_URL not configured — skipping."
+            exit 0
+          fi
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            "${{ secrets.SUPABASE_URL }}/rest/v1/" \
-            -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}")
+            "$SUPABASE_URL/rest/v1/" -H "apikey: $SUPABASE_ANON_KEY")
           echo "Supabase responded: $STATUS"
           if [ "$STATUS" != "200" ]; then
             echo "::warning::Supabase returned $STATUS — check project status"
           fi
 
       - name: Ping storage endpoint
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: |
+          if [ -z "$SUPABASE_URL" ]; then
+            echo "SUPABASE_URL not configured — skipping."
+            exit 0
+          fi
           curl -s -o /dev/null -w "Storage: %{http_code}\n" \
-            "${{ secrets.SUPABASE_URL }}/storage/v1/bucket" \
-            -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
-            -H "Authorization: Bearer ${{ secrets.SUPABASE_SERVICE_KEY }}"
+            "$SUPABASE_URL/storage/v1/bucket" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY"
 
   ping-oracle-vm:
     name: Ping Oracle VM services
     runs-on: ubuntu-latest
-    # Only runs if you set ORACLE_VM_HOST secret
-    if: ${{ secrets.ORACLE_VM_HOST != '' }}
     steps:
-      - name: Ping SuperTokens
+      - name: Ping Oracle VM endpoints
+        env:
+          ORACLE_VM_HOST: ${{ secrets.ORACLE_VM_HOST }}
         run: |
-          curl -sf --max-time 10 \
-            "http://${{ secrets.ORACLE_VM_HOST }}:3567/hello" \
-            && echo "SuperTokens: OK" \
-            || echo "::warning::SuperTokens unreachable"
-
-      - name: Ping DefectDojo
-        run: |
-          curl -sf --max-time 10 \
-            "http://${{ secrets.ORACLE_VM_HOST }}:8080/api/v2/" \
-            && echo "DefectDojo: OK" \
-            || echo "::warning::DefectDojo unreachable"
-
-      - name: Ping free-claude-code proxy
-        run: |
-          curl -sf --max-time 10 \
-            "http://${{ secrets.ORACLE_VM_HOST }}:8082/health" \
-            && echo "Claude proxy: OK" \
-            || echo "::warning::Claude proxy unreachable"
+          if [ -z "$ORACLE_VM_HOST" ]; then
+            echo "ORACLE_VM_HOST not configured — skipping."
+            exit 0
+          fi
+          curl -sf --max-time 10 "http://$ORACLE_VM_HOST:3567/hello" \
+            && echo "SuperTokens: OK" || echo "::warning::SuperTokens unreachable"
+          curl -sf --max-time 10 "http://$ORACLE_VM_HOST:8080/api/v2/" \
+            && echo "DefectDojo: OK" || echo "::warning::DefectDojo unreachable"
+          curl -sf --max-time 10 "http://$ORACLE_VM_HOST:8082/health" \
+            && echo "Claude proxy: OK" || echo "::warning::Claude proxy unreachable"
