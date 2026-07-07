@@ -1,0 +1,55 @@
+# Production overlay for SecPlat.
+#
+# Adds a Caddy reverse proxy that terminates TLS (automatic HTTPS via Let's
+# Encrypt) in front of the frontend, and hardens the app tier for a public
+# server. The base compose already binds every datastore/app port to
+# 127.0.0.1, so only Caddy (80/443) is exposed to the internet.
+#
+# Usage (see docs/DEPLOY.md):
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Required in .env: ENV=prod, SECPLAT_DOMAIN, ACME_EMAIL, and strong secrets.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: secplat-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      SECPLAT_DOMAIN: ${SECPLAT_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+
+  frontend:
+    restart: unless-stopped
+    environment:
+      # Behind Caddy (HTTPS), always issue Secure session cookies.
+      SESSION_COOKIE_SECURE: "true"
+
+  api:
+    restart: unless-stopped
+
+  postgres:
+    restart: unless-stopped
+
+  opensearch:
+    restart: unless-stopped
+
+  redis:
+    restart: unless-stopped
+
+  ingestion:
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:

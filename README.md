@@ -50,9 +50,10 @@ That's it — nothing is exposed to your network (every port binds to `127.0.0.1
 so it's safe to run on your laptop.
 
 > **Deploying for a team or in production?** The defaults above are for local
-> evaluation. Read **[SECURITY.md](SECURITY.md)** first — it's a short checklist
-> (TLS, real secrets, `ENV=prod`, access control) that you must complete before
-> exposing SecPlat to anyone else.
+> evaluation. Follow **[docs/DEPLOY.md](docs/DEPLOY.md)** to put the app online
+> with a domain and free HTTPS (Oracle free tier, $0), and read
+> **[SECURITY.md](SECURITY.md)** for the hardening checklist (TLS, real secrets,
+> `ENV=prod`, access control) you must complete before exposing SecPlat.
 
 ---
 
@@ -552,6 +553,7 @@ docker compose config > /dev/null && echo "compose ok"
 
 | Doc | What's in it |
 |-----|--------------|
+| [docs/DEPLOY.md](docs/DEPLOY.md) | Deploy the full app to a server with a domain + free HTTPS (Oracle free tier, $0) |
 | [SECURITY.md](SECURITY.md) | Safe-by-default guarantees, production hardening checklist, vulnerability reporting |
 | [COMMERCIAL.md](COMMERCIAL.md) | Hosted service and commercial licensing options |
 | [LICENSE](LICENSE) | AGPL-3.0 license text |
