@@ -22,7 +22,9 @@ COPY app /app/app
 COPY tests /app/tests
 COPY scripts /app/scripts
 COPY models /app/models
-COPY exports /app/exports
+# exports/ is a gitignored runtime output dir (PDF reports, etc.) — create it
+# rather than COPY, so a fresh clone (where the dir doesn't exist) still builds.
+RUN mkdir -p /app/exports
 
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host=0.0.0.0", "--port=8000"]

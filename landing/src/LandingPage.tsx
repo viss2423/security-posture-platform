@@ -50,13 +50,11 @@ import {
   Zap,
 } from 'lucide-react';
 
-// Where "sign in / try the platform" CTAs point. Set VITE_APP_URL to your
-// deployed app (e.g. https://app.yourdomain.com) at build time and links go there.
-// Until the app is hosted, they point to the repo so visitors can self-host.
-const APP_URL = import.meta.env.VITE_APP_URL || '';
-const LOGIN_URL = APP_URL
-  ? `${APP_URL.replace(/\/$/, '')}/login`
-  : 'https://github.com/viss2423/security-posture-platform';
+// Where "sign in / try the platform" CTAs point. Defaults to the live hosted app
+// (Contabo VPS, sslip.io HTTPS). Override with VITE_APP_URL at build time when you
+// move to a custom domain (set it in Cloudflare Pages → Settings → Env variables).
+const APP_URL = import.meta.env.VITE_APP_URL || 'https://207-180-216-252.sslip.io';
+const LOGIN_URL = `${APP_URL.replace(/\/$/, '')}/login`;
 
 const USE_CASES = [
   {
