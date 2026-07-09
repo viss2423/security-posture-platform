@@ -1,0 +1,10 @@
+# CVE-2026-41305 (postcss XSS via unescaped </style> in stringified output)
+# postcss@8.4.31 is vendored *inside* next@16.2.10's own dependency tree
+# (services/frontend/package-lock.json) for Next's internal build pipeline.
+# No Next.js release (including latest, 16.2.10) has picked up a patched
+# postcss yet — this is an upstream-controlled pin, not something bumpable
+# from our package.json (our own direct postcss dep is already 8.5.16).
+# Not exploitable here: Next uses it at build time over our own trusted
+# source CSS, not to stringify untrusted/attacker-controlled CSS at runtime.
+# Revisit when Next.js ships a release with a patched postcss.
+CVE-2026-41305
