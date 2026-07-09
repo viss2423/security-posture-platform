@@ -1,3 +1,55 @@
+# security-posture-platform — shared agent context
+
+> **Single source of truth for every AI agent** (Claude Code, Codex CLI, Cursor/Deepseek).
+> Each tool points here. Edit shared rules **in this file**, not in tool-specific ones.
+
+## What this is
+A **security posture platform** — a security product being built toward something sellable.
+Treat anything touching secrets, auth, data flow, or external egress as high-stakes:
+flag it, don't guess.
+
+## Repo layout
+- **Backend API:** `services/api/` (Python, FastAPI; settings in `services/api/app/settings.py`)
+- **Frontend:** `services/frontend/` (Next.js App Router under `services/frontend/app/`; components in `services/frontend/components/`)
+- **Infra/K8s:** `infra/`, Helm + manifests under `artifacts/`
+
+## Working style (large repo — ~672 files, 6k+ symbols)
+- Don't bulk-read. Open only what a task needs; scope edits to the named feature's file
+  (e.g. the findings page = `services/frontend/app/(app)/findings/page.tsx`).
+- Match surrounding code: naming, comment density, idioms. Keep routine UI changes minimal and in-style.
+- If you have GitNexus (Claude, Codex), prefer graph queries over grepping / whole-file reads.
+
+## Guardrails
+- Don't commit or push unless asked.
+- **NEVER add `Co-Authored-By` / Claude attribution to commits in this repo.**
+- Before deleting or overwriting a file, inspect it first.
+- Flag any change touching authentication, secret handling, or external data egress.
+
+## Quality gates
+- After every edit, verify the diff applied as intended — don't trust edit output alone.
+- For scripts (PowerShell / bash / Python), trace every data path end-to-end: where each value
+  comes from, where it goes, whether it wrongly crosses a container/host boundary.
+- If you haven't executed a change, say so. Never claim a script works untested.
+- If the shell is broken or output truncated, verify another way (lock files, installed binaries, timestamps).
+- PowerShell: watch `-or` vs null-coalesce, container-vs-host path confusion in volume mounts,
+  deprecated registries (Docker Hub → GHCR), and ZAP risk codes (only 0–3, no "Critical").
+
+## Multi-model delegation
+Work is split across models to control cost and cover single-model blind spots. Know your lane:
+
+- **Claude Code** — specialist, safety gate, and the *only* agent that can **see** rendered UI.
+  Owns: hard architecture/security judgment, **visual UI verification**, and the GitNexus pre-merge gate.
+- **Codex CLI** — the **default developer**. Full agent, has GitNexus.
+  Owns: feature implementation, code review, cross-file changes.
+- **Cursor + Deepseek** — the **bulk / throughput lane**, human-driven.
+  Owns: test generation, boilerplate, docs, single-file refactors.
+  Has **no GitNexus** — defer impact analysis / call-graph refactors to Claude or Codex.
+
+Rules of engagement:
+- One model owns a task at a time, on its own branch.
+- The GitNexus-enabled agent (Claude or Codex) runs `detect_changes()` before a merge.
+- Don't do cross-file refactors or renames in the Deepseek lane — no call graph there.
+
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 

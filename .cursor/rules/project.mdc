@@ -1,0 +1,25 @@
+---
+description: Shared project context and Cursor/Deepseek lane rules for security-posture-platform
+alwaysApply: true
+---
+
+# security-posture-platform — Cursor / Deepseek rules
+
+Read **AGENTS.md** in the repo root for the full shared context: repo layout, guardrails,
+quality gates, and the multi-model delegation model. Everything there applies to you.
+
+## Your lane (from the delegation model)
+You are the **bulk / throughput lane**: test generation, boilerplate, docs, single-file
+refactors. Keep changes minimal and in-style.
+
+## Capability limits — important
+- You do **NOT** have GitNexus. Do not attempt cross-file refactors or renames that need
+  call-graph awareness — defer those to Claude or Codex.
+- Before any risky change (touching auth, secrets, data flow, or many callers), ask for a
+  GitNexus impact check from Claude or Codex first.
+
+## Guardrails (also in AGENTS.md)
+- Don't commit or push unless asked. Never add `Co-Authored-By` attribution.
+- Inspect files before deleting or overwriting.
+- Flag any change touching authentication, secret handling, or external data egress.
+- Verify edits applied; never claim an untested script works.
