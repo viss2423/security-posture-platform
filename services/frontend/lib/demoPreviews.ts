@@ -293,13 +293,14 @@ export const DEMO_PREVIEWS: Record<string, FeaturePreview> = {
     stats: [
       { label: 'Running', value: '1', tone: 'amber' },
       { label: 'Success rate (7d)', value: '97%', tone: 'green' },
-      { label: 'Job types', value: '9', tone: 'accent' },
+      { label: 'Job types', value: '10', tone: 'accent' },
     ],
     tableHeading: 'Sample activity',
     table: {
       columns: ['Job', 'Status', 'Duration', 'Result'],
       rows: [
         ['GitHub posture scan', 'done', '48s', '12 repos checked, 3 findings'],
+        ['AWS IAM posture scan', 'done', '2s', 'Root MFA and stale key findings'],
         ['Web exposure scan', 'running', '2m 10s', '—'],
         ['Threat intel refresh', 'done', '12s', '1,840 IOCs updated'],
         ['Repository scan (OSV + Trivy)', 'done', '3m 41s', '2 new criticals'],
@@ -315,7 +316,7 @@ export const DEMO_PREVIEWS: Record<string, FeaturePreview> = {
 
   '/compliance': {
     title: 'Compliance Evidence',
-    tagline: 'Live SOC 2 evidence mapped from real posture findings — always current, never a screenshot folder.',
+    tagline: 'Live SOC 2, ISO 27001, and CIS evidence mapped from real GitHub and AWS IAM posture findings — always current, never a screenshot folder.',
     stats: [
       { label: 'Controls tracked', value: '12', tone: 'accent' },
       { label: 'Passing', value: '9', tone: 'green' },
@@ -325,15 +326,15 @@ export const DEMO_PREVIEWS: Record<string, FeaturePreview> = {
     table: {
       columns: ['Control', 'Name', 'Status', 'Evidence'],
       rows: [
-        ['CC6.1', 'Logical access controls', 'PASS', 'Org 2FA enforced; secret scanning on all repos'],
-        ['CC7.1', 'Vulnerability detection', 'FAIL', 'Dependabot disabled on 2 repositories'],
-        ['CC8.1', 'Change management', 'PASS', 'Branch protection with review required on main'],
+        ['SOC 2 CC6.1', 'Logical access controls', 'PASS', 'Org 2FA enforced; secret scanning on all repos'],
+        ['ISO 27001 A.8.8', 'Vulnerability management', 'FAIL', 'Dependabot disabled on 2 repositories'],
+        ['CIS 5.4', 'MFA for privileged access', 'FAIL', 'AWS root account MFA not enabled'],
       ],
     },
     capabilities: [
       'Each control links to the live findings that prove or break it',
-      'One-click auditor-ready PDF export',
-      'Evidence updates automatically as scans run',
+      'One-click auditor-ready PDF or CSV export',
+      'Evidence aggregates across connectors (GitHub, AWS) and updates automatically as scans run',
     ],
   },
 
