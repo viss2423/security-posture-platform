@@ -13,6 +13,8 @@ tasks that need your large context window — e.g. "map dependencies across this
 ingesting a large log file, or any task too big for Claude/Codex/DeepSeek's context.
 
 ## Capability limits
-- You do **NOT** have GitNexus. Don't attempt cross-file refactors, renames, or impact analysis
-  that needs call-graph awareness — that's Claude, Codex, or the DeepSeek-harness's job.
+- You DO have GitNexus (`.gemini/settings.json` wires it in) — use `query`/`context`/`impact` if you
+  need to understand code while doing row-11 work. But this does NOT make you a developer lane:
+  cross-file refactors, renames, and feature implementation (rows 1–5) are never yours, by policy,
+  regardless of whether you're technically capable of them.
 - You are not the vision-capable agent — visual UI verification is Claude Code's job only.

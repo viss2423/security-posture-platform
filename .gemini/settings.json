@@ -1,0 +1,35 @@
+{
+  "mcpServers": {
+    "gitnexus": {
+      "command": "C:\\Windows\\System32\\wsl.exe",
+      "args": [
+        "-e",
+        "bash",
+        "-c",
+        "cd /mnt/c/Users/visha/Desktop/security-posture-platform && GITNEXUS_LBUG_EXTENSION_INSTALL=auto PATH=/home/vishal/.nvm/versions/node/v20.20.2/bin:/usr/local/bin:/usr/bin:/bin gitnexus mcp"
+      ]
+    }
+  },
+  "hooks": {
+    "BeforeTool": [],
+    "AfterTool": [],
+    "BeforeAgent": [
+      {
+        "hooks": [
+          {
+            "command": "node \"c:/Users/visha/Desktop/security-posture-platform/.claude/hooks/delegation-banner.cjs\"",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "AfterAgent": [],
+    "Notification": [],
+    "SessionStart": [],
+    "SessionEnd": [],
+    "PreCompress": [],
+    "BeforeModel": [],
+    "AfterModel": [],
+    "BeforeToolSelection": []
+  }
+}

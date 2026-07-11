@@ -63,8 +63,11 @@ Rules of engagement (no exceptions):
   always, regardless of who wrote the change.
 - Only Claude Code on the real Anthropic account does visual verification (row 6). The DeepSeek
   harness is a different account/session and is never substituted for this step.
-- Gemini CLI (row 11) is never given row 1–5 work, even if idle. It has no GitNexus and is not a
-  standing developer lane — its only job is row 11.
+- Gemini CLI (row 11) is never given row 1–5 work, even if idle. It now HAS GitNexus (wired via
+  `.gemini/settings.json`, verified connected) — so the restriction to row 11 is a deliberate policy
+  choice, not a capability gap: adding it as a 5th/6th developer lane would duplicate the Codex/
+  DeepSeek-harness roles and add coordination overhead for no gain, and its free-tier rate limits
+  aren't suited to being hammered as a standing lane. Its only assigned job is row 11.
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence

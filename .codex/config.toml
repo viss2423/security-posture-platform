@@ -1,0 +1,5 @@
+[[hooks.UserPromptSubmit]]
+
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = 'node "c:/Users/visha/Desktop/security-posture-platform/.claude/hooks/delegation-banner.cjs"'
