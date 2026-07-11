@@ -7,12 +7,14 @@ export type OnboardingInput = {
   detectionRuleCount: number;
   alertCount: number;
   incidentCount: number;
+  githubScanRan?: boolean;
 };
 
 export type OnboardingStep = {
   id:
     | 'access'
     | 'identity'
+    | 'github'
     | 'assets'
     | 'telemetry'
     | 'detections'
@@ -22,6 +24,8 @@ export type OnboardingStep = {
   description: string;
   detail: string;
   complete: boolean;
+  ctaHref?: string;
+  ctaLabel?: string;
 };
 
 export function deriveOnboardingSteps(input: OnboardingInput): OnboardingStep[] {
@@ -43,6 +47,17 @@ export function deriveOnboardingSteps(input: OnboardingInput): OnboardingStep[] 
           ? 'OIDC is configured for operator login.'
           : 'Local credential login is active; OIDC remains optional.',
       complete: input.authConfigLoaded,
+    },
+    {
+      id: 'github',
+      title: 'Connect GitHub',
+      description: 'Run the read-only GitHub posture scan to unlock findings and evidence.',
+      detail: input.githubScanRan
+        ? 'GitHub posture evidence has been collected.'
+        : 'No completed GitHub posture scan yet.',
+      complete: Boolean(input.githubScanRan),
+      ctaHref: '/jobs',
+      ctaLabel: 'Run GitHub Posture',
     },
     {
       id: 'assets',

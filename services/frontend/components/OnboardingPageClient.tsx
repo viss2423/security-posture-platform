@@ -9,6 +9,7 @@ import {
   createAsset,
   createDetectionRule,
   createIncident,
+  getComplianceEvidence,
   getAlerts,
   getAssets,
   getDetectionRules,
@@ -60,6 +61,7 @@ export default function OnboardingPageClient() {
   const [detectionRules, setDetectionRules] = useState<DetectionRule[]>([]);
   const [alerts, setAlerts] = useState<AlertsResponse | null>(null);
   const [incidents, setIncidents] = useState<IncidentsListResponse | null>(null);
+  const [githubScanRan, setGithubScanRan] = useState(false);
   const [demoStatus, setDemoStatus] = useState<PlatformDemoStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -80,6 +82,7 @@ export default function OnboardingPageClient() {
       detectionsResult,
       alertsResult,
       incidentsResult,
+      complianceResult,
       demoStatusResult,
     ] = await Promise.allSettled([
       fetch('/api/auth/config', { cache: 'no-store' }).then(async (response) => {
@@ -93,6 +96,7 @@ export default function OnboardingPageClient() {
       getDetectionRules(true),
       getAlerts(),
       getIncidents({ limit: 25 }),
+      getComplianceEvidence(),
       getPlatformDemoStatus(),
     ]);
 
@@ -122,6 +126,9 @@ export default function OnboardingPageClient() {
     );
     setAlerts(alertsResult.status === 'fulfilled' ? alertsResult.value : null);
     setIncidents(incidentsResult.status === 'fulfilled' ? incidentsResult.value : null);
+    setGithubScanRan(
+      complianceResult.status === 'fulfilled' ? Boolean(complianceResult.value.scan_ran) : false
+    );
     setDemoStatus(demoStatusResult.status === 'fulfilled' ? demoStatusResult.value : null);
 
     const failures = [
@@ -130,6 +137,7 @@ export default function OnboardingPageClient() {
       detectionsResult,
       alertsResult,
       incidentsResult,
+      complianceResult,
     ]
       .filter((result) => result.status === 'rejected')
       .map((result) =>
@@ -163,12 +171,14 @@ export default function OnboardingPageClient() {
         detectionRuleCount: detectionRules.length,
         alertCount,
         incidentCount: incidents?.total ?? 0,
+        githubScanRan,
       }),
     [
       alertCount,
       assets.length,
       authConfigLoaded,
       detectionRules.length,
+      githubScanRan,
       incidents?.total,
       oidcEnabled,
       telemetrySummary?.totals.events,
@@ -448,6 +458,11 @@ export default function OnboardingPageClient() {
             <div className="step-progress-bar">
               <span style={{ width: step.complete ? '100%' : '34%' }} />
             </div>
+            {!step.complete && step.ctaHref && step.ctaLabel && (
+              <Link href={step.ctaHref} className="btn-secondary mt-4 inline-flex text-sm">
+                {step.ctaLabel}
+              </Link>
+            )}
           </article>
         ))}
       </section>

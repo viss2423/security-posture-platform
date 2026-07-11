@@ -3128,6 +3128,7 @@ export type Soc2EvidenceItem = {
 };
 
 export type Soc2ControlEvidence = {
+  framework: string;
   control_id: string;
   name: string;
   description: string;
@@ -3143,6 +3144,7 @@ export type Soc2EvidenceReport = {
   generated_at: string;
   source: string;
   scan_ran: boolean;
+  frameworks: string[];
   scope: {
     asset_count: number;
     total_findings: number;
@@ -3158,13 +3160,32 @@ export type Soc2EvidenceReport = {
   controls: Soc2ControlEvidence[];
 };
 
+export type ComplianceEvidenceItem = Soc2EvidenceItem;
+export type ComplianceControlEvidence = Soc2ControlEvidence;
+export type ComplianceEvidenceReport = Soc2EvidenceReport;
+
+export async function getComplianceEvidence(): Promise<ComplianceEvidenceReport> {
+  return apiFetch<ComplianceEvidenceReport>('/compliance/evidence');
+}
+
 export async function getSoc2Evidence(): Promise<Soc2EvidenceReport> {
-  return apiFetch<Soc2EvidenceReport>('/compliance/soc2/evidence');
+  return getComplianceEvidence();
+}
+
+export async function downloadComplianceEvidencePdf(): Promise<void> {
+  await downloadFromApi(
+    `${API}/compliance/evidence.pdf`,
+    'secplat-compliance-evidence-report.pdf'
+  );
 }
 
 export async function downloadSoc2EvidencePdf(): Promise<void> {
+  return downloadComplianceEvidencePdf();
+}
+
+export async function downloadComplianceEvidenceCsv(): Promise<void> {
   await downloadFromApi(
-    `${API}/compliance/soc2/evidence.pdf`,
-    'secplat-soc2-evidence-report.pdf'
+    `${API}/compliance/evidence.csv`,
+    'secplat-compliance-evidence-report.csv'
   );
 }

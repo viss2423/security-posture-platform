@@ -7,6 +7,7 @@ const apiMocks = vi.hoisted(() => ({
   getDetectionRules: vi.fn(),
   getAlerts: vi.fn(),
   getIncidents: vi.fn(),
+  getComplianceEvidence: vi.fn(),
   getPlatformDemoStatus: vi.fn(),
   createAsset: vi.fn(),
   ingestTelemetry: vi.fn(),
@@ -57,6 +58,26 @@ describe('OnboardingPageClient', () => {
       resolved: [],
     });
     apiMocks.getIncidents.mockResolvedValue({ total: 0, items: [] });
+    apiMocks.getComplianceEvidence.mockResolvedValue({
+      report_id: 'test',
+      generated_at: new Date().toISOString(),
+      source: 'github_posture',
+      scan_ran: false,
+      frameworks: [],
+      scope: {
+        asset_count: 0,
+        total_findings: 0,
+        open_findings: 0,
+        remediated_findings: 0,
+      },
+      score: {
+        pass: 0,
+        fail: 0,
+        not_applicable: 0,
+        percentage: null,
+      },
+      controls: [],
+    });
     apiMocks.getPlatformDemoStatus.mockResolvedValue({
       seed_version: 'v1',
       asset_key: 'cyberlab-demo-asset',

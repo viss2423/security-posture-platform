@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   createAIFeedback,
@@ -29,6 +30,7 @@ type EnqueueJobType =
   | 'network_anomaly_score'
   | 'attack_lab_run'
   | 'detection_rule_test'
+  | 'aws_iam_posture'
   | 'github_posture';
 
 const JOB_LABELS: Record<EnqueueJobType, string> = {
@@ -40,6 +42,7 @@ const JOB_LABELS: Record<EnqueueJobType, string> = {
   network_anomaly_score: 'Anomaly Scoring',
   attack_lab_run: 'Attack Lab Run',
   detection_rule_test: 'Detection Rule Test',
+  aws_iam_posture: 'AWS IAM Posture',
   github_posture: 'GitHub Posture',
 };
 
@@ -52,6 +55,7 @@ const JOB_DESCRIPTIONS: Record<EnqueueJobType, string> = {
   network_anomaly_score: 'Detect per-asset deviations from the recent telemetry baseline.',
   attack_lab_run: 'Run a controlled attack simulation and generate incidents.',
   detection_rule_test: 'Evaluate detection rules against recent telemetry.',
+  aws_iam_posture: 'Scan AWS IAM read-only for root MFA, password policy, stale keys, admin policies, and unused users.',
   github_posture: 'Scan a GitHub account or org read-only for security gaps (branch protection, 2FA, Dependabot, secret scanning, public repos).',
 };
 
@@ -65,7 +69,6 @@ const DEFAULT_REPOSITORY_SCAN = {
 };
 
 const DEFAULT_JOB_PARAMS: Partial<Record<EnqueueJobType, string>> = {
-  github_posture: JSON.stringify({ scope_type: 'user', scope: '', max_repos: 50 }, null, 2),
   telemetry_import: JSON.stringify(
     { source: 'suricata', file_path: '/workspace/lab-data/suricata/eve.json', asset_key: 'secplat-api' },
     null,
@@ -125,6 +128,10 @@ export default function JobsPage() {
   const [repoTrivyScanners, setRepoTrivyScanners] = useState(DEFAULT_REPOSITORY_SCAN.trivyScanners);
   const [repoEnableOsv, setRepoEnableOsv] = useState(true);
   const [repoEnableTrivy, setRepoEnableTrivy] = useState(true);
+  const [ghScopeType, setGhScopeType] = useState<'user' | 'org'>('user');
+  const [ghScope, setGhScope] = useState('');
+  const [ghMaxRepos, setGhMaxRepos] = useState('50');
+  const [awsRegion, setAwsRegion] = useState('');
   const [enqueueing, setEnqueueing] = useState(false);
   const [customJobParams, setCustomJobParams] = useState<string>(DEFAULT_JOB_PARAMS.telemetry_import || '{}');
   const [aiTriage, setAiTriage] = useState<AIJobTriage | null>(null);
@@ -197,6 +204,33 @@ export default function JobsPage() {
       setError(null); setEnqueueing(true);
       createJob({ job_type: enqueueType })
         .then((job) => { load(); openDetail(job.job_id); setShowForm(false); })
+        .catch((e) => setError(e.message))
+        .finally(() => setEnqueueing(false));
+      return;
+    }
+    if (enqueueType === 'github_posture') {
+      if (ghScopeType === 'org' && !ghScope.trim()) { setError('Organization name is required for org scans'); return; }
+      const maxRepos = parseInt(ghMaxRepos, 10);
+      if (Number.isNaN(maxRepos) || maxRepos < 1 || maxRepos > 500) { setError('Max repositories must be between 1 and 500'); return; }
+      setError(null); setEnqueueing(true);
+      createJob({
+        job_type: enqueueType,
+        job_params_json: {
+          scope_type: ghScopeType,
+          scope: ghScope.trim(),
+          max_repos: maxRepos,
+        },
+      }).then((job) => { load(); openDetail(job.job_id); setShowForm(false); })
+        .catch((e) => setError(e.message))
+        .finally(() => setEnqueueing(false));
+      return;
+    }
+    if (enqueueType === 'aws_iam_posture') {
+      setError(null); setEnqueueing(true);
+      createJob({
+        job_type: enqueueType,
+        job_params_json: awsRegion.trim() ? { region: awsRegion.trim() } : {},
+      }).then((job) => { load(); openDetail(job.job_id); setShowForm(false); })
         .catch((e) => setError(e.message))
         .finally(() => setEnqueueing(false));
       return;
@@ -288,6 +322,12 @@ export default function JobsPage() {
   const fieldClass = 'w-full rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-subtle)] transition focus:outline-none focus:ring-2 focus:ring-[var(--accent-ring)] focus:border-[var(--accent)]';
 
   const filteredItems = data?.items ?? [];
+
+  useEffect(() => {
+    if (activeJobs <= 0) return;
+    const poll = window.setInterval(load, 4500);
+    return () => window.clearInterval(poll);
+  }, [activeJobs, load]);
 
   return (
     <main className="page-shell space-y-5">
@@ -497,6 +537,61 @@ export default function JobsPage() {
               </div>
             )}
 
+            {enqueueType === 'github_posture' && (
+              <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)]/40 p-4">
+                <div className="grid gap-4 lg:grid-cols-3">
+                  <label className="space-y-1.5 text-sm text-[var(--muted)]">
+                    <span className="block text-[11px] font-semibold uppercase tracking-widest">Scan scope</span>
+                    <select value={ghScopeType} onChange={(e) => setGhScopeType(e.target.value as 'user' | 'org')} className={fieldClass}>
+                      <option value="user">User account</option>
+                      <option value="org">Organization</option>
+                    </select>
+                  </label>
+                  <label className="space-y-1.5 text-sm text-[var(--muted)]">
+                    <span className="block text-[11px] font-semibold uppercase tracking-widest">
+                      {ghScopeType === 'org' ? 'Organization name' : 'Username (optional)'}
+                    </span>
+                    <input
+                      type="text"
+                      value={ghScope}
+                      onChange={(e) => setGhScope(e.target.value)}
+                      placeholder={ghScopeType === 'org' ? 'my-company' : 'Leave blank to scan the token owner'}
+                      className={fieldClass}
+                    />
+                  </label>
+                  <label className="space-y-1.5 text-sm text-[var(--muted)]">
+                    <span className="block text-[11px] font-semibold uppercase tracking-widest">Max repositories</span>
+                    <input type="number" min={1} max={500} value={ghMaxRepos} onChange={(e) => setGhMaxRepos(e.target.value)} className={fieldClass} />
+                  </label>
+                </div>
+                <p className="mt-4 text-xs text-[var(--text-subtle)]">
+                  Read-only scan using the GitHub token configured on the server (GITHUB_TOKEN).
+                  Checks branch protection, 2FA enforcement, Dependabot alerts, secret scanning and
+                  public repos, then maps results to SOC 2 controls on the Compliance page.
+                </p>
+              </div>
+            )}
+
+            {enqueueType === 'aws_iam_posture' && (
+              <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)]/40 p-4">
+                <div className="grid gap-4 lg:grid-cols-3">
+                  <label className="space-y-1.5 text-sm text-[var(--muted)]">
+                    <span className="block text-[11px] font-semibold uppercase tracking-widest">AWS region override</span>
+                    <input
+                      type="text"
+                      value={awsRegion}
+                      onChange={(e) => setAwsRegion(e.target.value)}
+                      placeholder="Leave blank to use AWS_REGION"
+                      className={fieldClass}
+                    />
+                  </label>
+                </div>
+                <p className="mt-4 text-xs text-[var(--text-subtle)]">
+                  Read-only scan using AWS credentials configured on the server. Access keys are never entered in the browser.
+                </p>
+              </div>
+            )}
+
             {['telemetry_import', 'network_anomaly_score', 'attack_lab_run', 'detection_rule_test'].includes(enqueueType) && (
               <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)]/40 p-4">
                 <label className="space-y-1.5 text-sm text-[var(--muted)]">
@@ -506,7 +601,7 @@ export default function JobsPage() {
               </div>
             )}
 
-            {enqueueType !== 'repository_scan' && enqueueType !== 'threat_intel_refresh' &&
+            {enqueueType !== 'repository_scan' && enqueueType !== 'threat_intel_refresh' && enqueueType !== 'github_posture' && enqueueType !== 'aws_iam_posture' &&
              !['telemetry_import', 'network_anomaly_score', 'attack_lab_run', 'detection_rule_test'].includes(enqueueType) && (
               <label className="space-y-1.5 text-sm text-[var(--muted)]">
                 <span className="block text-[11px] font-semibold uppercase tracking-widest">Asset ID (optional)</span>
@@ -650,6 +745,18 @@ export default function JobsPage() {
               {detail.error && (
                 <div className="mt-4 rounded-xl border border-[var(--red)]/25 bg-[var(--red)]/08 px-4 py-3 text-sm text-[var(--red)]">
                   {detail.error}
+                </div>
+              )}
+
+              {(detail.job_type === 'github_posture' || detail.job_type === 'aws_iam_posture') && detail.status === 'done' && (
+                <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-[var(--green)]/25 bg-[var(--green)]/08 px-4 py-3 text-sm">
+                  <span className="text-[var(--text)]">Scan complete — results are ready.</span>
+                  <Link href="/findings" className="font-medium text-[var(--accent)] hover:underline">
+                    View findings
+                  </Link>
+                  <Link href="/compliance" className="font-medium text-[var(--accent)] hover:underline">
+                    SOC 2 compliance report
+                  </Link>
                 </div>
               )}
 

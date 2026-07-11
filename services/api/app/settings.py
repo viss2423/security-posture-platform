@@ -80,6 +80,9 @@ class Settings(BaseSettings):
     GITHUB_API_URL: str = "https://api.github.com"
     GITHUB_HTTP_TIMEOUT_SECONDS: int = 30
     GITHUB_MAX_REPOS: int = 100
+    AWS_ACCESS_KEY_ID: str | None = None
+    AWS_SECRET_ACCESS_KEY: str | None = None
+    AWS_REGION: str | None = None
 
     # Retention: applied by POST /retention/apply (or cron calling it)
     EVENTS_RETENTION_DAYS: int = 90  # delete OpenSearch secplat-events older than this

@@ -1,11 +1,13 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import {
-  getSoc2Evidence,
-  downloadSoc2EvidencePdf,
-  type Soc2EvidenceReport,
-  type Soc2ControlEvidence,
+  getComplianceEvidence,
+  downloadComplianceEvidenceCsv,
+  downloadComplianceEvidencePdf,
+  type ComplianceEvidenceReport,
+  type ComplianceControlEvidence,
 } from '@/lib/api';
 import { EmptyState, ApiDownHint } from '@/components/EmptyState';
 
@@ -39,7 +41,7 @@ function sevBadge(severity: string): string {
 // Control card
 // ---------------------------------------------------------------------------
 
-function ControlCard({ control }: { control: Soc2ControlEvidence }) {
+function ControlCard({ control }: { control: ComplianceControlEvidence }) {
   const [open, setOpen] = useState(false);
   const label =
     control.status === 'pass' ? 'PASS'
@@ -51,6 +53,9 @@ function ControlCard({ control }: { control: Soc2ControlEvidence }) {
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-3 flex-wrap">
+            <span className="rounded-md bg-[var(--surface-elevated)] px-2 py-0.5 text-[11px] font-semibold text-[var(--muted)]">
+              {control.framework}
+            </span>
             <span className="text-sm font-mono font-semibold text-[var(--text)]">
               {control.control_id}
             </span>
@@ -150,15 +155,16 @@ function ControlCard({ control }: { control: Soc2ControlEvidence }) {
 // ---------------------------------------------------------------------------
 
 export default function CompliancePage() {
-  const [report, setReport] = useState<Soc2EvidenceReport | null>(null);
+  const [report, setReport] = useState<ComplianceEvidenceReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [pdfBusy, setPdfBusy] = useState(false);
+  const [csvBusy, setCsvBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = () => {
     setLoading(true);
     setError(null);
-    getSoc2Evidence()
+    getComplianceEvidence()
       .then(setReport)
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
@@ -168,9 +174,16 @@ export default function CompliancePage() {
 
   const handlePdf = async () => {
     setPdfBusy(true);
-    try { await downloadSoc2EvidencePdf(); }
+    try { await downloadComplianceEvidencePdf(); }
     catch (err) { setError(err instanceof Error ? err.message : 'PDF download failed'); }
     finally { setPdfBusy(false); }
+  };
+
+  const handleCsv = async () => {
+    setCsvBusy(true);
+    try { await downloadComplianceEvidenceCsv(); }
+    catch (err) { setError(err instanceof Error ? err.message : 'CSV download failed'); }
+    finally { setCsvBusy(false); }
   };
 
   if (loading) {
@@ -201,25 +214,74 @@ export default function CompliancePage() {
   if (!report) return null;
   const { score, controls, scope } = report;
   const pct = score.percentage;
+  const controlsByFramework = controls.reduce<Record<string, ComplianceControlEvidence[]>>((acc, ctrl) => {
+    const key = ctrl.framework || 'Compliance';
+    acc[key] = acc[key] || [];
+    acc[key].push(ctrl);
+    return acc;
+  }, {});
+  const severityRank: Record<string, number> = {
+    critical: 4,
+    high: 3,
+    medium: 2,
+    low: 1,
+  };
+  const topOpenFinding = Array.from(
+    new Map(
+      controls
+        .flatMap((ctrl) => ctrl.evidence)
+        .filter((ev) => ev.status !== 'remediated')
+        .map((ev) => [ev.finding_id, ev] as const)
+    ).values()
+  ).sort(
+    (a, b) =>
+      (severityRank[b.severity.toLowerCase()] ?? 0) -
+      (severityRank[a.severity.toLowerCase()] ?? 0)
+  )[0];
 
   return (
     <main className="standard-main">
       <div className="mx-auto max-w-3xl">
         <section className="mb-8">
-          <h1 className="hero-title">SOC 2 Compliance Evidence</h1>
+          <h1 className="hero-title">Compliance Evidence</h1>
           <p className="hero-copy">
-            Live evidence from your GitHub posture scan, mapped to SOC 2 Trust
-            Services Criteria controls.
+            Live evidence from your GitHub and AWS IAM posture scans, mapped to
+            SOC 2, ISO 27001, and CIS controls.
           </p>
           <div className="mt-4 flex flex-wrap gap-2">
             <button onClick={load} disabled={loading} className="btn-secondary text-sm">Refresh</button>
             <button onClick={handlePdf} disabled={pdfBusy} className="btn-primary text-sm">
               {pdfBusy ? 'Preparing...' : 'Download PDF Report'}
             </button>
+            <button onClick={handleCsv} disabled={csvBusy} className="btn-secondary text-sm">
+              {csvBusy ? 'Preparing...' : 'Download CSV'}
+            </button>
           </div>
         </section>
 
         <section className="mb-8">
+          {topOpenFinding && (
+            <div className="mb-4 rounded-2xl border border-[var(--red)]/30 bg-[var(--red)]/10 p-5">
+              <div className="flex flex-wrap items-center gap-2">
+                <span
+                  className={`rounded px-2 py-0.5 text-[11px] font-semibold uppercase ${sevBadge(topOpenFinding.severity)}`}
+                >
+                  {topOpenFinding.severity}
+                </span>
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--red)]">
+                  Top issue to fix
+                </p>
+              </div>
+              <h2 className="mt-2 text-lg font-semibold text-[var(--text)]">
+                {topOpenFinding.title}
+              </h2>
+              {topOpenFinding.remediation && (
+                <p className="mt-2 text-sm leading-6 text-[var(--text-muted)]">
+                  Here&apos;s your top issue: fix it by {topOpenFinding.remediation}
+                </p>
+              )}
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
             <div className="metric-card">
               <div className="text-3xl font-bold" style={{
@@ -242,8 +304,11 @@ export default function CompliancePage() {
           </div>
           {!report.scan_ran && (
             <p className="mt-4 text-xs font-medium text-[var(--amber)]">
-              No GitHub posture scan has completed yet. Run a scan to populate
-              control evidence and see pass/fail results.
+              No GitHub or AWS IAM posture scan has completed yet.{' '}
+              <Link href="/jobs" className="underline hover:text-[var(--text)]">
+                Run a posture scan
+              </Link>{' '}
+              to populate control evidence and see pass/fail results.
             </p>
           )}
           <p className="mt-4 text-xs text-[var(--muted)]">
@@ -255,20 +320,41 @@ export default function CompliancePage() {
 
         <section className="space-y-4">
           {controls.length === 0 ? (
-            <EmptyState icon={null} title="No SOC 2 controls evaluated" description="Run a GitHub posture scan to populate control evidence." />
+            <EmptyState
+              icon={null}
+              title="No controls evaluated"
+              description="Run a GitHub or AWS IAM posture scan to populate control evidence."
+              action={<Link href="/jobs" className="btn-primary mt-4 inline-block">Run a posture scan</Link>}
+            />
           ) : (
-            controls.map((ctrl) => <ControlCard key={ctrl.control_id} control={ctrl} />)
+            Object.entries(controlsByFramework).map(([framework, items]) => (
+              <div key={framework} className="space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="text-lg font-semibold text-[var(--text)]">{framework}</h2>
+                  <span className="text-xs text-[var(--muted)]">
+                    {items.length} control{items.length !== 1 ? 's' : ''}
+                  </span>
+                </div>
+                {items.map((ctrl) => (
+                  <ControlCard
+                    key={`${ctrl.framework}:${ctrl.control_id}`}
+                    control={ctrl}
+                  />
+                ))}
+              </div>
+            ))
           )}
         </section>
 
         <section className="mt-12 mb-8 rounded-2xl border border-[var(--border)] bg-[var(--surface-elevated)]/30 p-5 text-sm text-[var(--text-muted)]">
           <p className="font-semibold text-[var(--text)]">About this report</p>
           <p className="mt-2 leading-relaxed">
-            Generated from live GitHub posture findings via the read-only GitHub connector.
+            Generated from live GitHub and AWS IAM posture findings via read-only connectors.
           </p>
           <p className="mt-2 leading-relaxed">
             <span className="font-medium text-[var(--text)]">Use cases:</span>{' '}
-            Audit readiness, customer security reviews, SOC 2 evidence collection.
+            Audit readiness, customer security reviews, and evidence collection
+            across SOC 2, ISO 27001, and CIS mappings.
           </p>
         </section>
       </div>
