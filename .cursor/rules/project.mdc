@@ -1,22 +1,23 @@
 ---
-description: Shared project context and Cursor/Deepseek lane rules for security-posture-platform
+description: Shared project context for security-posture-platform (Cursor is no longer a delegation lane)
 alwaysApply: true
 ---
 
-# security-posture-platform — Cursor / Deepseek rules
+# security-posture-platform — Cursor rules
+
+> **Superseded:** DeepSeek's delegation lane moved from Cursor to a CLI harness
+> (Claude Code pointed at DeepSeek's API — see `AGENTS.md` → "Multi-model delegation").
+> If you're using Cursor for ad hoc manual edits, the rules below still apply, but it is
+> no longer an assigned lane in the team workflow — don't rely on it having a "role."
 
 Read **AGENTS.md** in the repo root for the full shared context: repo layout, guardrails,
-quality gates, and the multi-model delegation model. Everything there applies to you.
-
-## Your lane (from the delegation model)
-You are the **bulk / throughput lane**: test generation, boilerplate, docs, single-file
-refactors. Keep changes minimal and in-style.
+quality gates, and the multi-model delegation model.
 
 ## Capability limits — important
-- You do **NOT** have GitNexus. Do not attempt cross-file refactors or renames that need
-  call-graph awareness — defer those to Claude or Codex.
-- Before any risky change (touching auth, secrets, data flow, or many callers), ask for a
-  GitNexus impact check from Claude or Codex first.
+- Cursor itself has **no GitNexus**. Do not attempt cross-file refactors or renames that need
+  call-graph awareness here — do those in Claude Code, Codex, or the DeepSeek harness instead.
+- Before any risky change (touching auth, secrets, data flow, or many callers), get a
+  GitNexus impact check from one of the CLI agents first.
 
 ## Guardrails (also in AGENTS.md)
 - Don't commit or push unless asked. Never add `Co-Authored-By` attribution.

@@ -1,6 +1,6 @@
 # security-posture-platform — shared agent context
 
-> **Single source of truth for every AI agent** (Claude Code, Codex CLI, Cursor/Deepseek).
+> **Single source of truth for every AI agent** (Claude Code, Codex CLI, DeepSeek-via-Claude-Code-harness).
 > Each tool points here. Edit shared rules **in this file**, not in tool-specific ones.
 
 ## What this is
@@ -41,14 +41,23 @@ Work is split across models to control cost and cover single-model blind spots. 
   Owns: hard architecture/security judgment, **visual UI verification**, and the GitNexus pre-merge gate.
 - **Codex CLI** — the **default developer**. Full agent, has GitNexus.
   Owns: feature implementation, code review, cross-file changes.
-- **Cursor + Deepseek** — the **bulk / throughput lane**, human-driven.
-  Owns: test generation, boilerplate, docs, single-file refactors.
-  Has **no GitNexus** — defer impact analysis / call-graph refactors to Claude or Codex.
+- **DeepSeek (via the Claude Code harness, `deepseek-v4-pro`/`deepseek-v4-flash`)** — the **second
+  developer / bulk lane**. A separate terminal session with `ANTHROPIC_BASE_URL` pointed at DeepSeek's
+  API (see `~/.claude/run-deepseek-claude.ps1`, not in this repo). Reads this same `AGENTS.md` and has
+  GitNexus (same binary as Claude Code) — so unlike the old Cursor setup, it CAN run `impact`/`rename`.
+  Owns: feature implementation Codex isn't already doing, tests, boilerplate, docs, refactors.
 
 Rules of engagement:
 - One model owns a task at a time, on its own branch.
-- The GitNexus-enabled agent (Claude or Codex) runs `detect_changes()` before a merge.
-- Don't do cross-file refactors or renames in the Deepseek lane — no call graph there.
+- The GitNexus-enabled agent (Claude, Codex, or DeepSeek-harness) runs `detect_changes()` before a merge.
+- Only Claude Code (the real one, on your Anthropic account) does the **visual UI verification** —
+  the DeepSeek harness is a different account/session and should not be treated as the vision-capable one.
+
+### Occasional specialist (not a standing lane)
+- **Gemini CLI** — invoke only for tasks that need its ~1M-token context (e.g. "map dependencies
+  across this whole repo/service" or ingesting a huge log). Not part of the default rotation —
+  adding it as a 4th standing lane would duplicate the DeepSeek-harness developer role without a
+  distinct job, just more coordination overhead for no gain.
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
