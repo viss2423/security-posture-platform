@@ -15,6 +15,7 @@ from app.attack_surface import (
     run_attack_surface_discovery_job,
 )
 from app.audit import log_audit
+from app.aws_iam_connector import launch_aws_iam_posture_job, run_aws_iam_posture_job
 from app.db import SessionLocal, get_db
 from app.detections import (
     launch_correlation_pass_job,
@@ -42,6 +43,7 @@ router = APIRouter()
 internal_router = APIRouter(prefix="/internal/jobs", tags=["internal-jobs"])
 
 ASYNC_JOB_TYPES = {
+    "aws_iam_posture",
     "github_posture",
     "web_exposure",
     "score_recompute",
@@ -56,6 +58,7 @@ ASYNC_JOB_TYPES = {
     "correlation_pass",
 }
 WORKER_EXECUTABLE_JOB_TYPES = {
+    "aws_iam_posture",
     "github_posture",
     "web_exposure",
     "score_recompute",
@@ -539,6 +542,8 @@ def _dispatch_queued_job(
         launch_correlation_pass_job(job_id)
     elif job_type == "github_posture":
         launch_github_posture_job(job_id)
+    elif job_type == "aws_iam_posture":
+        launch_aws_iam_posture_job(job_id)
     else:
         publish_scan_job(job_id, job_type, target_asset_id, requested_by or "")
 
@@ -1153,6 +1158,31 @@ def create_job(
             "scope": scope,
             "max_repos": max(1, min(max_repos, 500)),
         }
+    elif job_type == "aws_iam_posture":
+        if not isinstance(job_params, dict):
+            raise HTTPException(status_code=400, detail="job_params_json must be an object")
+        forbidden = {
+            "access_key",
+            "access_key_id",
+            "aws_access_key_id",
+            "secret_key",
+            "secret_access_key",
+            "aws_secret_access_key",
+            "session_token",
+            "aws_session_token",
+        }
+        if forbidden.intersection({str(k).strip().lower() for k in job_params}):
+            raise HTTPException(
+                status_code=400,
+                detail="AWS credentials must be configured server-side, not passed in job params",
+            )
+        region = str(job_params.get("region") or "").strip()
+        asset_key = str(job_params.get("asset_key") or "").strip()
+        job_params = {}
+        if region:
+            job_params["region"] = region
+        if asset_key:
+            job_params["asset_key"] = asset_key
 
     q = text("""
       INSERT INTO scan_jobs(org_id, job_type, target_asset_id, requested_by, status, job_params_json)
@@ -1209,6 +1239,8 @@ def create_job(
         launch_correlation_pass_job(int(out["job_id"]))
     elif job_type == "github_posture":
         launch_github_posture_job(int(out["job_id"]))
+    elif job_type == "aws_iam_posture":
+        launch_aws_iam_posture_job(int(out["job_id"]))
     else:
         publish_scan_job(out["job_id"], job_type, asset_id, requested_by)
     return out
@@ -1322,6 +1354,7 @@ def claim_job(
                     'detection_rule_test',
                     'detection_rule_schedule',
                     'correlation_pass',
+                    'aws_iam_posture',
                     'github_posture'
                   )
                   AND (
@@ -1646,6 +1679,7 @@ def execute_job(
         "detection_rule_test": run_detection_rule_job,
         "detection_rule_schedule": run_detection_rule_job,
         "correlation_pass": run_correlation_pass_job,
+        "aws_iam_posture": run_aws_iam_posture_job,
         "github_posture": run_github_posture_job,
     }
     runner = dispatchers.get(job_type)

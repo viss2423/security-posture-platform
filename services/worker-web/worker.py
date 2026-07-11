@@ -42,6 +42,7 @@ WORKER_METRICS_PORT = int(os.getenv("WORKER_METRICS_PORT", "9101"))
 
 SUPPORTED_JOB_TYPES = {
     "github_posture",
+    "aws_iam_posture",
     "web_exposure",
     "score_recompute",
     "repository_scan",
