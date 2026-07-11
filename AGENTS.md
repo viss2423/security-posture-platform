@@ -35,30 +35,36 @@ flag it, don't guess.
 - PowerShell: watch `-or` vs null-coalesce, container-vs-host path confusion in volume mounts,
   deprecated registries (Docker Hub → GHCR), and ZAP risk codes (only 0–3, no "Critical").
 
-## Multi-model delegation
-Work is split across models to control cost and cover single-model blind spots. Know your lane:
+## Multi-model delegation — DETERMINISTIC, no discretion
 
-- **Claude Code** — specialist, safety gate, and the *only* agent that can **see** rendered UI.
-  Owns: hard architecture/security judgment, **visual UI verification**, and the GitNexus pre-merge gate.
-- **Codex CLI** — the **default developer**. Full agent, has GitNexus.
-  Owns: feature implementation, code review, cross-file changes.
-- **DeepSeek (via the Claude Code harness, `deepseek-v4-pro`/`deepseek-v4-flash`)** — the **second
-  developer / bulk lane**. A separate terminal session with `ANTHROPIC_BASE_URL` pointed at DeepSeek's
-  API (see `~/.claude/run-deepseek-claude.ps1`, not in this repo). Reads this same `AGENTS.md` and has
-  GitNexus (same binary as Claude Code) — so unlike the old Cursor setup, it CAN run `impact`/`rename`.
-  Owns: feature implementation Codex isn't already doing, tests, boilerplate, docs, refactors.
+Every category below has **exactly one owner**. There is no "or," no "whichever is free," no
+picking based on preference. If a task matches a row, it goes to that row's owner. Full stop.
 
-Rules of engagement:
-- One model owns a task at a time, on its own branch.
-- The GitNexus-enabled agent (Claude, Codex, or DeepSeek-harness) runs `detect_changes()` before a merge.
-- Only Claude Code (the real one, on your Anthropic account) does the **visual UI verification** —
-  the DeepSeek harness is a different account/session and should not be treated as the vision-capable one.
+| # | Category (fixed trigger) | Owner | Claude tier (if Claude) |
+|---|---|---|---|
+| 1 | Backend core: new/changed endpoints, business logic in `services/api/app/` (`App`, `Routers` clusters) | **Codex CLI** | — |
+| 2 | Frontend feature implementation: new/changed pages, components in `services/frontend/` | **Codex CLI** | — |
+| 3 | `services/api/scripts/*` (backup, DR, verification scripts) | **DeepSeek harness** | — |
+| 4 | Self-contained backend engines: `Scanner`, `Correlator`, `Notifier`, `Deriver`, `Policy` clusters | **DeepSeek harness** | — |
+| 5 | Tests (any), boilerplate, docs | **DeepSeek harness** | — |
+| 6 | Visual verification of any frontend change before merge (mandatory, every time) | **Claude Code** | Sonnet |
+| 7 | Any change touching auth, secrets, data-boundary, or external egress (the AGENTS.md guardrail trigger) | **Claude Code** | Opus |
+| 8 | Cross-system architecture decisions with no existing pattern in the repo to follow; the single highest-severity security judgment calls (e.g. confirming a fix for an already-identified auth-bypass / data-exposure class bug) | **Claude Code** | Fable |
+| 9 | Final `detect_changes()` gate before merge to `main` (every merge, no exception) | **Claude Code** | Haiku |
+| 10 | CI/deploy pipeline changes (`.github/workflows/`, `docker-compose.yml`, deploy scripts) — single owner because this repo's history shows CI breaks when multiple hands touch it reactively | **Claude Code** | Sonnet (escalate to Opus only if the failure itself is the hard-debugging case, category 8's architecture clause does not apply here) |
+| 11 | Any task requiring ingestion of content larger than a single agent's normal context (whole-repo dependency mapping, huge log files) | **Gemini CLI** | — |
 
-### Occasional specialist (not a standing lane)
-- **Gemini CLI** — invoke only for tasks that need its ~1M-token context (e.g. "map dependencies
-  across this whole repo/service" or ingesting a huge log). Not part of the default rotation —
-  adding it as a 4th standing lane would duplicate the DeepSeek-harness developer role without a
-  distinct job, just more coordination overhead for no gain.
+Rules of engagement (no exceptions):
+- One model owns a task at a time, on its own branch. Never two models on the same branch.
+- Row 1–5 assignments are fixed by category, not by which agent is idle. If Codex is busy and a
+  backend-core task (row 1) is ready, it waits for Codex — it does NOT go to DeepSeek.
+- The agent that writes a change (Codex or DeepSeek harness, both GitNexus-enabled) runs its own
+  `impact()` before editing. Claude's row-9 `detect_changes()` is the final gate on top of that,
+  always, regardless of who wrote the change.
+- Only Claude Code on the real Anthropic account does visual verification (row 6). The DeepSeek
+  harness is a different account/session and is never substituted for this step.
+- Gemini CLI (row 11) is never given row 1–5 work, even if idle. It has no GitNexus and is not a
+  standing developer lane — its only job is row 11.
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
