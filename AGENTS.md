@@ -1,7 +1,8 @@
 # security-posture-platform — shared agent context
 
-> **Single source of truth for every AI agent** (Claude Code, Codex CLI, DeepSeek-via-Claude-Code-harness).
-> Each tool points here. Edit shared rules **in this file**, not in tool-specific ones.
+> **Single source of truth for every AI agent** (Claude Code, Codex CLI, DeepSeek-via-Claude-Code-harness,
+> Gemini CLI as occasional specialist). Each tool points here. Edit shared rules **in this file**,
+> not in tool-specific ones.
 
 ## What this is
 A **security posture platform** — a security product being built toward something sellable.
