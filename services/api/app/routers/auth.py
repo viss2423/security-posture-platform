@@ -91,9 +91,15 @@ def _reject_default_password_in_prod():
     )
 
 
-def create_access_token(sub: str, role: str = "admin") -> str:
+def create_access_token(sub: str, role: str = "admin", ws: str | None = None) -> str:
     expire = datetime.now(UTC) + timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode = {"sub": sub, "role": role, "exp": expire}
+    # Workspace claim: when present it pins the request's tenant (see the tenant
+    # derivation in main.py's RequestLogMiddleware) so a self-serve workspace user
+    # cannot escape their tenant via an x-tenant-id header. Omitted for operator/
+    # admin tokens, which keeps those tokens byte-for-byte identical to before.
+    if ws:
+        to_encode["ws"] = ws
     raw = jwt.encode(to_encode, settings.API_SECRET_KEY, algorithm=ALGORITHM)
     return raw if isinstance(raw, str) else raw.decode("utf-8")
 
@@ -160,8 +166,9 @@ def _issue_token_pair(
     username: str,
     role: str,
     request: Request | None = None,
+    ws: str | None = None,
 ) -> "Token":
-    access_token = create_access_token(username, role=role)
+    access_token = create_access_token(username, role=role, ws=ws)
     refresh_token = _create_refresh_token_raw()
     _store_refresh_token(
         db,
@@ -272,6 +279,30 @@ def get_role_for_username(db: Session, username: str) -> str:
         return "admin"
 
 
+def _workspace_for_username(db: Session, username: str) -> str | None:
+    """Return the user's workspace tenant id, or None for operator/admin (default tenant).
+
+    Used to re-stamp the `ws` claim on login/refresh so a self-serve workspace user stays
+    pinned to their own tenant across token rotations instead of silently falling back to
+    the shared default tenant.
+    """
+    try:
+        row = (
+            db.execute(
+                text("SELECT workspace_id FROM users WHERE username = :u"),
+                {"u": username},
+            )
+            .mappings()
+            .first()
+        )
+    except Exception:
+        return None
+    if not row:
+        return None
+    ws = str(row.get("workspace_id") or "").strip()
+    return ws or None
+
+
 class Token(BaseModel):
     access_token: str
     refresh_token: str | None = None
@@ -372,7 +403,13 @@ async def login(
             },
             request_id=req_id or None,
         )
-        token_pair = _issue_token_pair(db, username=form.username, role=role, request=request)
+        token_pair = _issue_token_pair(
+            db,
+            username=form.username,
+            role=role,
+            request=request,
+            ws=_workspace_for_username(db, form.username),
+        )
         db.commit()
         return token_pair
 
@@ -577,7 +614,9 @@ def refresh_token(
         reason=REFRESH_TOKEN_ROTATED_REASON,
         replaced_by_hash=new_token_hash,
     )
-    access_token = create_access_token(username, role=role)
+    access_token = create_access_token(
+        username, role=role, ws=_workspace_for_username(db, username)
+    )
     _log_refresh_attempt(db, success=True, request_id=req_id, username=username)
     db.commit()
     return Token(access_token=access_token, refresh_token=new_refresh_token)
@@ -1287,7 +1326,11 @@ async def oidc_callback(
         .mappings()
         .first()
     )
-    if not row and settings.OIDC_AUTO_PROVISION and username.lower() != settings.ADMIN_USERNAME.lower():
+    if (
+        not row
+        and settings.OIDC_AUTO_PROVISION
+        and username.lower() != settings.ADMIN_USERNAME.lower()
+    ):
         # First-time SSO sign-in: auto-create a viewer account (SSO-only, no password).
         # ON CONFLICT covers the case where the username exists but is disabled — we
         # must not resurrect or sign in a disabled account, so no row means reject below.

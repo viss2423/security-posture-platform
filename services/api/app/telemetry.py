@@ -969,8 +969,23 @@ def ingest_telemetry_events(
     }
 
 
+def _resolve_allowed_telemetry_path(path: str) -> Path:
+    """Reject any telemetry import path outside the configured lab-data directory.
+
+    job_params_json.file_path is caller-supplied by any admin/analyst creating a
+    telemetry_import job — without this check it's an arbitrary-file-read
+    primitive (e.g. reading .env/secrets) for a role that shouldn't have that
+    reach.
+    """
+    allowed_root = Path(settings.TELEMETRY_IMPORT_ALLOWED_DIR).resolve()
+    resolved = Path(path).resolve()
+    if resolved != allowed_root and allowed_root not in resolved.parents:
+        raise ValueError("telemetry_path_outside_allowed_dir")
+    return resolved
+
+
 def _read_events_from_file(path: str) -> list[dict[str, Any]]:
-    file_path = Path(path)
+    file_path = _resolve_allowed_telemetry_path(path)
     if not file_path.exists():
         raise ValueError("telemetry_file_not_found")
     if not file_path.is_file():
@@ -1007,7 +1022,7 @@ def _read_events_from_file(path: str) -> list[dict[str, Any]]:
 
 
 def _read_authlog_events_from_file(path: str) -> list[dict[str, Any]]:
-    file_path = Path(path)
+    file_path = _resolve_allowed_telemetry_path(path)
     if not file_path.exists():
         raise ValueError("telemetry_file_not_found")
     if not file_path.is_file():

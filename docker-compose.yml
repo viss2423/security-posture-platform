@@ -165,6 +165,11 @@ services:
       CORRELATOR_SERVICE_PASSWORD: ${CORRELATOR_SERVICE_PASSWORD:-correlator-local-strong}
       POSTGRES_DSN: postgresql+psycopg://${POSTGRES_RUNTIME_USER:-secplat_runtime}:${POSTGRES_RUNTIME_PASSWORD:-secplat_runtime}@postgres:5432/${POSTGRES_DB}
       MIGRATIONS_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      # Dev-only default Fernet key for self-serve connector credentials. Override with a
+      # secret-managed key in real environments; rotate by adding a new version and
+      # bumping CREDENTIAL_ENCRYPTION_ACTIVE_VERSION.
+      CREDENTIAL_ENCRYPTION_KEYS: '${CREDENTIAL_ENCRYPTION_KEYS:-{"1": "8SP5WD2FCNyKq6eE8Zt20Sxud9-K1uk3AkdVhII1iTc="}}'
+      CREDENTIAL_ENCRYPTION_ACTIVE_VERSION: ${CREDENTIAL_ENCRYPTION_ACTIVE_VERSION:-1}
       OPENSEARCH_URL: http://opensearch:9200
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       MAX_SCAN_DURATION_SECONDS: ${MAX_SCAN_DURATION_SECONDS}

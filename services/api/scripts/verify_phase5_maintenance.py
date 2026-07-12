@@ -6,6 +6,7 @@ import argparse
 import base64
 import json
 import os
+import shlex
 import socket
 import subprocess
 import sys
@@ -291,11 +292,10 @@ def _generate_backup_from_postgres_pod(
     database = str(parsed.database or "").strip()
     if not username or not database:
         raise RuntimeError("admin DSN must include username and database")
-    escaped_password = password.replace("'", "'\"'\"'")
     command = (
-        f"PGPASSWORD='{escaped_password}' "
-        f"pg_dump -h localhost -p 5432 -U '{username}' "
-        f"--dbname '{database}' --format=plain --no-owner --no-privileges"
+        f"PGPASSWORD={shlex.quote(password)} "
+        f"pg_dump -h localhost -p 5432 -U {shlex.quote(username)} "
+        f"--dbname {shlex.quote(database)} --format=plain --no-owner --no-privileges"
     )
     proc = _run(
         ["kubectl", "exec", "-n", namespace, pod_name, "--", "sh", "-lc", command],

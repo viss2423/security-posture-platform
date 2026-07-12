@@ -1186,6 +1186,68 @@ CREATE INDEX IF NOT EXISTS idx_platform_api_runtime_snapshots_instance
   ON platform_api_runtime_snapshots(service_instance_id, captured_at DESC);
 """
 
+WORKSPACE_CREDENTIALS_SQL = """
+ALTER TABLE users ADD COLUMN IF NOT EXISTS workspace_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_users_workspace_id ON users(workspace_id);
+CREATE TABLE IF NOT EXISTS user_credentials (
+  credential_id  SERIAL PRIMARY KEY,
+  org_id         TEXT NOT NULL DEFAULT COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default'),
+  owner_username TEXT NOT NULL,
+  provider       TEXT NOT NULL,
+  label          TEXT,
+  ciphertext     TEXT NOT NULL,
+  key_version    INTEGER NOT NULL DEFAULT 1,
+  scope_type     TEXT,
+  scope          TEXT,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_used_at   TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_user_credentials_org_id ON user_credentials(org_id);
+CREATE INDEX IF NOT EXISTS idx_user_credentials_owner ON user_credentials(owner_username);
+GRANT SELECT, INSERT, UPDATE, DELETE ON user_credentials TO secplat_runtime;
+GRANT USAGE, SELECT ON SEQUENCE user_credentials_credential_id_seq TO secplat_runtime;
+ALTER TABLE user_credentials ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_credentials FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS secplat_tenant_user_credentials ON user_credentials;
+CREATE POLICY secplat_tenant_user_credentials ON user_credentials
+USING (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'))
+WITH CHECK (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'));
+"""
+
+# The job runner must discover a job's tenant even when it runs on a different tenant
+# (the worker executes jobs as scanner-service on 'default', and scan_jobs is RLS-scoped,
+# so a ws_* job would otherwise be invisible). This SECURITY DEFINER function returns only
+# the org_id label, executing with the (superuser) owner's rights to bypass RLS for that
+# one lookup. EXECUTE is granted to secplat_runtime only. Executed as whole statements —
+# NOT through the split-on-';' path — but the body is single-quoted and semicolon-free.
+# Tenant-composite unique keys. Migration 026 added org_id + RLS but left the asset_key /
+# finding_key unique constraints GLOBAL, so two tenants could not hold the same key even
+# though RLS hides their rows from each other (e.g. two workspaces both scanning their own
+# 'github:self' account collided on assets_asset_key_key). Rescope uniqueness to
+# (org_id, key). Backward compatible: within a single tenant (org_id, key) == (key).
+# Runs after tenant_enforcement so org_id exists on both tables.
+COMPOSITE_TENANT_KEYS_SQL = """
+ALTER TABLE assets DROP CONSTRAINT IF EXISTS assets_asset_key_key;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_assets_org_asset_key ON assets(org_id, asset_key);
+DROP INDEX IF EXISTS idx_findings_finding_key;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_findings_org_finding_key
+  ON findings(org_id, finding_key) WHERE finding_key IS NOT NULL;
+"""
+
+SECPLAT_JOB_ORG_ID_FN_SQL = [
+    """
+    CREATE OR REPLACE FUNCTION secplat_job_org_id(p_job_id BIGINT)
+    RETURNS TEXT
+    LANGUAGE sql
+    STABLE
+    SECURITY DEFINER
+    SET search_path = public
+    AS 'SELECT org_id FROM scan_jobs WHERE job_id = p_job_id'
+    """,
+    "REVOKE ALL ON FUNCTION secplat_job_org_id(BIGINT) FROM PUBLIC",
+    "GRANT EXECUTE ON FUNCTION secplat_job_org_id(BIGINT) TO secplat_runtime",
+]
+
 TENANT_ENFORCEMENT_SQL = """
 ALTER TABLE assets ADD COLUMN IF NOT EXISTS org_id TEXT;
 UPDATE assets SET org_id = COALESCE(NULLIF(BTRIM(org_id), ''), COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default'));
@@ -1478,7 +1540,10 @@ def _run_startup_migrations_once() -> None:
                 stmt = stmt.strip()
                 if stmt:
                     conn.execute(text(stmt))
-            conn.execute(text(FINDINGS_UNIQUE_INDEX))
+            # The finding_key unique index is created as a TENANT-COMPOSITE index
+            # (org_id, finding_key) in COMPOSITE_TENANT_KEYS_SQL below, after org_id exists.
+            # A global unique index here would (a) collide once two workspaces share a
+            # finding_key and (b) break cross-tenant isolation.
             logger.info("startup_migration: ensured findings extended columns exist")
         except Exception as e:
             logger.warning("startup_migration: findings extend failed: %s", e)
@@ -1728,6 +1793,8 @@ def _run_startup_migrations_once() -> None:
             ("platform_sli_samples", PLATFORM_SLI_SAMPLES_SQL),
             ("platform_api_runtime_snapshots", PLATFORM_API_RUNTIME_SNAPSHOTS_SQL),
             ("tenant_enforcement", TENANT_ENFORCEMENT_SQL),
+            ("workspace_credentials", WORKSPACE_CREDENTIALS_SQL),
+            ("composite_tenant_keys", COMPOSITE_TENANT_KEYS_SQL),
         ]:
             try:
                 for stmt in sql.strip().split(";"):
@@ -1738,6 +1805,14 @@ def _run_startup_migrations_once() -> None:
             except Exception as e:
                 logger.warning("startup_migration: %s failed: %s", name, e)
                 raise
+        # Whole-statement execution (function body has no ';' but must not be split).
+        try:
+            for stmt in SECPLAT_JOB_ORG_ID_FN_SQL:
+                conn.execute(text(stmt))
+            logger.info("startup_migration: ensured secplat_job_org_id() function")
+        except Exception as e:
+            logger.warning("startup_migration: secplat_job_org_id failed: %s", e)
+            raise
         # Run risk scoring backfill last because the context query now joins
         # telemetry and anomaly tables created above.
         try:

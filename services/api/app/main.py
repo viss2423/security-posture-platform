@@ -46,6 +46,7 @@ from .routers import (
     suppression,
     telemetry,
     threat_intel,
+    workspace,
 )
 from .routers import audit as audit_router
 from .routers.auth import decode_token_payload, require_role
@@ -235,16 +236,24 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
         header_tenant = (request.headers.get("x-tenant-id") or "").strip()
         mode = str(getattr(settings, "TENANCY_MODE", "single") or "single").strip().lower()
         default_tenant = str(getattr(settings, "DEFAULT_TENANT_ID", "default") or "default").strip()
-        tenant_id = header_tenant or default_tenant
-        if (
-            mode == "multi"
-            and getattr(settings, "REQUIRE_TENANT_HEADER", False)
-            and not header_tenant
-        ):
-            return JSONResponse(
-                status_code=400,
-                content={"detail": "x-tenant-id header required in multi-tenant mode"},
-            )
+        # A signed `ws` (workspace) claim pins the tenant for self-serve workspace users
+        # and is authoritative over any client-supplied x-tenant-id header — the header
+        # must never let a workspace user read another tenant's rows. Operator/admin
+        # tokens carry no `ws` claim and keep the existing header-or-default behavior.
+        workspace_tenant = _workspace_tenant_from_request(request)
+        if workspace_tenant:
+            tenant_id = workspace_tenant
+        else:
+            tenant_id = header_tenant or default_tenant
+            if (
+                mode == "multi"
+                and getattr(settings, "REQUIRE_TENANT_HEADER", False)
+                and not header_tenant
+            ):
+                return JSONResponse(
+                    status_code=400,
+                    content={"detail": "x-tenant-id header required in multi-tenant mode"},
+                )
         token = request_id_ctx.set(request_id)
         tenant_token = tenant_id_ctx.set(tenant_id)
         started = time.monotonic()
@@ -375,6 +384,27 @@ def _viewer_role_from_request(request: Request) -> bool:
     return bool(payload and (payload.get("role") or "admin").lower() == "viewer")
 
 
+def _workspace_tenant_from_request(request: Request) -> str | None:
+    """Return the signed `ws` (workspace tenant) claim from the bearer token, if any.
+
+    decode_token_payload verifies the signature and expiry, so a client cannot forge
+    or tamper with this value. Returns None for operator/admin tokens (no `ws` claim),
+    leaving their tenant derivation unchanged.
+    """
+    auth_header = request.headers.get("authorization") or ""
+    scheme, _, token = auth_header.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        return None
+    payload = decode_token_payload(token.strip())
+    if not payload:
+        return None
+    ws = payload.get("ws")
+    if not isinstance(ws, str):
+        return None
+    ws = ws.strip()
+    return ws or None
+
+
 class ViewerReadOnlyFallbackMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
@@ -409,6 +439,9 @@ app.include_router(security.router)
 app.include_router(auth.router)
 app.include_router(assets.router)
 app.include_router(posture.router)
+# Open tier: self-serve users (viewers) must reach /workspace/connect to activate their
+# workspace; the endpoint authenticates the caller and scopes writes to their own tenant.
+app.include_router(workspace.router)
 app.include_router(retention.router)
 app.include_router(privacy.router)
 app.include_router(audit_router.router, dependencies=_operator_only)

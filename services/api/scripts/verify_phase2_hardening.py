@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -28,6 +29,15 @@ from app.settings import settings
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
+IDENTIFIER_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+
+def _validate_identifier(value: str, *, label: str) -> str:
+    candidate = str(value or "").strip()
+    if not IDENTIFIER_RE.match(candidate):
+        raise ValueError(f"invalid {label}: {value!r}")
+    return candidate
+
 
 def _run_json(cmd: list[str], *, env: dict[str, str] | None = None) -> dict[str, Any]:
     proc = subprocess.run(cmd, capture_output=True, text=True, check=False, env=env)
@@ -44,6 +54,7 @@ def _maintenance_dsn(admin_dsn: str) -> str:
 
 
 def _drop_and_create_database(*, admin_dsn: str, database_name: str) -> None:
+    database_name = _validate_identifier(database_name, label="restore-database")
     engine = create_engine(
         _maintenance_dsn(admin_dsn), isolation_level="AUTOCOMMIT", pool_pre_ping=True
     )

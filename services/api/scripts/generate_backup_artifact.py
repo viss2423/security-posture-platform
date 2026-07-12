@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import secrets
+import shlex
 import shutil
 import subprocess
 import sys
@@ -78,15 +79,15 @@ def _generate_docker(*, dsn: str, docker_container: str, out_path: Path) -> dict
         host = "localhost"
         port = "5432"
     container_tmp = f"/tmp/secplat_backup_{secrets.token_hex(8)}.sql"
-    password = parsed["password"].replace("'", "'\"'\"'")
+    password = shlex.quote(parsed["password"])
     command = (
-        f"PGPASSWORD='{password}' "
+        f"PGPASSWORD={password} "
         "pg_dump "
-        f"-h '{host}' -p {port} "
-        f"-U '{parsed['username']}' "
-        f"--dbname '{parsed['database']}' "
+        f"-h {shlex.quote(host)} -p {shlex.quote(port)} "
+        f"-U {shlex.quote(parsed['username'])} "
+        f"--dbname {shlex.quote(parsed['database'])} "
         "--format=plain --no-owner --no-privileges "
-        f"--file '{container_tmp}'"
+        f"--file {shlex.quote(container_tmp)}"
     )
     proc = _run(["docker", "exec", docker_container, "sh", "-lc", command])
     if proc.returncode != 0:

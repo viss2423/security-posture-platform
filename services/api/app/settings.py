@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     OPENSEARCH_EVENTS_INDEX: str = "secplat-events"
     OPENSEARCH_STATUS_INDEX: str = "secplat-asset-status"
     REDIS_URL: str | None = None  # Phase 1: when set, API publishes scan jobs to Redis stream
+    # Credential encryption (self-serve workspace connectors). JSON object mapping an
+    # integer key version to a urlsafe-base64 Fernet key, e.g. {"1": "<fernet-key>"}.
+    # Empty = credential storage fails closed (see credential_crypto). Never commit a
+    # real key; the compose default is a dev-only key overridden in real environments.
+    CREDENTIAL_ENCRYPTION_KEYS: str = ""
+    CREDENTIAL_ENCRYPTION_ACTIVE_VERSION: int = 1
     MAX_SCAN_DURATION_SECONDS: int = 900
     MAX_REQUESTS_PER_SECOND: int = 2
     BLOCK_PRIVATE_IPS: bool = True
@@ -196,6 +202,7 @@ class Settings(BaseSettings):
     TELEMETRY_AUDITD_LOG_PATH: str = "/workspace/lab-data/auditd/audit.log"
     TELEMETRY_AUTH_LOG_PATH: str = "/workspace/lab-data/auth/auth.log"
     TELEMETRY_COWRIE_LOG_PATH: str = "/workspace/lab-data/cowrie/cowrie.json"
+    TELEMETRY_IMPORT_ALLOWED_DIR: str = "/workspace/lab-data"
     CYBERLAB_AUTO_SEED_DEMO: bool = False
     CYBERLAB_AUTO_SEED_FORCE: bool = False
     CYBERLAB_AUTO_SEED_ONCE_VERSION: str = "v1"

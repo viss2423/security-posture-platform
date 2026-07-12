@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import secrets
+import shlex
 import shutil
 import subprocess
 import sys
@@ -176,7 +177,7 @@ def _restore_sql_backup_via_psql(
         host = "localhost"
         port = "5432"
     username = str(parsed.username or "").strip()
-    password = str(parsed.password or "").strip().replace("'", "'\"'\"'")
+    password = str(parsed.password or "").strip()
     database = str(parsed.database or "").strip()
     if not username or not database:
         raise ValueError(
@@ -201,11 +202,12 @@ def _restore_sql_backup_via_psql(
             },
         )
     command = (
-        f"PGPASSWORD='{password}' "
-        f"{restore_sql_cmd} "
-        f"-h '{host}' -p {port} -U '{username}' -d '{database}' "
+        f"PGPASSWORD={shlex.quote(password)} "
+        f"{shlex.quote(restore_sql_cmd)} "
+        f"-h {shlex.quote(host)} -p {shlex.quote(port)} -U {shlex.quote(username)} "
+        f"-d {shlex.quote(database)} "
         "-v ON_ERROR_STOP=1 "
-        f"-f '{container_tmp}'"
+        f"-f {shlex.quote(container_tmp)}"
     )
     proc = subprocess.run(
         ["docker", "exec", docker_psql_container, "sh", "-lc", command],

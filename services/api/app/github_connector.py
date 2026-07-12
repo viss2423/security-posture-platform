@@ -20,13 +20,54 @@ from datetime import UTC, datetime
 import httpx
 from sqlalchemy import text
 
+from .credential_crypto import CredentialEncryptionUnavailableError, decrypt_secret
 from .db import SessionLocal
 from .queue import publish_scan_job
+from .request_context import tenant_id_ctx
 from .risk_scoring import recompute_finding_risk
 from .routers.findings import FindingUpsertBody, upsert_finding_record
 from .settings import settings
 
 logger = logging.getLogger("secplat.github_connector")
+
+
+def _resolve_job_org_id(db, job_id: int) -> str | None:
+    """Discover a job's tenant via the SECURITY DEFINER helper (bypasses scan_jobs RLS).
+
+    The worker runs jobs on the 'default' tenant, so a workspace (ws_*) job would be
+    invisible to a normal RLS-scoped read. This returns the org_id label so the runner can
+    bind the correct tenant before touching any tenant-scoped table.
+    """
+    try:
+        row = db.execute(text("SELECT secplat_job_org_id(:jid) AS org_id"), {"jid": job_id}).first()
+    except Exception:  # noqa: BLE001 - fall back to the ambient tenant on any lookup failure
+        return None
+    return row[0].strip() if row and row[0] else None
+
+
+def _load_github_credential_token(db, credential_id: int) -> str:
+    """Load and decrypt a stored GitHub credential. RLS scopes this to the bound tenant,
+    so a job can only ever read its own workspace's credential."""
+    row = (
+        db.execute(
+            text(
+                "SELECT ciphertext, key_version, provider "
+                "FROM user_credentials WHERE credential_id = :cid"
+            ),
+            {"cid": int(credential_id)},
+        )
+        .mappings()
+        .first()
+    )
+    if not row:
+        raise ValueError("github_credential_not_found")
+    if str(row["provider"]) != "github":
+        raise ValueError("github_credential_provider_mismatch")
+    try:
+        return decrypt_secret(str(row["ciphertext"]), int(row["key_version"]))
+    except CredentialEncryptionUnavailableError as exc:
+        raise ValueError(f"github_credential_decrypt_failed:{exc}") from exc
+
 
 SOURCE = "github_posture"
 _DEFAULT_API_URL = "https://api.github.com"
@@ -318,6 +359,13 @@ def _scan_github(
 # --------------------------------------------------------------------------- #
 def run_github_posture_job(job_id: int) -> None:
     db = SessionLocal()
+    # Bind the job's tenant BEFORE any tenant-scoped read/write. Workspace jobs live under
+    # a ws_* tenant that is invisible to the default-tenant worker without this; binding it
+    # also guarantees findings and the credential lookup are scoped to the owning workspace.
+    tenant_token = None
+    org_id = _resolve_job_org_id(db, job_id)
+    if org_id:
+        tenant_token = tenant_id_ctx.set(org_id)
     try:
         row = (
             db.execute(
@@ -343,7 +391,17 @@ def run_github_posture_job(job_id: int) -> None:
 
         _set_job_running(db, job_id)
 
-        token = str(params.get("token") or getattr(settings, "GITHUB_TOKEN", None) or "").strip()
+        # Credential resolution: a self-serve workspace scan references an encrypted
+        # credential by id (never a raw token in job params); the RLS-scoped lookup can
+        # only return this workspace's own credential. Operator scans keep the existing
+        # per-job token / server-side GITHUB_TOKEN path.
+        credential_id = params.get("credential_id")
+        if credential_id:
+            token = _load_github_credential_token(db, credential_id)
+        else:
+            token = str(
+                params.get("token") or getattr(settings, "GITHUB_TOKEN", None) or ""
+            ).strip()
         scope_type = str(params.get("scope_type") or "user").strip().lower()
         scope = str(params.get("scope") or "").strip()
         max_repos = int(params.get("max_repos") or getattr(settings, "GITHUB_MAX_REPOS", 100))
@@ -409,6 +467,8 @@ def run_github_posture_job(job_id: int) -> None:
         )
     finally:
         db.close()
+        if tenant_token is not None:
+            tenant_id_ctx.reset(tenant_token)
 
 
 def launch_github_posture_job(job_id: int) -> None:
