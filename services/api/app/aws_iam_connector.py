@@ -1,8 +1,14 @@
 """AWS IAM posture connector.
 
-Read-only checks against AWS IAM that map to common SOC 2 / security-baseline
-controls. Credentials are loaded only from server-side settings/env:
-AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and AWS_REGION.
+Read-only checks against AWS IAM that map to common SOC 2 / security-baseline controls.
+
+Two credential paths:
+  * Self-serve **workspace** scans reference an encrypted credential by id in the job params.
+    The runner binds the job's tenant, RLS-scoped-loads + decrypts that credential, and injects
+    it into boto3 — so a workspace only ever scans its *own* AWS account and can never fall back
+    to the operator's server-side keys.
+  * **Operator** scans (no ``credential_id``) keep the server-side settings path:
+    AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION.
 """
 
 from __future__ import annotations
@@ -16,8 +22,11 @@ from urllib.parse import unquote
 
 from sqlalchemy import text
 
+from .aws_credentials import AwsCredentialError, parse_aws_credential
+from .credential_crypto import CredentialEncryptionUnavailableError, decrypt_secret
 from .db import SessionLocal
 from .queue import publish_scan_job
+from .request_context import tenant_id_ctx
 from .risk_scoring import recompute_finding_risk
 from .routers.findings import FindingUpsertBody, upsert_finding_record
 from .settings import settings
@@ -27,6 +36,48 @@ logger = logging.getLogger("secplat.aws_iam_connector")
 SOURCE = "aws_iam_posture"
 _STALE_DAYS = 90
 _ADMIN_POLICY_ARN = "arn:aws:iam::aws:policy/AdministratorAccess"
+
+
+def _resolve_job_org_id(db, job_id: int) -> str | None:
+    """Discover a job's tenant via the SECURITY DEFINER helper (bypasses scan_jobs RLS).
+
+    The worker runs jobs on the 'default' tenant, so a workspace (ws_*) job would be
+    invisible to a normal RLS-scoped read. This returns the org_id label so the runner can
+    bind the correct tenant before touching any tenant-scoped table.
+    """
+    try:
+        row = db.execute(text("SELECT secplat_job_org_id(:jid) AS org_id"), {"jid": job_id}).first()
+    except Exception:  # noqa: BLE001 - fall back to the ambient tenant on any lookup failure
+        return None
+    return row[0].strip() if row and row[0] else None
+
+
+def _load_aws_credential(db, credential_id: int) -> dict[str, str]:
+    """Load + decrypt a stored AWS credential. RLS scopes this to the bound tenant, so a job
+    can only ever read its own workspace's credential; the tenant MUST be bound first."""
+    row = (
+        db.execute(
+            text(
+                "SELECT ciphertext, key_version, provider "
+                "FROM user_credentials WHERE credential_id = :cid"
+            ),
+            {"cid": int(credential_id)},
+        )
+        .mappings()
+        .first()
+    )
+    if not row:
+        raise ValueError("aws_credential_not_found")
+    if str(row["provider"]) != "aws":
+        raise ValueError("aws_credential_provider_mismatch")
+    try:
+        plaintext = decrypt_secret(str(row["ciphertext"]), int(row["key_version"]))
+    except CredentialEncryptionUnavailableError as exc:
+        raise ValueError(f"aws_credential_decrypt_failed:{exc}") from exc
+    try:
+        return parse_aws_credential(plaintext)
+    except AwsCredentialError as exc:
+        raise ValueError(f"aws_credential_malformed:{exc}") from exc
 
 
 # --------------------------------------------------------------------------- #
@@ -159,8 +210,29 @@ def _finding_key(*parts: str) -> str:
 # --------------------------------------------------------------------------- #
 # AWS IAM client and read-only checks
 # --------------------------------------------------------------------------- #
-def _iam_client(region: str):
+def _iam_client(region: str, *, credential: dict[str, str] | None = None):
+    """Build a read-only IAM client.
+
+    Workspace scans pass their own decrypted ``credential`` (per-tenant isolation); operator
+    scans (``credential is None``) fall back to the server-side AWS_* settings. When a
+    credential is supplied we inject *only* it — never the server-side keys — so a workspace
+    scan can never silently run against the operator's AWS account.
+    """
     import boto3
+
+    if credential is not None:
+        access_key = str(credential.get("access_key_id") or "").strip()
+        secret_key = str(credential.get("secret_access_key") or "").strip()
+        session_token = str(credential.get("session_token") or "").strip() or None
+        if not access_key or not secret_key:
+            raise ValueError("aws_credentials_missing")
+        return boto3.client(
+            "iam",
+            region_name=region,
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
+            aws_session_token=session_token,
+        )
 
     access_key = str(getattr(settings, "AWS_ACCESS_KEY_ID", None) or "").strip()
     secret_key = str(getattr(settings, "AWS_SECRET_ACCESS_KEY", None) or "").strip()
@@ -423,6 +495,14 @@ def _scan_aws_iam(client, *, region: str) -> tuple[list[dict], list[str]]:
 # --------------------------------------------------------------------------- #
 def run_aws_iam_posture_job(job_id: int) -> None:
     db = SessionLocal()
+    # Bind the job's tenant BEFORE any tenant-scoped read/write, mirroring the GitHub
+    # connector: a workspace (ws_*) job is invisible to the default-tenant worker without
+    # this, and binding it scopes both the credential lookup and every finding write to the
+    # owning workspace.
+    tenant_token = None
+    org_id = _resolve_job_org_id(db, job_id)
+    if org_id:
+        tenant_token = tenant_id_ctx.set(org_id)
     try:
         row = (
             db.execute(
@@ -453,6 +533,12 @@ def run_aws_iam_posture_job(job_id: int) -> None:
             raise ValueError("aws_region_missing")
         asset_key = str(params.get("asset_key") or f"aws:iam:{region}").strip()
 
+        # A self-serve workspace scan references an encrypted credential by id (never raw keys
+        # in job params); the RLS-scoped lookup can only return this workspace's own
+        # credential. Operator scans keep the server-side AWS_* settings path.
+        credential_id = params.get("credential_id")
+        credential = _load_aws_credential(db, credential_id) if credential_id else None
+
         _append_job_log(db, job_id, f"AWS IAM posture scan started (region={region})")
         _ensure_aws_asset(
             db,
@@ -461,7 +547,7 @@ def run_aws_iam_posture_job(job_id: int) -> None:
             region=region,
         )
 
-        findings, logs = _scan_aws_iam(_iam_client(region), region=region)
+        findings, logs = _scan_aws_iam(_iam_client(region, credential=credential), region=region)
         for line in logs:
             _append_job_log(db, job_id, line)
 
@@ -500,6 +586,8 @@ def run_aws_iam_posture_job(job_id: int) -> None:
         )
     finally:
         db.close()
+        if tenant_token is not None:
+            tenant_id_ctx.reset(tenant_token)
 
 
 def launch_aws_iam_posture_job(job_id: int) -> None:

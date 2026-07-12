@@ -14,6 +14,7 @@ credential-at-rest + workspace-activation half.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -22,6 +23,8 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.audit import log_audit
+from app.aws_credentials import AwsCredentialError, canonicalize_aws_credential
+from app.aws_iam_connector import launch_aws_iam_posture_job
 from app.credential_crypto import CredentialEncryptionUnavailableError, encrypt_secret
 from app.db import get_db
 from app.github_connector import launch_github_posture_job
@@ -68,6 +71,15 @@ async def connect_workspace(
     secret = (body.token or "").strip()
     if not secret:
         raise HTTPException(status_code=400, detail="token required")
+
+    # AWS credentials are a multi-field JSON blob ({access_key_id, secret_access_key,
+    # session_token?}); canonicalize + validate before we ever encrypt/persist so a
+    # malformed or partial key can't be stored. GitHub stays a single raw PAT.
+    if provider == "aws":
+        try:
+            secret = canonicalize_aws_credential(secret)
+        except AwsCredentialError as exc:
+            raise HTTPException(status_code=400, detail=f"invalid aws credentials: {exc}")
 
     key = f"workspace-connect:{_client_id(request)}"
     if not await check_rate_limit(key, settings.RATE_LIMIT_LOGIN_PER_MINUTE, 60.0):
@@ -179,12 +191,8 @@ async def start_workspace_scan(
     db: Session = Depends(get_db),
 ) -> dict:
     provider = (body.provider or "").strip().lower()
-    if provider == "aws":
-        # AWS needs per-workspace multi-field creds injected into boto3; until that lands,
-        # refuse rather than fall back to the operator's server-side AWS credentials.
-        raise HTTPException(status_code=501, detail="AWS workspace scans are not available yet")
-    if provider != "github":
-        raise HTTPException(status_code=400, detail="provider must be 'github'")
+    if provider not in _SUPPORTED_PROVIDERS:
+        raise HTTPException(status_code=400, detail="provider must be 'github' or 'aws'")
 
     # The caller's tenant comes from their signed `ws` claim. A user who has not connected
     # a workspace is still on the shared default tenant and must connect first.
@@ -197,35 +205,56 @@ async def start_workspace_scan(
         raise HTTPException(status_code=429, detail="Too many scans. Try again later.")
 
     # RLS scopes this read to the caller's workspace, so a workspace can only ever scan with
-    # its own credential — referencing another workspace's credential_id returns 404.
+    # its own credential — referencing another workspace's credential_id (or one belonging to
+    # a different provider) returns 404. The credential is only ever loaded/decrypted later,
+    # in the tenant-bound worker; here we just confirm ownership and enqueue.
     cred = (
         db.execute(
             text(
                 "SELECT credential_id FROM user_credentials "
-                "WHERE credential_id = :cid AND provider = 'github'"
+                "WHERE credential_id = :cid AND provider = :provider"
             ),
-            {"cid": int(body.credential_id)},
+            {"cid": int(body.credential_id), "provider": provider},
         )
         .mappings()
         .first()
     )
     if not cred:
-        raise HTTPException(status_code=404, detail="github credential not found in this workspace")
+        raise HTTPException(
+            status_code=404, detail=f"{provider} credential not found in this workspace"
+        )
 
-    scope_type = (body.scope_type or "user").strip().lower()
-    if scope_type not in {"user", "org"}:
-        raise HTTPException(status_code=400, detail="scope_type must be 'user' or 'org'")
-    scope = (body.scope or "").strip()
-    if scope_type == "org" and not scope:
-        raise HTTPException(status_code=400, detail="scope (org name) is required for org scans")
-    max_repos = max(1, min(int(body.max_repos or settings.GITHUB_MAX_REPOS), 500))
+    if provider == "github":
+        scope_type = (body.scope_type or "user").strip().lower()
+        if scope_type not in {"user", "org"}:
+            raise HTTPException(status_code=400, detail="scope_type must be 'user' or 'org'")
+        scope = (body.scope or "").strip()
+        if scope_type == "org" and not scope:
+            raise HTTPException(
+                status_code=400, detail="scope (org name) is required for org scans"
+            )
+        max_repos = max(1, min(int(body.max_repos or settings.GITHUB_MAX_REPOS), 500))
+        job_type = "github_posture"
+        job_params = {
+            "credential_id": int(body.credential_id),
+            "scope_type": scope_type,
+            "scope": scope,
+            "max_repos": max_repos,
+        }
+    else:  # aws
+        # AWS IAM is global, but boto3 needs a region for endpoint resolution. The region
+        # travels in `scope`; validate its shape so it can't smuggle anything into the SDK.
+        region = (body.scope or "").strip().lower() or str(
+            getattr(settings, "AWS_REGION", None) or "us-east-1"
+        ).strip().lower()
+        if not re.fullmatch(r"[a-z0-9-]{1,32}", region):
+            raise HTTPException(status_code=400, detail="invalid aws region")
+        job_type = "aws_iam_posture"
+        job_params = {
+            "credential_id": int(body.credential_id),
+            "region": region,
+        }
 
-    job_params = {
-        "credential_id": int(body.credential_id),
-        "scope_type": scope_type,
-        "scope": scope,
-        "max_repos": max_repos,
-    }
     # org_id defaults from the tenant GUC (the caller's workspace); the job — and every
     # finding it later writes — is therefore RLS-scoped to this workspace.
     row = (
@@ -233,11 +262,16 @@ async def start_workspace_scan(
             text(
                 """
                 INSERT INTO scan_jobs (org_id, job_type, requested_by, status, job_params_json)
-                VALUES (:org_id, 'github_posture', :rb, 'queued', CAST(:params AS jsonb))
+                VALUES (:org_id, :job_type, :rb, 'queued', CAST(:params AS jsonb))
                 RETURNING job_id
                 """
             ),
-            {"org_id": tenant, "rb": user, "params": json.dumps(job_params)},
+            {
+                "org_id": tenant,
+                "job_type": job_type,
+                "rb": user,
+                "params": json.dumps(job_params),
+            },
         )
         .mappings()
         .first()
@@ -257,6 +291,9 @@ async def start_workspace_scan(
     # Enqueue for the worker. This runs while tenant_id_ctx is still the caller's workspace,
     # so launch's own DB reads see the job; the runner later re-discovers the tenant via
     # secplat_job_org_id when the worker executes it on the default tenant.
-    launch_github_posture_job(job_id)
+    if provider == "github":
+        launch_github_posture_job(job_id)
+    else:
+        launch_aws_iam_posture_job(job_id)
 
     return {"job_id": job_id, "status": "queued", "provider": provider}

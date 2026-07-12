@@ -615,7 +615,7 @@ export async function createJob(payload: {
   return apiFetch<JobItem>('/jobs', { method: 'POST', body: JSON.stringify(payload) });
 }
 
-export type WorkspaceProvider = 'github';
+export type WorkspaceProvider = 'github' | 'aws';
 export type WorkspaceScopeType = 'user' | 'org';
 
 export type ConnectWorkspaceRequest = {

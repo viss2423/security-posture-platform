@@ -10,6 +10,7 @@ import {
   connectWorkspace,
   setSessionTokens,
   startWorkspaceScan,
+  type WorkspaceProvider,
   type WorkspaceScopeType,
 } from '@/lib/api';
 import { friendlyApiMessage } from '@/lib/apiError';
@@ -19,53 +20,83 @@ const fieldClass = 'w-full rounded-lg border border-[var(--border)] bg-[var(--su
 export default function WorkspacePageClient() {
   const router = useRouter();
   const { user, refresh } = useAuth();
+  const [provider, setProvider] = useState<WorkspaceProvider>('github');
   const [token, setToken] = useState('');
   const [scopeType, setScopeType] = useState<WorkspaceScopeType>('user');
   const [scope, setScope] = useState('');
   const [maxRepos, setMaxRepos] = useState('50');
+  const [awsAccessKeyId, setAwsAccessKeyId] = useState('');
+  const [awsSecretAccessKey, setAwsSecretAccessKey] = useState('');
+  const [awsSessionToken, setAwsSessionToken] = useState('');
+  const [awsRegion, setAwsRegion] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!token.trim()) {
-      setError('GitHub token is required');
-      return;
-    }
-    if (scopeType === 'org' && !scope.trim()) {
-      setError('Organization name is required for org scans');
-      return;
-    }
-    const parsedMaxRepos = parseInt(maxRepos, 10);
-    if (Number.isNaN(parsedMaxRepos) || parsedMaxRepos < 1 || parsedMaxRepos > 500) {
-      setError('Max repositories must be between 1 and 500');
-      return;
+    let credentialToken = token.trim();
+    let credentialLabel = 'GitHub account';
+    let scanScope: string | undefined = scope.trim() || undefined;
+    let parsedMaxRepos: number | undefined;
+
+    if (provider === 'github') {
+      if (!credentialToken) {
+        setError('GitHub token is required');
+        return;
+      }
+      if (scopeType === 'org' && !scope.trim()) {
+        setError('Organization name is required for org scans');
+        return;
+      }
+      parsedMaxRepos = parseInt(maxRepos, 10);
+      if (Number.isNaN(parsedMaxRepos) || parsedMaxRepos < 1 || parsedMaxRepos > 500) {
+        setError('Max repositories must be between 1 and 500');
+        return;
+      }
+      credentialLabel = scopeType === 'org' && scope.trim() ? `GitHub org: ${scope.trim()}` : 'GitHub account';
+    } else {
+      const accessKeyId = awsAccessKeyId.trim();
+      const secretAccessKey = awsSecretAccessKey.trim();
+      const sessionToken = awsSessionToken.trim();
+      if (!accessKeyId) {
+        setError('AWS access key ID is required');
+        return;
+      }
+      if (!secretAccessKey) {
+        setError('AWS secret access key is required');
+        return;
+      }
+      credentialToken = JSON.stringify({
+        access_key_id: accessKeyId,
+        secret_access_key: secretAccessKey,
+        ...(sessionToken ? { session_token: sessionToken } : {}),
+      });
+      credentialLabel = 'AWS account';
+      scanScope = awsRegion.trim() || undefined;
     }
 
     setSubmitting(true);
     setError(null);
-    setMessage('Connecting GitHub workspace...');
+    setMessage(`Connecting ${provider === 'github' ? 'GitHub' : 'AWS'} workspace...`);
     try {
       const connected = await connectWorkspace({
-        provider: 'github',
-        token: token.trim(),
-        scope_type: scopeType,
-        scope: scope.trim() || undefined,
-        label: scopeType === 'org' && scope.trim() ? `GitHub org: ${scope.trim()}` : 'GitHub account',
+        provider,
+        token: credentialToken,
+        ...(provider === 'github' ? { scope_type: scopeType, scope: scanScope } : {}),
+        label: credentialLabel,
       });
       await setSessionTokens({
         access_token: connected.access_token,
         refresh_token: connected.refresh_token,
       });
       await refresh();
-      setMessage('Workspace connected. Starting GitHub posture scan...');
+      setMessage(`Workspace connected. Starting ${provider === 'github' ? 'GitHub' : 'AWS'} posture scan...`);
       await startWorkspaceScan({
-        provider: 'github',
+        provider,
         credential_id: connected.credential_id,
-        scope_type: scopeType,
-        scope: scope.trim() || undefined,
-        max_repos: parsedMaxRepos,
+        ...(provider === 'github' ? { scope_type: scopeType, max_repos: parsedMaxRepos } : {}),
+        scope: scanScope,
       });
       router.push('/jobs');
     } catch (submitError) {
@@ -82,10 +113,10 @@ export default function WorkspacePageClient() {
         <div className="hero-grid">
           <div>
             <span className="stat-chip-strong">Self-serve workspace</span>
-            <h1 className="hero-title mt-3">Connect GitHub and start a live posture scan</h1>
+            <h1 className="hero-title mt-3">Connect a workspace and start a live posture scan</h1>
             <p className="hero-copy">
-              Paste a read-only GitHub token to create your isolated workspace, promote this
-              account for live analysis, and queue a scan against your own repositories.
+              Add GitHub or AWS credentials to create your isolated workspace, promote this
+              account for live analysis, and queue a posture scan against your own environment.
             </p>
             <div className="mt-4 flex flex-wrap gap-2">
               <Link href="/onboarding" className="btn-secondary text-sm">
@@ -103,11 +134,13 @@ export default function WorkspacePageClient() {
             </div>
             <div className="hero-stat">
               <p className="hero-stat-label">Provider</p>
-              <p className="hero-stat-value">GitHub</p>
+              <p className="hero-stat-value">{provider === 'github' ? 'GitHub' : 'AWS'}</p>
             </div>
             <div className="hero-stat">
-              <p className="hero-stat-label">Scope</p>
-              <p className="hero-stat-value capitalize">{scopeType}</p>
+              <p className="hero-stat-label">{provider === 'github' ? 'Scope' : 'Region'}</p>
+              <p className="hero-stat-value capitalize">
+                {provider === 'github' ? scopeType : awsRegion.trim() || 'us-east-1'}
+              </p>
             </div>
             <div className="hero-stat">
               <p className="hero-stat-label">Next stop</p>
@@ -132,83 +165,164 @@ export default function WorkspacePageClient() {
       <section className="section-panel animate-in">
         <div className="section-head">
           <div>
-            <h2 className="section-title">GitHub connection</h2>
+            <h2 className="section-title">{provider === 'github' ? 'GitHub connection' : 'AWS connection'}</h2>
             <p className="section-head-copy">
-              The token is sent once to the backend credential store. The browser session is then
+              The credentials are sent once to the backend credential store. The browser session is then
               replaced with workspace-scoped auth returned by the API.
             </p>
           </div>
-          <span className="stat-chip">Read-only PAT</span>
+          <span className="stat-chip">{provider === 'github' ? 'Read-only PAT' : 'Access key'}</span>
         </div>
 
         <form onSubmit={submit} className="grid gap-5">
-          <label className="space-y-1.5 text-sm text-[var(--muted)]">
-            <span className="block text-[11px] font-semibold uppercase tracking-widest">
-              GitHub token
-            </span>
-            <input
-              type="password"
-              value={token}
-              onChange={(event) => setToken(event.target.value)}
-              placeholder="github_pat_..."
-              autoComplete="off"
-              className={fieldClass}
-            />
-          </label>
+          <fieldset className="space-y-2 text-sm text-[var(--muted)]">
+            <legend className="block text-[11px] font-semibold uppercase tracking-widest">
+              Provider
+            </legend>
+            <div className="flex flex-wrap gap-2">
+              {(['github', 'aws'] as WorkspaceProvider[]).map((option) => (
+                <label
+                  key={option}
+                  className="flex min-h-10 items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] px-3 text-sm text-[var(--text)]"
+                >
+                  <input
+                    type="radio"
+                    name="provider"
+                    value={option}
+                    checked={provider === option}
+                    onChange={() => setProvider(option)}
+                  />
+                  <span>{option === 'github' ? 'GitHub' : 'AWS'}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
 
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)]/40 p-4">
+          {provider === 'github' ? (
+            <label className="space-y-1.5 text-sm text-[var(--muted)]">
+              <span className="block text-[11px] font-semibold uppercase tracking-widest">
+                GitHub token
+              </span>
+              <input
+                type="password"
+                value={token}
+                onChange={(event) => setToken(event.target.value)}
+                placeholder="github_pat_..."
+                autoComplete="off"
+                className={fieldClass}
+              />
+            </label>
+          ) : (
             <div className="grid gap-4 lg:grid-cols-3">
-              <fieldset className="space-y-2 text-sm text-[var(--muted)]">
-                <legend className="block text-[11px] font-semibold uppercase tracking-widest">
-                  Scan scope
-                </legend>
-                <div className="flex flex-wrap gap-2">
-                  {(['user', 'org'] as WorkspaceScopeType[]).map((option) => (
-                    <label
-                      key={option}
-                      className="flex min-h-10 items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] px-3 text-sm text-[var(--text)]"
-                    >
-                      <input
-                        type="radio"
-                        name="scope_type"
-                        value={option}
-                        checked={scopeType === option}
-                        onChange={() => setScopeType(option)}
-                      />
-                      <span>{option === 'user' ? 'User account' : 'Organization'}</span>
-                    </label>
-                  ))}
-                </div>
-              </fieldset>
               <label className="space-y-1.5 text-sm text-[var(--muted)]">
                 <span className="block text-[11px] font-semibold uppercase tracking-widest">
-                  {scopeType === 'org' ? 'Organization name' : 'Username (optional)'}
+                  Access key ID
                 </span>
                 <input
                   type="text"
-                  value={scope}
-                  onChange={(event) => setScope(event.target.value)}
-                  placeholder={scopeType === 'org' ? 'my-company' : 'Leave blank to scan the token owner'}
+                  value={awsAccessKeyId}
+                  onChange={(event) => setAwsAccessKeyId(event.target.value)}
+                  placeholder="AKIA..."
+                  autoComplete="off"
                   className={fieldClass}
                 />
               </label>
               <label className="space-y-1.5 text-sm text-[var(--muted)]">
                 <span className="block text-[11px] font-semibold uppercase tracking-widest">
-                  Max repositories
+                  Secret access key
                 </span>
                 <input
-                  type="number"
-                  min={1}
-                  max={500}
-                  value={maxRepos}
-                  onChange={(event) => setMaxRepos(event.target.value)}
+                  type="password"
+                  value={awsSecretAccessKey}
+                  onChange={(event) => setAwsSecretAccessKey(event.target.value)}
+                  autoComplete="off"
+                  className={fieldClass}
+                />
+              </label>
+              <label className="space-y-1.5 text-sm text-[var(--muted)]">
+                <span className="block text-[11px] font-semibold uppercase tracking-widest">
+                  Session token (optional)
+                </span>
+                <input
+                  type="password"
+                  value={awsSessionToken}
+                  onChange={(event) => setAwsSessionToken(event.target.value)}
+                  autoComplete="off"
                   className={fieldClass}
                 />
               </label>
             </div>
+          )}
+
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)]/40 p-4">
+            {provider === 'github' ? (
+              <div className="grid gap-4 lg:grid-cols-3">
+                <fieldset className="space-y-2 text-sm text-[var(--muted)]">
+                  <legend className="block text-[11px] font-semibold uppercase tracking-widest">
+                    Scan scope
+                  </legend>
+                  <div className="flex flex-wrap gap-2">
+                    {(['user', 'org'] as WorkspaceScopeType[]).map((option) => (
+                      <label
+                        key={option}
+                        className="flex min-h-10 items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] px-3 text-sm text-[var(--text)]"
+                      >
+                        <input
+                          type="radio"
+                          name="scope_type"
+                          value={option}
+                          checked={scopeType === option}
+                          onChange={() => setScopeType(option)}
+                        />
+                        <span>{option === 'user' ? 'User account' : 'Organization'}</span>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+                <label className="space-y-1.5 text-sm text-[var(--muted)]">
+                  <span className="block text-[11px] font-semibold uppercase tracking-widest">
+                    {scopeType === 'org' ? 'Organization name' : 'Username (optional)'}
+                  </span>
+                  <input
+                    type="text"
+                    value={scope}
+                    onChange={(event) => setScope(event.target.value)}
+                    placeholder={scopeType === 'org' ? 'my-company' : 'Leave blank to scan the token owner'}
+                    className={fieldClass}
+                  />
+                </label>
+                <label className="space-y-1.5 text-sm text-[var(--muted)]">
+                  <span className="block text-[11px] font-semibold uppercase tracking-widest">
+                    Max repositories
+                  </span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={500}
+                    value={maxRepos}
+                    onChange={(event) => setMaxRepos(event.target.value)}
+                    className={fieldClass}
+                  />
+                </label>
+              </div>
+            ) : (
+              <label className="block max-w-md space-y-1.5 text-sm text-[var(--muted)]">
+                <span className="block text-[11px] font-semibold uppercase tracking-widest">
+                  Region (optional)
+                </span>
+                <input
+                  type="text"
+                  value={awsRegion}
+                  onChange={(event) => setAwsRegion(event.target.value)}
+                  placeholder="us-east-1"
+                  className={fieldClass}
+                />
+              </label>
+            )}
             <p className="mt-4 text-xs text-[var(--text-subtle)]">
-              Checks branch protection, 2FA enforcement, Dependabot alerts, secret scanning, and
-              public repositories, then maps results into findings and compliance evidence.
+              {provider === 'github'
+                ? 'Checks branch protection, 2FA enforcement, Dependabot alerts, secret scanning, and public repositories, then maps results into findings and compliance evidence.'
+                : 'Checks AWS IAM posture for the selected region, then maps results into findings and compliance evidence.'}
             </p>
           </div>
 
