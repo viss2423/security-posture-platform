@@ -538,6 +538,12 @@ function NavBar() {
         </a>
         <div className="hidden items-center gap-6 md:flex">
           <a
+            href="#audiences"
+            className="text-xs font-medium text-[var(--text-muted)] transition hover:text-[var(--text)]"
+          >
+            Use cases
+          </a>
+          <a
             href="#terminal-demo"
             className="text-xs font-medium text-[var(--text-muted)] transition hover:text-[var(--text)]"
           >
@@ -548,12 +554,6 @@ function NavBar() {
             className="text-xs font-medium text-[var(--text-muted)] transition hover:text-[var(--text)]"
           >
             How it works
-          </a>
-          <a
-            href="#audiences"
-            className="text-xs font-medium text-[var(--text-muted)] transition hover:text-[var(--text)]"
-          >
-            Use cases
           </a>
           <a
             href="#capabilities"
@@ -599,9 +599,9 @@ function NavBar() {
         >
           <div className="mx-auto grid max-w-6xl grid-cols-2 gap-2 px-4 py-3">
             {[
+              { label: 'Use cases', href: '#audiences' },
               { label: 'Demo', href: '#terminal-demo' },
               { label: 'How it works', href: '#how-it-works' },
-              { label: 'Use cases', href: '#audiences' },
               { label: 'Capabilities', href: '#capabilities' },
               { label: 'Contact', href: '#contact' },
             ].map((item) => (
@@ -735,8 +735,8 @@ function Hero() {
           transition={{ duration: 0.5, delay: 0.2 }}
           className="mx-auto mt-5 max-w-xl text-base leading-relaxed text-[var(--text-muted)] sm:text-lg"
         >
-          SecPlat brings security posture, threat signals, risk scoring, incident
-          response, automation, and SOC 2 evidence into one open-source workspace.
+          See what is exposed, prove what is protected, and get evidence auditors accept
+          without hiring a security team.
         </motion.p>
 
         <motion.div
@@ -830,7 +830,7 @@ function Hero() {
   );
 }
 
-function PipelineVisual() {
+function PipelineVisual({ embedded = false }: { embedded?: boolean }) {
   const [activeStep, setActiveStep] = useState(0);
   const [paused, setPaused] = useState(false);
 
@@ -846,10 +846,8 @@ function PipelineVisual() {
     return () => clearInterval(timer);
   }, [paused]);
 
-  return (
-    <Reveal>
-      <section id="how-it-works" className="scroll-mt-16 py-14 sm:py-16">
-        <div className="mx-auto max-w-4xl px-4 sm:px-6">
+  const content = (
+        <div className={embedded ? 'mx-auto max-w-4xl' : 'mx-auto max-w-4xl px-4 sm:px-6'}>
           <div className="mb-8 text-center">
             <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--surface-elevated)]/40 px-3 py-1 text-[11px] text-[var(--accent)]">
               <Sparkles className="h-3 w-3" />
@@ -960,6 +958,16 @@ function PipelineVisual() {
             </div>
           </motion.div>
         </div>
+  );
+
+  if (embedded) {
+    return content;
+  }
+
+  return (
+    <Reveal>
+      <section id="how-it-works" className="scroll-mt-16 py-14 sm:py-16">
+        {content}
       </section>
     </Reveal>
   );
@@ -1067,7 +1075,7 @@ function UseCaseTabs() {
   );
 }
 
-function Soc2DemoCard() {
+function Soc2DemoCard({ embedded = false }: { embedded?: boolean }) {
   const [expandedCheck, setExpandedCheck] = useState<string | null>(null);
   const [controlFilter, setControlFilter] = useState<'ALL' | 'PASS' | 'FAIL'>('ALL');
   const visibleControls = SOC2_CONTROLS.filter(
@@ -1079,13 +1087,8 @@ function Soc2DemoCard() {
     { value: '2', label: 'Needs action', filter: 'FAIL', color: 'var(--red)' },
   ] as const;
 
-  return (
-    <Reveal>
-      <section
-        id="soc2-demo"
-        className="scroll-mt-16 border-y border-[var(--line-faint)] bg-[var(--surface)]/10 py-14 sm:py-16"
-      >
-        <div className="mx-auto max-w-lg px-4 sm:px-6">
+  const content = (
+        <div className={embedded ? 'mx-auto max-w-lg' : 'mx-auto max-w-lg px-4 sm:px-6'}>
           <div className="mb-8 text-center">
             <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--surface-elevated)]/40 px-3 py-1 text-[11px] text-[var(--accent)]">
               <Sparkles className="h-3 w-3" />
@@ -1247,6 +1250,19 @@ function Soc2DemoCard() {
             </div>
           </TiltCard>
         </div>
+  );
+
+  if (embedded) {
+    return content;
+  }
+
+  return (
+    <Reveal>
+      <section
+        id="soc2-demo"
+        className="scroll-mt-16 border-y border-[var(--line-faint)] bg-[var(--surface)]/10 py-14 sm:py-16"
+      >
+        {content}
       </section>
     </Reveal>
   );
@@ -1415,14 +1431,9 @@ function Footer() {
   );
 }
 
-function TerminalDemoSection() {
-  return (
-    <Reveal>
-      <section
-        id="terminal-demo"
-        className="scroll-mt-16 border-y border-[var(--line-faint)] bg-[var(--surface)]/10 py-14 sm:py-16"
-      >
-        <div className="mx-auto max-w-2xl px-4 sm:px-6">
+function TerminalDemoSection({ embedded = false }: { embedded?: boolean }) {
+  const content = (
+        <div className={embedded ? 'mx-auto max-w-2xl' : 'mx-auto max-w-2xl px-4 sm:px-6'}>
           <div className="mb-8 text-center">
             <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--surface-elevated)]/40 px-3 py-1 text-[11px] text-[var(--accent)]">
               <Sparkles className="h-3 w-3" />
@@ -1438,6 +1449,133 @@ function TerminalDemoSection() {
             </p>
           </div>
           <ScanTerminal />
+        </div>
+  );
+
+  if (embedded) {
+    return content;
+  }
+
+  return (
+    <Reveal>
+      <section
+        id="terminal-demo"
+        className="scroll-mt-16 border-y border-[var(--line-faint)] bg-[var(--surface)]/10 py-14 sm:py-16"
+      >
+        {content}
+      </section>
+    </Reveal>
+  );
+}
+
+function ProductTour() {
+  const tabs = [
+    {
+      id: 'scan',
+      label: 'Watch a scan',
+      eyebrow: 'Live simulation',
+      description: 'Run the terminal demo and see what a GitHub posture scan produces.',
+      panel: <TerminalDemoSection embedded />,
+    },
+    {
+      id: 'flow',
+      label: 'How it works',
+      eyebrow: 'Pipeline',
+      description: 'Follow the read-only connection from source data to useful evidence.',
+      panel: <PipelineVisual embedded />,
+    },
+    {
+      id: 'evidence',
+      label: 'See the evidence',
+      eyebrow: 'SOC 2 report',
+      description: 'Open the control view and inspect the evidence behind each result.',
+      panel: <Soc2DemoCard embedded />,
+    },
+  ] as const;
+  const [active, setActive] = useState<(typeof tabs)[number]['id']>('scan');
+  const activeTab = tabs.find((tab) => tab.id === active) ?? tabs[0];
+
+  useEffect(() => {
+    const syncHash = () => {
+      if (window.location.hash === '#how-it-works') setActive('flow');
+      if (window.location.hash === '#soc2-demo') setActive('evidence');
+      if (window.location.hash === '#terminal-demo') setActive('scan');
+    };
+    syncHash();
+    window.addEventListener('hashchange', syncHash);
+    return () => window.removeEventListener('hashchange', syncHash);
+  }, []);
+
+  return (
+    <Reveal>
+      <section
+        id="terminal-demo"
+        className="relative scroll-mt-16 border-y border-[var(--line-faint)] bg-[var(--surface)]/10 py-14 sm:py-16"
+      >
+        <span id="how-it-works" className="absolute top-0 scroll-mt-16" aria-hidden="true" />
+        <span id="soc2-demo" className="absolute top-0 scroll-mt-16" aria-hidden="true" />
+        <div className="mx-auto max-w-5xl px-4 sm:px-6">
+          <div className="mb-8 text-center">
+            <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--surface-elevated)]/40 px-3 py-1 text-[11px] text-[var(--accent)]">
+              <Sparkles className="h-3 w-3" />
+              PRODUCT TOUR
+            </div>
+            <h2 className="text-2xl font-bold tracking-tight text-[var(--text-strong)] sm:text-3xl">
+              Scan, explain, and prove in one flow
+            </h2>
+            <p className="mx-auto mt-2 max-w-xl text-sm text-[var(--text-muted)]">
+              Pick the level of detail you want. The same demo keeps the terminal,
+              pipeline, and audit evidence close together.
+            </p>
+          </div>
+
+          <div
+            role="tablist"
+            aria-label="Choose a product tour"
+            className="mb-6 grid gap-2 rounded-2xl border border-[var(--border)] bg-[var(--surface)]/40 p-1 sm:grid-cols-3"
+          >
+            {tabs.map((tab) => (
+              <button
+                key={tab.id}
+                id={`tour-tab-${tab.id}`}
+                type="button"
+                role="tab"
+                aria-selected={active === tab.id}
+                aria-controls={`tour-panel-${tab.id}`}
+                onClick={() => setActive(tab.id)}
+                className={`rounded-xl px-4 py-3 text-left outline-none transition-all focus-visible:ring-2 focus-visible:ring-[var(--accent)] ${
+                  active === tab.id
+                    ? 'bg-[var(--accent)] text-[#07090e] shadow-[var(--shadow-glow-accent)]'
+                    : 'text-[var(--text-muted)] hover:bg-[var(--surface-elevated)]/50 hover:text-[var(--text)]'
+                }`}
+              >
+                <span className="block text-sm font-semibold">{tab.label}</span>
+                <span
+                  className={`mt-1 block text-[11px] uppercase tracking-[0.16em] ${
+                    active === tab.id ? 'text-[#07090e]/70' : 'text-[var(--text-subtle)]'
+                  }`}
+                >
+                  {tab.eyebrow}
+                </span>
+              </button>
+            ))}
+          </div>
+
+          <motion.div
+            key={activeTab.id}
+            id={`tour-panel-${activeTab.id}`}
+            role="tabpanel"
+            aria-labelledby={`tour-tab-${activeTab.id}`}
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3 }}
+            className="pt-2"
+          >
+            <p className="mx-auto mb-6 max-w-2xl text-center text-sm text-[var(--text-muted)]">
+              {activeTab.description}
+            </p>
+            {activeTab.panel}
+          </motion.div>
         </div>
       </section>
     </Reveal>
@@ -1516,10 +1654,8 @@ export default function LandingPage() {
     <div className="min-h-screen bg-[var(--bg)]">
       <NavBar />
       <Hero />
-      <TerminalDemoSection />
-      <PipelineVisual />
-      <Soc2DemoCard />
       <UseCaseTabs />
+      <ProductTour />
       <FeatureGrid />
       <ClosingCta />
       <TrustStrip />
