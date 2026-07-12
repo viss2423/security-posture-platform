@@ -42,14 +42,15 @@ picking based on preference. If a task matches a row, it goes to that row's owne
 
 | # | Category (fixed trigger) | Owner | Claude tier (if Claude) |
 |---|---|---|---|
+| 0 | Ambiguous or cross-category task not yet split | **Claude (spec) → row owner (build)** | Sonnet, spec only |
 | 1 | Backend core: new/changed endpoints, business logic in `services/api/app/` (`App`, `Routers` clusters) | **Codex CLI** | — |
 | 2 | Frontend feature implementation: new/changed pages, components in `services/frontend/` | **Codex CLI** | — |
 | 3 | `services/api/scripts/*` (backup, DR, verification scripts) | **DeepSeek harness** | — |
 | 4 | Self-contained backend engines: `Scanner`, `Correlator`, `Notifier`, `Deriver`, `Policy` clusters | **DeepSeek harness** | — |
 | 5 | Tests (any), boilerplate, docs | **DeepSeek harness** | — |
 | 6 | Visual verification of any frontend change before merge (mandatory, every time) | **Claude Code** | Sonnet |
-| 7 | Any change touching auth, secrets, data-boundary, or external egress (the AGENTS.md guardrail trigger) | **Claude Code** | Opus |
-| 8 | Cross-system architecture decisions with no existing pattern in the repo to follow; the single highest-severity security judgment calls (e.g. confirming a fix for an already-identified auth-bypass / data-exposure class bug) | **Claude Code** | Fable |
+| 7 | Any change touching auth, secrets, data-boundary, or external egress (the AGENTS.md guardrail trigger) | **Claude Code** designs + hand-writes the sensitive core; DeepSeek harness writes mechanical scaffolding (schema fields, wiring, tests) from Claude's spec; Claude reviews the final diff | Opus |
+| 8 | Cross-system architecture decisions with no existing pattern in the repo to follow; the single highest-severity security judgment calls (e.g. confirming a fix for an already-identified auth-bypass / data-exposure class bug) | **Claude/Fable decides** (short written decision: choice + why); build goes to whichever row the resulting code lands on — Fable does not author bulk implementation | Fable, decision only |
 | 9 | Final `detect_changes()` gate before merge to `main` (every merge, no exception) | **Claude Code** | Haiku |
 | 10 | CI/deploy pipeline changes (`.github/workflows/`, `docker-compose.yml`, deploy scripts) — single owner because this repo's history shows CI breaks when multiple hands touch it reactively | **Claude Code** | Sonnet (escalate to Opus only if the failure itself is the hard-debugging case, category 8's architecture clause does not apply here) |
 | 11 | Any task requiring ingestion of content larger than a single agent's normal context (whole-repo dependency mapping, huge log files) | **Gemini CLI** | — |
@@ -58,6 +59,30 @@ Rules of engagement (no exceptions):
 - One model owns a task at a time, on its own branch. Never two models on the same branch.
 - Row 1–5 assignments are fixed by category, not by which agent is idle. If Codex is busy and a
   backend-core task (row 1) is ready, it waits for Codex — it does NOT go to DeepSeek.
+- **Row 0 (ambiguous/cross-category tasks) never gets built by Claude by default.** Claude splits
+  the task into a short spec — files touched, function signatures, acceptance criteria — and hands
+  it to whichever row owner the split resolves to (usually DeepSeek harness), in the
+  [[handoff-format-pref]] copy-paste format. Claude only keeps the implementation itself if the
+  split lands the whole task on a Claude row (6–10).
+  **Size floor:** if the task is small enough that writing the spec and reviewing the returned
+  diff would cost more than just doing it directly (rough guide: a single-file, sub-~30-line
+  change), skip the handoff — whichever agent is already in the session does it inline. Row 0
+  exists to stop *real* delegation leakage, not to tax trivial edits with spec-and-review overhead.
+- **Multi-phase tasks: delegation is re-evaluated at the start of every phase, and for every
+  discrete action within a phase that could independently match a different row.** A phase
+  inherits nothing from the row/owner/tier of the phase before it — "the last unit was Opus" is
+  not a reason the next unit is Opus. State the row/owner/tier for each phase when it begins, the
+  same one-line disclosure used per task, so drift is visible immediately instead of discovered
+  later in a token-spend review.
+- **Row 6 (UI verification) is verification only.** If Claude spots a bug while screenshotting, it
+  writes up the bug (repro, file, expected vs actual) for Codex/DeepSeek rather than patching it
+  inline. Silent inline fixes during a verification pass are the main way Claude ends up quietly
+  doing frontend work — don't do it.
+- **Row 7 (auth/secret/data-boundary/egress) is now split work, not all-Claude.** Claude decides the
+  approach and writes the security-sensitive core (the part where a mistake is exploitable), then
+  hands mechanical scaffolding around that core to DeepSeek harness with a precise spec, and reviews
+  DeepSeek's diff before it merges. The guardrail ("flag it, don't guess") still applies to Claude's
+  own core piece and to the review step — it does not mean Claude must type every line.
 - The agent that writes a change (Codex or DeepSeek harness, both GitNexus-enabled) runs its own
   `impact()` before editing. Claude's row-9 `detect_changes()` is the final gate on top of that,
   always, regardless of who wrote the change.
