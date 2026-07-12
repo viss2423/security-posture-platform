@@ -690,7 +690,7 @@ function Hero() {
     <section
       id="top"
       ref={ref}
-      className="relative scroll-mt-20 overflow-hidden pb-14 pt-28 sm:pb-24 sm:pt-44"
+      className="relative scroll-mt-20 overflow-hidden pb-6 pt-28 sm:pb-0 sm:pt-44"
     >
       <AnimatedBg />
       <div className="relative mx-auto max-w-4xl px-4 text-center sm:px-6">

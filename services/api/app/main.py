@@ -48,7 +48,7 @@ from .routers import (
     threat_intel,
 )
 from .routers import audit as audit_router
-from .routers.auth import require_role
+from .routers.auth import decode_token_payload, require_role
 from .settings import settings
 from .stability import capture_api_runtime_snapshot, materialize_sli_sample
 from .telemetry import (
@@ -298,7 +298,99 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         return response
 
 
+def _empty_viewer_telemetry_summary() -> dict:
+    return {
+        "totals": {
+            "events": 0,
+            "ti_matches": 0,
+            "assets": 0,
+            "sources": 0,
+            "traceable_events": 0,
+            "traceability_coverage_pct": 0.0,
+            "ingest_lag_seconds_avg": None,
+            "ingest_lag_seconds_p95": None,
+            "ingest_lag_seconds_max": None,
+        },
+        "sources": [],
+        "recent_alerts": [],
+        "latest_anomaly_scores": [],
+        "capabilities": {"viewer_scoped": True, "restricted": True},
+    }
+
+
+def _empty_viewer_compliance_evidence() -> dict:
+    return {
+        "report_id": "viewer",
+        "generated_at": None,
+        "source": "",
+        "sources": [],
+        "scan_ran": False,
+        "frameworks": [],
+        "scope": {
+            "asset_count": 0,
+            "total_findings": 0,
+            "open_findings": 0,
+            "remediated_findings": 0,
+        },
+        "score": {
+            "pass": 0,
+            "fail": 0,
+            "not_applicable": 0,
+            "percentage": None,
+        },
+        "controls": [],
+        "capabilities": {"viewer_scoped": True, "restricted": True},
+    }
+
+
+_VIEWER_EMPTY_RESPONSES = {
+    "/telemetry/summary": _empty_viewer_telemetry_summary,
+    "/incidents": lambda: {
+        "total": 0,
+        "items": [],
+        "capabilities": {"viewer_scoped": True, "restricted": True},
+    },
+    "/compliance/evidence": _empty_viewer_compliance_evidence,
+    "/compliance/soc2/evidence": _empty_viewer_compliance_evidence,
+    "/detections/rules": lambda: {
+        "items": [],
+        "capabilities": {"viewer_scoped": True, "restricted": True},
+    },
+    "/alerts": lambda: {
+        "firing": [],
+        "acked": [],
+        "suppressed": [],
+        "resolved": [],
+        "capabilities": {"viewer_scoped": True, "restricted": True},
+    },
+}
+
+
+def _viewer_role_from_request(request: Request) -> bool:
+    auth_header = request.headers.get("authorization") or ""
+    scheme, _, token = auth_header.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        return False
+    payload = decode_token_payload(token.strip())
+    return bool(payload and (payload.get("role") or "admin").lower() == "viewer")
+
+
+class ViewerReadOnlyFallbackMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        payload_factory = _VIEWER_EMPTY_RESPONSES.get(request.url.path.rstrip("/") or "/")
+        if (
+            request.method == "GET"
+            and response.status_code == 403
+            and payload_factory
+            and _viewer_role_from_request(request)
+        ):
+            return JSONResponse(status_code=200, content=payload_factory())
+        return response
+
+
 app = FastAPI(title="Security Posture Platform API", lifespan=lifespan)
+app.add_middleware(ViewerReadOnlyFallbackMiddleware)
 app.add_middleware(MetricsMiddleware)
 app.add_middleware(RequestLogMiddleware)
 register_error_handlers(app)
