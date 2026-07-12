@@ -119,6 +119,14 @@ function packageChip(finding: Finding): string | null {
   return `${finding.package_name}@${finding.package_version}`;
 }
 
+function hasScannerDetails(finding: Finding): boolean {
+  return (
+    finding.scanner_metadata_json != null &&
+    typeof finding.scanner_metadata_json === 'object' &&
+    Object.keys(finding.scanner_metadata_json).length > 0
+  );
+}
+
 type GuardrailItem = { statement: string; evidence: string[] };
 type GuardrailSectionKey = 'facts' | 'inference' | 'recommendations';
 
@@ -871,13 +879,58 @@ export default function FindingsPage() {
 
                 <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
                   <div className="space-y-3">
-                    {f.evidence && (
-                      <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)] px-4 py-3">
-                        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
-                          Evidence
-                        </p>
-                        <p className="mt-2 line-clamp-3 text-sm text-[var(--text)]">{f.evidence}</p>
-                      </div>
+                    {(f.evidence || f.remediation || hasScannerDetails(f)) && (
+                      <details className="group rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)]">
+                        <summary className="cursor-pointer list-none px-4 py-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
+                              Evidence
+                            </p>
+                            <span className="text-[11px] text-[var(--accent)] group-open:hidden">
+                              Show why this is a finding
+                            </span>
+                            <span className="hidden text-[11px] text-[var(--text-subtle)] group-open:inline">
+                              Collapse
+                            </span>
+                          </div>
+                          {f.evidence && (
+                            <p className="mt-2 line-clamp-3 text-sm text-[var(--text)] group-open:hidden">
+                              {f.evidence}
+                            </p>
+                          )}
+                        </summary>
+                        <div className="space-y-3 border-t border-[var(--border)] px-4 py-3">
+                          {f.evidence && (
+                            <p className="whitespace-pre-wrap text-sm text-[var(--text)]">{f.evidence}</p>
+                          )}
+                          {f.remediation && (
+                            <div className="rounded-lg border border-[var(--green)]/20 bg-[var(--green)]/08 px-3 py-2">
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--green)]">
+                                How to fix
+                              </p>
+                              <p className="mt-1 whitespace-pre-wrap text-sm text-[var(--text)]">
+                                {f.remediation}
+                              </p>
+                            </div>
+                          )}
+                          {hasScannerDetails(f) && (
+                            <div>
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--text-subtle)]">
+                                Raw check details
+                              </p>
+                              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                                {Object.entries(f.scanner_metadata_json as Record<string, unknown>).map(
+                                  ([key, value]) => (
+                                    <span key={key} className="stat-chip font-mono text-[11px]">
+                                      {key}: {String(value)}
+                                    </span>
+                                  )
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </details>
                     )}
                     {f.risk_score != null && (
                       <p className="text-xs text-[var(--muted)]">

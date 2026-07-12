@@ -565,6 +565,13 @@ export async function deletePolicyBundle(id: number): Promise<{ ok: boolean }> {
 }
 
 // Jobs (Phase B.3)
+export type JobProgress = {
+  repos_done: number;
+  repos_total: number;
+  current?: string;
+  findings_so_far?: number;
+};
+
 export type JobItem = {
   job_id: number;
   job_type: string;
@@ -579,6 +586,7 @@ export type JobItem = {
   error: string | null;
   retry_count?: number;
   job_params_json?: Record<string, unknown> | null;
+  progress_json?: JobProgress | null;
 };
 
 export type JobDetail = JobItem & {

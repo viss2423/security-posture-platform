@@ -670,34 +670,37 @@ export default async function OverviewPage({ searchParams }: PageProps) {
           )}
 
           {repositorySummary && (
-            <section className="section-panel animate-in">
-              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <details className="section-panel animate-in disclosure">
+              <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-3">
                 <div>
                   <h2 className="section-title">Repository risk</h2>
                   <p className="text-sm text-[var(--muted)]">
-                    Live OSV and Trivy findings for{' '}
-                    <Link
-                      href={`/assets/${encodeURIComponent(repositorySummary.asset_key)}`}
-                      className="font-medium text-[var(--text)] hover:text-[var(--green)] hover:underline"
-                    >
-                      {repositorySummary.asset_name || repositorySummary.asset_key}
-                    </Link>
-                    .
+                    OSV and Trivy findings for {repositorySummary.asset_name || repositorySummary.asset_key} — expand for details.
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <Link
-                    href={`/assets/${encodeURIComponent(repositorySummary.asset_key)}`}
-                    className="btn-secondary text-sm"
+                  <span
+                    className="stat-chip-strong"
+                    style={repositorySummary.open_findings > 0 ? { color: 'var(--red)' } : undefined}
                   >
-                    Open asset
-                  </Link>
-                  {user.canMutate && (
-                    <Link href="/jobs" className="btn-secondary text-sm">
-                      Run scan
-                    </Link>
-                  )}
+                    {repositorySummary.open_findings} open
+                  </span>
+                  <span className="stat-chip">{repositorySummary.remediated_findings} remediated</span>
                 </div>
+              </summary>
+              <div className="disclosure-body mt-4">
+              <div className="mb-4 flex flex-wrap gap-2">
+                <Link
+                  href={`/assets/${encodeURIComponent(repositorySummary.asset_key)}`}
+                  className="btn-secondary text-sm"
+                >
+                  Open asset
+                </Link>
+                {user.canMutate && (
+                  <Link href="/jobs" className="btn-secondary text-sm">
+                    Run scan
+                  </Link>
+                )}
               </div>
 
               <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
@@ -903,26 +906,37 @@ export default async function OverviewPage({ searchParams }: PageProps) {
                   )}
                 </div>
               </div>
-            </section>
+              </div>
+            </details>
           )}
 
           {telemetrySummary && (
-            <section className="section-panel animate-in">
-              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <details className="section-panel animate-in disclosure">
+              <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-3">
                 <div>
                   <h2 className="section-title">Signal coverage</h2>
                   <p className="text-sm text-[var(--muted)]">
-                    Event volume, IOC-linked activity, and latest anomaly observations.
+                    Event volume and IOC-linked activity — expand for details.
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <Link href="/telemetry" className="btn-secondary text-sm">
-                    Open telemetry
-                  </Link>
-                  <Link href="/alerts" className="btn-secondary text-sm">
-                    Open alerts
-                  </Link>
+                  <span className="stat-chip-strong">{telemetrySummary.totals.events} events</span>
+                  <span
+                    className="stat-chip"
+                    style={telemetrySummary.totals.ti_matches > 0 ? { color: 'var(--red)' } : undefined}
+                  >
+                    {telemetrySummary.totals.ti_matches} IOC matches
+                  </span>
                 </div>
+              </summary>
+              <div className="disclosure-body mt-4">
+              <div className="mb-4 flex flex-wrap gap-2">
+                <Link href="/telemetry" className="btn-secondary text-sm">
+                  Open telemetry
+                </Link>
+                <Link href="/alerts" className="btn-secondary text-sm">
+                  Open alerts
+                </Link>
               </div>
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)]/40 p-4">
@@ -950,26 +964,37 @@ export default async function OverviewPage({ searchParams }: PageProps) {
                   <p className="mt-2 text-sm text-[var(--muted)]">Sources</p>
                 </div>
               </div>
-            </section>
+              </div>
+            </details>
           )}
 
           {threatIntelSummary && (
-            <section className="section-panel animate-in">
-              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <details className="section-panel animate-in disclosure">
+              <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-3">
                 <div>
                   <h2 className="section-title">Threat intelligence</h2>
                   <p className="text-sm text-[var(--muted)]">
-                    IOC feeds, matched assets, and latest refresh health.
+                    IOC feeds and matched assets — expand for details.
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <Link href="/threat-intel" className="btn-secondary text-sm">
-                    Open intel
-                  </Link>
-                  <Link href="/jobs" className="btn-secondary text-sm">
-                    Refresh feeds
-                  </Link>
+                  <span className="stat-chip-strong">{threatIntelSummary.total_indicators} indicators</span>
+                  <span
+                    className="stat-chip"
+                    style={threatIntelSummary.matched_asset_count > 0 ? { color: 'var(--red)' } : undefined}
+                  >
+                    {threatIntelSummary.matched_asset_count} matched assets
+                  </span>
                 </div>
+              </summary>
+              <div className="disclosure-body mt-4">
+              <div className="mb-4 flex flex-wrap gap-2">
+                <Link href="/threat-intel" className="btn-secondary text-sm">
+                  Open intel
+                </Link>
+                <Link href="/jobs" className="btn-secondary text-sm">
+                  Refresh feeds
+                </Link>
               </div>
 
               <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
@@ -1153,7 +1178,8 @@ export default async function OverviewPage({ searchParams }: PageProps) {
                   )}
                 </div>
               </div>
-            </section>
+              </div>
+            </details>
           )}
 
           <section className="section-panel animate-in">

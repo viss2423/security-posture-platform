@@ -95,6 +95,23 @@ def _append_job_log(db, job_id: int, message: str) -> None:
     db.commit()
 
 
+def _update_job_progress(db, job_id: int, progress: dict) -> None:
+    """Write incremental scan progress. Polled by the jobs UI while the job runs;
+    a failed write must never abort the scan itself."""
+    try:
+        db.execute(
+            text(
+                "UPDATE scan_jobs SET progress_json = CAST(:progress AS jsonb) "
+                "WHERE job_id = :job_id"
+            ),
+            {"job_id": job_id, "progress": json.dumps(progress)},
+        )
+        db.commit()
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        logger.warning("github_posture_progress_write_failed job_id=%s", job_id)
+
+
 def _set_job_running(db, job_id: int) -> None:
     db.execute(
         text(
@@ -118,7 +135,8 @@ def _finish_job(
         text(
             """
             UPDATE scan_jobs
-               SET status = :status, finished_at = NOW(), error = :error
+               SET status = :status, finished_at = NOW(), error = :error,
+                   progress_json = NULL
              WHERE job_id = :job_id
             """
         ),
@@ -244,11 +262,28 @@ def _list_repos(client: httpx.Client, *, scope_type: str, scope: str, max_repos:
 
 
 def _scan_github(
-    token: str, *, scope_type: str, scope: str, max_repos: int, timeout: float
+    token: str,
+    *,
+    scope_type: str,
+    scope: str,
+    max_repos: int,
+    timeout: float,
+    on_progress=None,
 ) -> tuple[list[dict], list[str]]:
     findings: list[dict] = []
     logs: list[str] = []
     key_scope = scope or "self"
+
+    def _report(done: int, total: int, current: str) -> None:
+        if on_progress is not None:
+            on_progress(
+                {
+                    "repos_done": done,
+                    "repos_total": total,
+                    "current": current,
+                    "findings_so_far": len(findings),
+                }
+            )
 
     with _gh_client(token, timeout=timeout) as client:
         # Org-level: 2FA enforcement
@@ -276,8 +311,9 @@ def _scan_github(
 
         repos = _list_repos(client, scope_type=scope_type, scope=scope, max_repos=max_repos)
         logs.append(f"Scanning {len(repos)} repositories")
+        _report(0, len(repos), "")
 
-        for repo in repos:
+        for repo_index, repo in enumerate(repos):
             full_name = str(repo.get("full_name") or "")
             owner = str((repo.get("owner") or {}).get("login") or "")
             name = str(repo.get("name") or "")
@@ -350,6 +386,8 @@ def _scan_github(
                         "scanner_metadata_json": {"repo": full_name, "check": "secret_scanning"},
                     }
                 )
+
+            _report(repo_index + 1, len(repos), full_name)
 
     return findings, logs
 
@@ -427,7 +465,12 @@ def run_github_posture_job(job_id: int) -> None:
         )
 
         findings, logs = _scan_github(
-            token, scope_type=scope_type, scope=scope, max_repos=max_repos, timeout=timeout
+            token,
+            scope_type=scope_type,
+            scope=scope,
+            max_repos=max_repos,
+            timeout=timeout,
+            on_progress=lambda progress: _update_job_progress(db, job_id, progress),
         )
         for line in logs:
             _append_job_log(db, job_id, line)

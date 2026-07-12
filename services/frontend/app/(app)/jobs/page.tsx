@@ -15,6 +15,7 @@ import {
   type AIJobTriage,
   type JobDetail,
   type JobItem,
+  type JobProgress,
 } from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
 import { formatDateTime } from '@/lib/format';
@@ -94,6 +95,31 @@ function StatusDot({ status }: { status: string }) {
   if (status === 'running') return <span className="dot-warning" style={{ width: 7, height: 7 }} />;
   if (status === 'failed') return <span className="dot-critical" style={{ width: 7, height: 7 }} />;
   return <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--text-subtle)]" />;
+}
+
+function ScanProgressBar({ progress, compact = false }: { progress: JobProgress; compact?: boolean }) {
+  const total = Math.max(1, Number(progress.repos_total) || 0);
+  const done = Math.min(total, Math.max(0, Number(progress.repos_done) || 0));
+  const pct = Math.round((done / total) * 100);
+  return (
+    <div className={compact ? 'w-40 shrink-0' : 'w-full'}>
+      <div className="flex items-center justify-between gap-2 text-[10px] text-[var(--text-subtle)]">
+        <span className="tabular-nums">{done}/{total} repos</span>
+        {progress.findings_so_far != null && (
+          <span className="tabular-nums text-[var(--amber)]">{progress.findings_so_far} findings</span>
+        )}
+      </div>
+      <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full" style={{ background: 'rgba(255,255,255,0.06)' }}>
+        <div
+          className="h-full rounded-full transition-all duration-700"
+          style={{ width: `${pct}%`, background: 'var(--amber)', boxShadow: '0 0 8px rgba(251,191,36,0.4)' }}
+        />
+      </div>
+      {!compact && progress.current && (
+        <p className="mt-1 truncate font-mono text-[10px] text-[var(--text-subtle)]">scanning {progress.current}</p>
+      )}
+    </div>
+  );
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -328,6 +354,16 @@ export default function JobsPage() {
     const poll = window.setInterval(load, 4500);
     return () => window.clearInterval(poll);
   }, [activeJobs, load]);
+
+  // Keep an open detail panel live while its job is queued/running so the
+  // progress bar advances without the user re-clicking the row.
+  useEffect(() => {
+    if (!detail || (detail.status !== 'running' && detail.status !== 'queued')) return;
+    const poll = window.setInterval(() => {
+      getJob(detail.job_id).then(setDetail).catch(() => {});
+    }, 4500);
+    return () => window.clearInterval(poll);
+  }, [detail]);
 
   return (
     <main className="page-shell space-y-5">
@@ -679,6 +715,9 @@ export default function JobsPage() {
                       {job.asset_name || job.asset_key}
                     </span>
                   )}
+                  {job.status === 'running' && job.progress_json && (
+                    <ScanProgressBar progress={job.progress_json} compact />
+                  )}
                   <StatusBadge status={job.status} />
                   <span className="text-xs text-[var(--text-subtle)] shrink-0">{formatDateTime(job.created_at)}</span>
                   {canMutate && (job.status === 'failed' || job.status === 'done') && (
@@ -741,6 +780,15 @@ export default function JobsPage() {
                   </div>
                 ))}
               </div>
+
+              {detail.status === 'running' && detail.progress_json && (
+                <div className="mt-4 rounded-xl border border-[var(--amber)]/25 bg-[var(--amber)]/08 px-4 py-3">
+                  <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--amber)]">
+                    Scan in progress
+                  </p>
+                  <ScanProgressBar progress={detail.progress_json} />
+                </div>
+              )}
 
               {detail.error && (
                 <div className="mt-4 rounded-xl border border-[var(--red)]/25 bg-[var(--red)]/08 px-4 py-3 text-sm text-[var(--red)]">

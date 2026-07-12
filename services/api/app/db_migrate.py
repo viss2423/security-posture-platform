@@ -572,6 +572,7 @@ CREATE INDEX IF NOT EXISTS idx_scan_jobs_last_heartbeat
   ON scan_jobs(last_heartbeat_at DESC) WHERE last_heartbeat_at IS NOT NULL;
 """
 ALTER_SCAN_JOBS_PARAMS = "ALTER TABLE scan_jobs ADD COLUMN IF NOT EXISTS job_params_json JSONB NOT NULL DEFAULT '{}'::jsonb;"
+ALTER_SCAN_JOBS_PROGRESS = "ALTER TABLE scan_jobs ADD COLUMN IF NOT EXISTS progress_json JSONB;"
 
 # Phase B.2: policy bundles
 POLICY_BUNDLES_SQL = """
@@ -1737,6 +1738,8 @@ def _run_startup_migrations_once() -> None:
                 _execute_with_deadlock_retry(conn, ALTER_SCAN_JOBS_LAST_HEARTBEAT)
             if not _column_exists(conn, "scan_jobs", "job_params_json"):
                 _execute_with_deadlock_retry(conn, ALTER_SCAN_JOBS_PARAMS)
+            if not _column_exists(conn, "scan_jobs", "progress_json"):
+                _execute_with_deadlock_retry(conn, ALTER_SCAN_JOBS_PROGRESS)
             _execute_with_deadlock_retry(conn, SCAN_JOBS_CLAIM_TOKEN_INDEX)
             _execute_with_deadlock_retry(conn, SCAN_JOBS_LAST_HEARTBEAT_INDEX)
             logger.info("startup_migration: ensured scan_jobs table exists")

@@ -512,6 +512,11 @@ def _serialize_job(r) -> dict:
             out["job_params_json"] = json.loads(out["job_params_json"])
         except json.JSONDecodeError:
             out["job_params_json"] = {}
+    if isinstance(out.get("progress_json"), str):
+        try:
+            out["progress_json"] = json.loads(out["progress_json"])
+        except json.JSONDecodeError:
+            out["progress_json"] = None
     return out
 
 
@@ -578,6 +583,7 @@ def list_jobs(
       j.error,
       j.retry_count,
       j.job_params_json,
+      j.progress_json,
       COALESCE(a.asset_key, j.job_params_json ->> 'asset_key') AS asset_key,
       COALESCE(a.name, j.job_params_json ->> 'asset_name') AS asset_name
     FROM scan_jobs j
@@ -853,6 +859,7 @@ def get_job(
                   j.log_output,
                   j.retry_count,
                   j.job_params_json,
+                  j.progress_json,
                   COALESCE(a.asset_key, j.job_params_json ->> 'asset_key') AS asset_key,
                   COALESCE(a.name, j.job_params_json ->> 'asset_name') AS asset_name,
                   COALESCE(a.type, 'app') AS asset_type,
