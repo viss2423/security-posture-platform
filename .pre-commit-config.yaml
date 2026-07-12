@@ -38,6 +38,7 @@ repos:
         entry: node scripts/lint-frontend-precommit.cjs
         language: system
         files: ^services/frontend/.*\.(js|ts|tsx)$
+        exclude: ^services/frontend/next-env\.d\.ts$
         pass_filenames: true
       - id: frontend-performance-budget
         name: frontend performance budget

@@ -2,9 +2,9 @@ name: Deploy — Cloudflare Pages
 
 on:
   # Manual-only for now. This deploy needs Cloudflare secrets (CF_API_TOKEN,
-  # CF_ACCOUNT_ID) that aren't configured yet, AND the current @cloudflare/next-on-pages
-  # adapter supports only Next <=15.5.2 while this app is on Next 16 — so the build
-  # step will fail until we move to @opennextjs/cloudflare (or pin Next 15).
+  # CF_ACCOUNT_ID) that aren't configured yet. Builds via @opennextjs/cloudflare
+  # and deploys as a Cloudflare Worker (not Pages — next-on-pages only supports
+  # Next <=15.5.2, this app is on Next 16).
   # Re-enable `push` once hosting is set up. Run on demand from the Actions tab.
   workflow_dispatch:
 
@@ -32,26 +32,21 @@ jobs:
         working-directory: services/frontend
         run: npm ci
 
-      - name: Install next-on-pages
+      - name: Build (Next.js → Cloudflare Worker)
         working-directory: services/frontend
-        run: npm install --save-dev @cloudflare/next-on-pages
-
-      - name: Build (Next.js → Cloudflare Workers)
-        working-directory: services/frontend
-        run: npx @cloudflare/next-on-pages
+        run: npx opennextjs-cloudflare build
         env:
           NODE_ENV: production
-          # Public env vars for the frontend bundle — set these in CF Pages dashboard too
+          # Public env vars for the frontend bundle — set matching runtime vars via
+          # `wrangler secret put` / the CF dashboard too
           NEXT_PUBLIC_API_URL: ${{ secrets.CF_API_URL }}
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
 
-      - name: Deploy to Cloudflare Pages
-        uses: cloudflare/pages-action@v1
+      - name: Deploy to Cloudflare Workers
+        uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CF_API_TOKEN }}
           accountId: ${{ secrets.CF_ACCOUNT_ID }}
-          projectName: security-posture-platform
-          directory: services/frontend/.vercel/output/static
-          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
-          wranglerVersion: '3'
+          workingDirectory: services/frontend
+          command: deploy

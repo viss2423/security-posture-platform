@@ -36,6 +36,9 @@ reports/zap/
 # Node
 node_modules/
 .next/
+.vercel/
+.open-next/
+.wrangler/
 .gitnexus
 
 # Scratch / experiment files
