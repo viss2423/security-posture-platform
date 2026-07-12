@@ -48,6 +48,12 @@ export const NAV_GROUPS: NavGroup[] = [
         description: 'Go from sign-in to first value with a guided customer setup flow.',
       },
       {
+        href: '/workspace',
+        label: 'Connect Workspace',
+        icon: 'activity',
+        description: 'Connect GitHub and start a live posture scan in an isolated workspace.',
+      },
+      {
         href: '/overview',
         label: 'Executive Overview',
         icon: 'activity',

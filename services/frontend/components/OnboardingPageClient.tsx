@@ -350,6 +350,9 @@ export default function OnboardingPageClient() {
               <button type="button" onClick={() => void load()} className="btn-secondary text-sm">
                 {loading ? 'Refreshing...' : 'Refresh status'}
               </button>
+              <Link href="/workspace" className="btn-primary text-sm">
+                Connect GitHub
+              </Link>
               <Link href="/overview" className="btn-secondary text-sm">
                 Open overview
               </Link>
@@ -405,6 +408,11 @@ export default function OnboardingPageClient() {
             Asset creation, telemetry ingestion, detections, alerts, incidents, and demo reset
             controls stay with analyst or admin accounts.
           </p>
+          <div className="mt-4">
+            <Link href="/workspace" className="btn-primary inline-flex text-sm">
+              Connect GitHub workspace
+            </Link>
+          </div>
         </section>
       )}
 

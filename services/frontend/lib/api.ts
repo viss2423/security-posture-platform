@@ -128,6 +128,30 @@ export async function login(username: string, password: string): Promise<{ acces
   return { access_token: 'session' };
 }
 
+export async function setSessionTokens(payload: {
+  access_token: string;
+  refresh_token?: string | null;
+}): Promise<{ ok: boolean }> {
+  const res = await fetch(API + '/auth/session', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    cache: 'no-store',
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    let msg = text || 'Session update failed';
+    try {
+      const j = JSON.parse(text);
+      if (j?.error) msg = j.error;
+    } catch {
+      /* use text as-is */
+    }
+    throw new Error(msg);
+  }
+  return { ok: true };
+}
+
 export async function logout(): Promise<void> {
   await fetch(API + '/auth/session', {
     method: 'DELETE',
@@ -581,6 +605,58 @@ export async function createJob(payload: {
   job_params_json?: Record<string, unknown>;
 }): Promise<JobItem> {
   return apiFetch<JobItem>('/jobs', { method: 'POST', body: JSON.stringify(payload) });
+}
+
+export type WorkspaceProvider = 'github';
+export type WorkspaceScopeType = 'user' | 'org';
+
+export type ConnectWorkspaceRequest = {
+  provider: WorkspaceProvider;
+  token: string;
+  scope_type?: WorkspaceScopeType;
+  scope?: string;
+  label?: string;
+};
+
+export type ConnectWorkspaceResponse = {
+  workspace_id: string;
+  credential_id: number;
+  provider: WorkspaceProvider;
+  activated: boolean;
+  access_token: string;
+  refresh_token: string;
+};
+
+export type StartWorkspaceScanRequest = {
+  provider: WorkspaceProvider;
+  credential_id: number;
+  scope_type?: WorkspaceScopeType;
+  scope?: string;
+  max_repos?: number;
+};
+
+export type StartWorkspaceScanResponse = {
+  job_id: number;
+  status: 'queued';
+  provider: WorkspaceProvider;
+};
+
+export async function connectWorkspace(
+  body: ConnectWorkspaceRequest
+): Promise<ConnectWorkspaceResponse> {
+  return apiFetch<ConnectWorkspaceResponse>('/workspace/connect', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function startWorkspaceScan(
+  body: StartWorkspaceScanRequest
+): Promise<StartWorkspaceScanResponse> {
+  return apiFetch<StartWorkspaceScanResponse>('/workspace/scans', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
 }
 
 export async function retryJob(id: number): Promise<{ ok: boolean; status: string }> {
