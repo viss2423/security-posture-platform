@@ -37,11 +37,6 @@ jobs:
         run: npx opennextjs-cloudflare build
         env:
           NODE_ENV: production
-          # Public env vars for the frontend bundle — set matching runtime vars via
-          # `wrangler secret put` / the CF dashboard too
-          NEXT_PUBLIC_API_URL: ${{ secrets.CF_API_URL }}
-          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
 
       - name: Deploy to Cloudflare Workers
         uses: cloudflare/wrangler-action@v3
@@ -49,4 +44,7 @@ jobs:
           apiToken: ${{ secrets.CF_API_TOKEN }}
           accountId: ${{ secrets.CF_ACCOUNT_ID }}
           workingDirectory: services/frontend
-          command: deploy
+          # API_URL is a runtime var (read server-side by lib/serverApi.ts for the
+          # /api/[...path] backend proxy), not a build-time NEXT_PUBLIC_ var — the
+          # client only ever calls same-origin /api/*, so it must be wired here.
+          command: deploy --var API_URL:${{ secrets.CF_API_URL }}
