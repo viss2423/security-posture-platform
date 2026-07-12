@@ -42,7 +42,7 @@ picking based on preference. If a task matches a row, it goes to that row's owne
 
 | # | Category (fixed trigger) | Owner | Claude tier (if Claude) |
 |---|---|---|---|
-| 0 | Ambiguous or cross-category task not yet split | **Claude (spec) → row owner (build)** | Sonnet, spec only |
+| 0 | Planning/orchestration of any task, and any ambiguous or cross-category task not yet split | **Claude (spec) → each piece's row owner (build)** | Sonnet, spec only — never Opus/Fable for planning or for meta-work on these rules |
 | 1 | Backend core: new/changed endpoints, business logic in `services/api/app/` (`App`, `Routers` clusters) | **Codex CLI** | — |
 | 2 | Frontend feature implementation: new/changed pages, components in `services/frontend/` | **Codex CLI** | — |
 | 3 | `services/api/scripts/*` (backup, DR, verification scripts) | **DeepSeek harness** | — |
@@ -56,28 +56,46 @@ picking based on preference. If a task matches a row, it goes to that row's owne
 | 11 | Any task requiring ingestion of content larger than a single agent's normal context (whole-repo dependency mapping, huge log files) | **Gemini CLI** | — |
 
 Rules of engagement (no exceptions):
+- **Every unit of work has exactly one row before it executes.** No unit — task, phase, or work
+  item inside a phase — starts until its row (and therefore its single owner, and tier if Claude)
+  has been stated. "Codex/DeepSeek", "Claude or Codex", "whoever" are not valid assignments;
+  if you catch yourself writing an "or", the split isn't finished — split further until each
+  piece has one owner.
+- **Precedence when more than one row seems to match** (deterministic tie-break, apply in this
+  order, first match wins): row 8 (an architecture decision is needed before anything is built)
+  → row 7 (the change touches auth/secrets/data-boundary/egress, regardless of where the code
+  lives) → row 10 (the change is to CI/deploy files) → row 11 (the input exceeds a single
+  agent's context) → rows 1–5 by code location/type. Rows 6 and 9 are stage gates, not
+  alternatives — they always apply *in addition to* whichever row built the change.
 - One model owns a task at a time, on its own branch. Never two models on the same branch.
 - Row 1–5 assignments are fixed by category, not by which agent is idle. If Codex is busy and a
   backend-core task (row 1) is ready, it waits for Codex — it does NOT go to DeepSeek.
-- **Row 0 (ambiguous/cross-category tasks) never gets built by Claude by default.** Claude splits
-  the task into a short spec — files touched, function signatures, acceptance criteria — and hands
-  it to whichever row owner the split resolves to (usually DeepSeek harness), in the
-  [[handoff-format-pref]] copy-paste format. Claude only keeps the implementation itself if the
-  split lands the whole task on a Claude row (6–10).
+- **Row 0 (planning/ambiguous/cross-category) never gets built by Claude by default.** Claude
+  splits the task into a short spec — files touched, function signatures, acceptance criteria —
+  and each resulting piece goes to the owner of the row it resolves to under the precedence
+  order above (a frontend piece → row 2 → Codex; a script piece → row 3 → DeepSeek; never a
+  choice between two owners). Handoffs use the [[handoff-format-pref]] copy-paste format.
+  A planning session's deliverable is the set of handoff blocks — if a planning session ends
+  without handoff blocks, it didn't finish. Claude only keeps an implementation piece itself
+  if that piece resolves to a Claude row (6–10). Planning and any meta-work on these delegation
+  rules runs at Sonnet — never Opus or Fable.
   **Size floor:** if the task is small enough that writing the spec and reviewing the returned
   diff would cost more than just doing it directly (rough guide: a single-file, sub-~30-line
   change), skip the handoff — whichever agent is already in the session does it inline. Row 0
   exists to stop *real* delegation leakage, not to tax trivial edits with spec-and-review overhead.
 - **Multi-phase tasks: delegation is re-evaluated at the start of every phase, and for every
-  discrete action within a phase that could independently match a different row.** A phase
-  inherits nothing from the row/owner/tier of the phase before it — "the last unit was Opus" is
-  not a reason the next unit is Opus. State the row/owner/tier for each phase when it begins, the
-  same one-line disclosure used per task, so drift is visible immediately instead of discovered
+  work item within every phase.** Each work item gets its own row via the precedence order — a
+  phase is just a grouping, not an ownership boundary, and it inherits nothing from the
+  row/owner/tier of the phase before it. "The last unit was Opus" is not a reason the next unit
+  is Opus. State the row/owner/tier for each phase and each work item when it begins, the same
+  one-line disclosure used per task, so drift is visible immediately instead of discovered
   later in a token-spend review.
 - **Row 6 (UI verification) is verification only.** If Claude spots a bug while screenshotting, it
-  writes up the bug (repro, file, expected vs actual) for Codex/DeepSeek rather than patching it
-  inline. Silent inline fixes during a verification pass are the main way Claude ends up quietly
-  doing frontend work — don't do it.
+  writes up the bug (repro, file, expected vs actual) and routes it to the owner of the row the
+  buggy code belongs to — a page/component bug → row 2 → Codex; an engine-cluster bug → row 4 →
+  DeepSeek. Never "Codex/DeepSeek" — the file location decides, one owner. Silent inline fixes
+  during a verification pass are the main way Claude ends up quietly doing frontend work — don't
+  do it.
 - **Row 7 (auth/secret/data-boundary/egress) is now split work, not all-Claude.** Claude decides the
   approach and writes the security-sensitive core (the part where a mistake is exploitable), then
   hands mechanical scaffolding around that core to DeepSeek harness with a precise spec, and reviews

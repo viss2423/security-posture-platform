@@ -13,17 +13,21 @@ verification is yours**. Also yours: the hardest architecture/security judgment 
 the GitNexus pre-merge gate (`impact` before risky edits, `detect_changes` before commit).
 
 Things NOT to default into, per AGENTS.md's updated rows 0 / 6 / 8 and the multi-phase rule:
-- **Ambiguous tasks (row 0):** don't just implement them because you're already in context —
-  split into a spec and hand the build to the resolved row's owner (usually DeepSeek harness).
-  Skip this for genuinely small edits (single file, sub-~30 lines) — the size floor exists so
-  spec-and-review overhead doesn't exceed just doing the edit.
-- **Row 6 UI verification is read-only.** Report bugs you spot; don't quietly patch them.
+- **Planning/ambiguous tasks (row 0):** don't just implement them because you're already in
+  context — split into a spec, then each piece goes to the single owner of the row it resolves
+  to under the precedence order. Never write "Codex/DeepSeek" in a handoff — if a piece could go
+  to either, the split isn't finished. A planning session ends with handoff blocks, or it isn't
+  done. Planning and rules meta-work run at Sonnet, never Opus/Fable.
+  Skip the handoff for genuinely small edits (single file, sub-~30 lines) — the size floor
+  exists so spec-and-review overhead doesn't exceed just doing the edit.
+- **Row 6 UI verification is read-only.** Report bugs you spot; don't quietly patch them. Route
+  each bug to the owner of the row the buggy file belongs to — location decides, one owner.
 - **Row 8 (Fable) writes the decision, not the implementation.** Once the call is made, the
   build goes to whichever row the resulting code matches — don't keep writing at Fable tier
   past the decision itself.
 - **Phases don't inherit their owner from the previous phase.** On any multi-phase task,
-  re-run the row/tier triage at the start of each phase and state it, even if the last phase
-  was also Claude's.
+  re-run the row/tier triage at the start of each phase AND for each work item within it, and
+  state each assignment, even if the last unit was also Claude's.
 
 ## Model routing (the main cost lever) — DETERMINISTIC, four tiers
 
@@ -34,7 +38,7 @@ Each tier has a fixed trigger. Do not pick a tier by feel; match the trigger.
 | Tier | Fixed trigger (matches AGENTS.md delegation table rows) |
 |---|---|
 | **Haiku** | Trivial mechanical edits, git ops, log reading, the final `detect_changes()` gate (row 9) |
-| **Sonnet** | Default. Routine implementation, visual UI verification (row 6), CI/deploy work that isn't itself the hard-debugging case (row 10) |
+| **Sonnet** | Default. Planning/orchestration and spec-writing (row 0), rules meta-work, routine implementation, visual UI verification (row 6), CI/deploy work that isn't itself the hard-debugging case (row 10) |
 | **Opus** | Any auth/secret/data-boundary/egress change (row 7) — write the sensitive core yourself, spec the mechanical scaffolding for DeepSeek, review its diff; gnarly debugging that is NOT a novel architecture decision |
 | **Fable** | Cross-system architecture decisions with no existing repo pattern to follow, and the single highest-severity security judgment calls (row 8) — Fable writes the *decision* (choice + why), not the bulk implementation; the build goes to whichever row the resulting code lands on |
 
