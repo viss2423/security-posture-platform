@@ -21,7 +21,7 @@ export const metadata: Metadata = {
     title: 'SecPlat — Open-Source Security Posture & SOC 2 Compliance',
     description:
       'Run a read-only GitHub scan and get an auditor-ready SOC 2 evidence report in under a minute.',
-    url: 'https://github.com/viss2423/security-posture-platform',
+    url: 'https://207-180-216-252.sslip.io/',
     siteName: 'SecPlat',
     type: 'website',
     images: [

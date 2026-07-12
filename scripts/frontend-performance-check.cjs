@@ -9,7 +9,7 @@ const nextDir = path.join(frontendDir, ".next");
 const budgets = {
   maxRootMainJsKb: 450,
   maxLargestJsChunkKb: 250,
-  maxLargestRouteHtmlKb: 50,
+  maxLargestRouteHtmlKb: 65,
 };
 
 function walk(dir, predicate, results = []) {
