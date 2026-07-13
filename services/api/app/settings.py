@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     SLACK_WEBHOOK_URL: str | None = None
     # Slack interactive (B.4): signing secret to verify interaction payloads
     SLACK_SIGNING_SECRET: str | None = None
+    # Optional Discord webhook. When either this or SLACK_WEBHOOK_URL is set, a newly-detected
+    # critical finding fires a best-effort chat alert. Unset (default) = no alerts, no egress.
+    DISCORD_WEBHOOK_URL: str | None = None
 
     # WhatsApp via Twilio: when set, POST /posture/alert/send can notify (optional, use instead of or with Slack)
     TWILIO_ACCOUNT_SID: str | None = None
@@ -193,6 +196,12 @@ class Settings(BaseSettings):
     NETWORK_ANOMALY_THRESHOLD: float = 2.5
     ENABLE_SCHEDULED_NETWORK_ANOMALY: bool = True
     SCHEDULED_NETWORK_ANOMALY_INTERVAL_MINUTES: int = 60
+
+    # Interval scan trigger: when enabled the API polls user_credentials for connectors
+    # whose next_scan_at has elapsed and enqueues a scan job per connector.
+    ENABLE_SCHEDULED_SCAN_TRIGGER: bool = False
+    SCHEDULED_SCAN_TRIGGER_INTERVAL_SECONDS: int = 120
+
     ATTACK_LAB_ALLOWED_NETWORKS: str = "127.0.0.1/32,172.16.0.0/12,192.168.0.0/16"
     ATTACK_LAB_DEFAULT_PORTS: str = "22,80,443,3000,5432,6379,9200"
     ATTACK_LAB_NMAP_BIN: str = "/usr/bin/nmap"

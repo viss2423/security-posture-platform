@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from ..audit import log_audit
 from ..db import get_db
+from ..notification_service import notify_new_critical_finding
 from ..queue import publish_correlation_event
 from ..request_context import request_id_ctx
 from ..risk_labels import VALID_RISK_LABEL_SOURCES, VALID_RISK_LABELS
@@ -52,6 +53,18 @@ def _serialize_datetime_value(value: Any) -> Any:
     if hasattr(value, "isoformat"):
         return value.isoformat()
     return value
+
+
+def _asset_has_demo_tag(db: Session, asset_id: int) -> bool:
+    """True when the asset is part of the demo sandbox (tagged 'demo').
+
+    Used to keep demo/sandbox seeding from firing real critical-finding chat alerts.
+    """
+    row = db.execute(
+        text("SELECT 1 FROM assets WHERE asset_id = :id AND 'demo' = ANY(tags)"),
+        {"id": asset_id},
+    ).first()
+    return row is not None
 
 
 def _viewer_demo_clause(role: str, *, tags_expr: str) -> str:
@@ -784,6 +797,18 @@ def upsert_finding_record(db: Session, body: FindingUpsertBody) -> dict[str, Any
                 severity=body.severity,
                 incident_key=f"finding:{ak}:{body.finding_key}",
             )
+            # Best-effort chat alert for genuinely new critical findings only. Skips demo/sandbox
+            # assets so seeded data never pages a real channel; a no-op unless a webhook is set.
+            if str(body.severity or "").strip().lower() == "critical" and not _asset_has_demo_tag(
+                db, asset_id
+            ):
+                notify_new_critical_finding(
+                    finding_key=body.finding_key,
+                    title=body.title,
+                    asset_key=ak,
+                    severity=body.severity,
+                    source=body.source,
+                )
         return {"ok": True, "finding_key": body.finding_key, "updated": False}
 
 
