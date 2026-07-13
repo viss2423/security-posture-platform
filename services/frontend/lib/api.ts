@@ -617,6 +617,7 @@ export async function createJob(payload: {
 
 export type WorkspaceProvider = 'github' | 'aws';
 export type WorkspaceScopeType = 'user' | 'org';
+export type WorkspaceSchedule = 'off' | 'hourly' | 'daily' | 'weekly';
 
 export type ConnectWorkspaceRequest = {
   provider: WorkspaceProvider;
@@ -630,6 +631,9 @@ export type ConnectWorkspaceResponse = {
   workspace_id: string;
   credential_id: number;
   provider: WorkspaceProvider;
+  schedule?: WorkspaceSchedule | null;
+  last_scanned_at?: string | null;
+  next_scan_at?: string | null;
   activated: boolean;
   access_token: string;
   refresh_token: string;
@@ -649,6 +653,27 @@ export type StartWorkspaceScanResponse = {
   provider: WorkspaceProvider;
 };
 
+export type WorkspaceConnectorSchedule = {
+  credential_id: number;
+  provider: WorkspaceProvider;
+  schedule: WorkspaceSchedule | null;
+  last_scanned_at: string | null;
+  next_scan_at: string | null;
+};
+
+export type WorkspaceScanHistoryItem = {
+  scan_history_id: number;
+  workspace_id: string;
+  connector: string;
+  provider: WorkspaceProvider;
+  job_id: number | null;
+  started_at: string | null;
+  finished_at: string | null;
+  status: string;
+  findings_count: number;
+  triggered_by: 'manual' | 'scheduled' | string;
+};
+
 export async function connectWorkspace(
   body: ConnectWorkspaceRequest
 ): Promise<ConnectWorkspaceResponse> {
@@ -665,6 +690,27 @@ export async function startWorkspaceScan(
     method: 'POST',
     body: JSON.stringify(body),
   });
+}
+
+export async function updateWorkspaceConnectorSchedule(
+  credentialId: number,
+  schedule: WorkspaceSchedule
+): Promise<WorkspaceConnectorSchedule> {
+  return apiFetch<WorkspaceConnectorSchedule>(
+    `/workspace/connectors/${encodeURIComponent(String(credentialId))}/schedule`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ schedule }),
+    }
+  );
+}
+
+export async function getWorkspaceScanHistory(
+  limit: number = 50
+): Promise<{ workspace_id: string; history: WorkspaceScanHistoryItem[] }> {
+  return apiFetch<{ workspace_id: string; history: WorkspaceScanHistoryItem[] }>(
+    `/workspace/scan-history?limit=${encodeURIComponent(String(limit))}`
+  );
 }
 
 export async function retryJob(id: number): Promise<{ ok: boolean; status: string }> {

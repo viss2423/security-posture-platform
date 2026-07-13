@@ -304,7 +304,7 @@ async def list_scan_history(
                        started_at, finished_at, status, findings_count, triggered_by
                 FROM scan_history
                 WHERE workspace_id = :tenant
-                  AND (:connector IS NULL OR connector = :connector)
+                  AND (CAST(:connector AS TEXT) IS NULL OR connector = CAST(:connector AS TEXT))
                 ORDER BY started_at DESC
                 LIMIT :limit
                 """

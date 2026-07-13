@@ -1,25 +1,74 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import type { FormEvent } from 'react';
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ApiDownHint } from '@/components/EmptyState';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   connectWorkspace,
+  getWorkspaceScanHistory,
   setSessionTokens,
   startWorkspaceScan,
+  updateWorkspaceConnectorSchedule,
+  type WorkspaceConnectorSchedule,
   type WorkspaceProvider,
+  type WorkspaceScanHistoryItem,
+  type WorkspaceSchedule,
   type WorkspaceScopeType,
 } from '@/lib/api';
 import { friendlyApiMessage } from '@/lib/apiError';
 
 const fieldClass = 'w-full rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-subtle)] transition focus:outline-none focus:ring-2 focus:ring-[var(--accent-ring)] focus:border-[var(--accent)]';
+const scheduleOptions: WorkspaceSchedule[] = ['off', 'hourly', 'daily', 'weekly'];
+const connectWorkspaceHistoryMessages = [
+  'connect a workspace before viewing scan history',
+  'no workspace connected',
+];
+
+function isConnectWorkspaceHistoryError(message: string | null): boolean {
+  const normalizedMessage = message?.toLowerCase() ?? '';
+  return connectWorkspaceHistoryMessages.some((expectedMessage) => (
+    normalizedMessage.includes(expectedMessage)
+  ));
+}
+
+function formatDateTime(value: string | null | undefined): string {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+}
+
+function connectorName(
+  connector: Pick<WorkspaceConnectorSchedule, 'credential_id' | 'provider'>
+): string {
+  return `${connector.provider === 'github' ? 'GitHub' : 'AWS'} #${connector.credential_id}`;
+}
+
+function historyConnectorName(
+  item: WorkspaceScanHistoryItem,
+  connectors: WorkspaceConnectorSchedule[]
+): string {
+  const match = connectors.find((connector) => String(connector.credential_id) === String(item.connector));
+  if (match) return connectorName(match);
+  const providerLabel = item.provider === 'github' ? 'GitHub' : item.provider === 'aws' ? 'AWS' : item.provider;
+  return item.connector ? `${providerLabel} #${item.connector}` : providerLabel;
+}
+
+function upsertConnector(
+  connectors: WorkspaceConnectorSchedule[],
+  next: WorkspaceConnectorSchedule
+): WorkspaceConnectorSchedule[] {
+  const exists = connectors.some((connector) => connector.credential_id === next.credential_id);
+  if (!exists) return [next, ...connectors];
+  return connectors.map((connector) => (
+    connector.credential_id === next.credential_id ? next : connector
+  ));
+}
 
 export default function WorkspacePageClient() {
-  const router = useRouter();
-  const { user, refresh } = useAuth();
+  const { user, refresh, canMutate } = useAuth();
   const [provider, setProvider] = useState<WorkspaceProvider>('github');
   const [token, setToken] = useState('');
   const [scopeType, setScopeType] = useState<WorkspaceScopeType>('user');
@@ -32,6 +81,29 @@ export default function WorkspacePageClient() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [connectors, setConnectors] = useState<WorkspaceConnectorSchedule[]>([]);
+  const [scanHistory, setScanHistory] = useState<WorkspaceScanHistoryItem[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [scheduleUpdating, setScheduleUpdating] = useState<number | null>(null);
+
+  const loadScanHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    setHistoryError(null);
+    try {
+      const response = await getWorkspaceScanHistory(50);
+      setScanHistory(response.history || []);
+    } catch (historyLoadError) {
+      setScanHistory([]);
+      setHistoryError(historyLoadError instanceof Error ? historyLoadError.message : 'Scan history unavailable');
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadScanHistory();
+  }, [loadScanHistory]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -86,6 +158,13 @@ export default function WorkspacePageClient() {
         ...(provider === 'github' ? { scope_type: scopeType, scope: scanScope } : {}),
         label: credentialLabel,
       });
+      setConnectors((current) => upsertConnector(current, {
+        credential_id: connected.credential_id,
+        provider: connected.provider,
+        schedule: connected.schedule ?? 'off',
+        last_scanned_at: connected.last_scanned_at ?? null,
+        next_scan_at: connected.next_scan_at ?? null,
+      }));
       await setSessionTokens({
         access_token: connected.access_token,
         refresh_token: connected.refresh_token,
@@ -98,7 +177,8 @@ export default function WorkspacePageClient() {
         ...(provider === 'github' ? { scope_type: scopeType, max_repos: parsedMaxRepos } : {}),
         scope: scanScope,
       });
-      router.push('/jobs');
+      setMessage('Workspace connected and the first posture scan is queued.');
+      await loadScanHistory();
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : 'Workspace connection failed');
       setMessage(null);
@@ -106,6 +186,28 @@ export default function WorkspacePageClient() {
       setSubmitting(false);
     }
   };
+
+  const changeConnectorSchedule = async (
+    connector: WorkspaceConnectorSchedule,
+    schedule: WorkspaceSchedule
+  ) => {
+    if (!canMutate) return;
+    setScheduleUpdating(connector.credential_id);
+    setError(null);
+    setMessage(`Updating ${connectorName(connector)} schedule...`);
+    try {
+      const updated = await updateWorkspaceConnectorSchedule(connector.credential_id, schedule);
+      setConnectors((current) => upsertConnector(current, updated));
+      setMessage(`${connectorName(updated)} schedule set to ${updated.schedule || 'off'}.`);
+    } catch (scheduleError) {
+      setError(scheduleError instanceof Error ? scheduleError.message : 'Schedule update failed');
+      setMessage(null);
+    } finally {
+      setScheduleUpdating(null);
+    }
+  };
+
+  const scanHistoryNeedsWorkspace = isConnectWorkspaceHistoryError(historyError);
 
   return (
     <main className="page-shell view-stack">
@@ -335,6 +437,137 @@ export default function WorkspacePageClient() {
             </p>
           </div>
         </form>
+      </section>
+
+      <section className="section-panel animate-in">
+        <div className="section-head">
+          <div>
+            <h2 className="section-title">Scheduled scans</h2>
+            <p className="section-head-copy">
+              Set connector cadence after connecting a workspace. Viewer accounts can inspect schedules
+              but need analyst or admin rights to change them.
+            </p>
+          </div>
+          <span className="stat-chip">{canMutate ? 'Analyst controls' : 'Read only'}</span>
+        </div>
+
+        {connectors.length > 0 ? (
+          <div className="grid gap-3">
+            {connectors.map((connector) => {
+              const scheduleValue = connector.schedule ?? 'off';
+              const updating = scheduleUpdating === connector.credential_id;
+              return (
+                <div
+                  key={connector.credential_id}
+                  className="flex flex-col gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)]/40 p-4 md:flex-row md:items-center md:justify-between"
+                >
+                  <div>
+                    <p className="text-sm font-semibold text-[var(--text)]">{connectorName(connector)}</p>
+                    <p className="mt-1 text-xs text-[var(--text-subtle)]">
+                      Next scan {formatDateTime(connector.next_scan_at)}
+                    </p>
+                  </div>
+                  <label className="min-w-[180px] space-y-1.5 text-sm text-[var(--muted)]">
+                    <span className="block text-[11px] font-semibold uppercase tracking-widest">
+                      Cadence
+                    </span>
+                    <select
+                      value={scheduleValue}
+                      disabled={!canMutate || updating}
+                      onChange={(event) => {
+                        void changeConnectorSchedule(connector, event.target.value as WorkspaceSchedule);
+                      }}
+                      className={fieldClass}
+                    >
+                      {scheduleOptions.map((option) => (
+                        <option key={option} value={option}>
+                          {option}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)]/40 p-4 text-sm text-[var(--muted)]">
+            Connect a GitHub or AWS workspace in this session to manage its schedule here.
+          </div>
+        )}
+      </section>
+
+      <section className="section-panel animate-in">
+        <div className="section-head">
+          <div>
+            <h2 className="section-title">Scan history</h2>
+            <p className="section-head-copy">
+              Recent workspace scans across manual and scheduled triggers.
+            </p>
+          </div>
+          <button type="button" onClick={loadScanHistory} className="btn-secondary text-sm">
+            Refresh
+          </button>
+        </div>
+
+        {historyError && !scanHistoryNeedsWorkspace && (
+          <div className="alert-error mb-4" role="alert">
+            {friendlyApiMessage(historyError)}
+          </div>
+        )}
+
+        {scanHistoryNeedsWorkspace ? (
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)]/40 p-4 text-sm text-[var(--muted)]">
+            Connect a GitHub or AWS workspace in this session to view scan history here.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[820px] border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-[var(--border)] text-left text-[11px] uppercase tracking-widest text-[var(--text-subtle)]">
+                  <th className="py-3 pr-4 font-semibold">Started</th>
+                  <th className="py-3 pr-4 font-semibold">Finished</th>
+                  <th className="py-3 pr-4 font-semibold">Connector</th>
+                  <th className="py-3 pr-4 font-semibold">Status</th>
+                  <th className="py-3 pr-4 font-semibold">Findings</th>
+                  <th className="py-3 font-semibold">Triggered by</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--border)]">
+                {scanHistory.map((item) => (
+                  <tr key={item.scan_history_id}>
+                    <td className="py-3 pr-4 text-[var(--muted)]">{formatDateTime(item.started_at)}</td>
+                    <td className="py-3 pr-4 text-[var(--muted)]">{formatDateTime(item.finished_at)}</td>
+                    <td className="py-3 pr-4 text-[var(--text)]">{historyConnectorName(item, connectors)}</td>
+                    <td className="py-3 pr-4">
+                      <span className="stat-chip uppercase">{item.status}</span>
+                    </td>
+                    <td className="py-3 pr-4 text-[var(--text)]">{item.findings_count}</td>
+                    <td className="py-3">
+                      <span className={item.triggered_by === 'scheduled' ? 'stat-chip-strong' : 'stat-chip'}>
+                        {item.triggered_by === 'scheduled' ? 'Scheduled' : 'Manual'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+                {!historyLoading && scanHistory.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="py-6 text-center text-[var(--muted)]">
+                      No scan history yet.
+                    </td>
+                  </tr>
+                )}
+                {historyLoading && (
+                  <tr>
+                    <td colSpan={6} className="py-6 text-center text-[var(--muted)]">
+                      Loading scan history...
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
     </main>
   );
