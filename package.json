@@ -11,6 +11,11 @@
     "frontend:install": "npm install --prefix services/frontend",
     "perf:check": "node scripts/frontend-performance-check.cjs",
     "knip": "cd services/frontend && npx knip",
-    "postinstall": "npm install --prefix services/frontend --ignore-scripts"
+    "postinstall": "npm install --prefix services/frontend --ignore-scripts",
+    "deploy": "wrangler deploy",
+    "preview": "wrangler dev"
+  },
+  "devDependencies": {
+    "wrangler": "^4.110.0"
   }
 }
