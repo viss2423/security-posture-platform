@@ -9,7 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from . import metrics
+from . import metrics, scheduled_scans
 from .db import SessionLocal
 from .db_migrate import run_startup_migrations
 from .demo_seed import maybe_seed_cyberlab_demo
@@ -193,6 +193,25 @@ def _materialize_platform_sli_sample() -> None:
         db.close()
 
 
+async def _scheduled_scan_trigger_loop():
+    """Background loop: find due connectors and enqueue scans on a fixed interval."""
+    if not getattr(settings, "ENABLE_SCHEDULED_SCAN_TRIGGER", False):
+        return
+    interval_sec = max(
+        30,
+        int(getattr(settings, "SCHEDULED_SCAN_TRIGGER_INTERVAL_SECONDS", 120)),
+    )
+    # Stagger the first tick so we don't race with the startup migration.
+    await asyncio.sleep(min(interval_sec, 30))
+    while True:
+        try:
+            enqueued = await asyncio.to_thread(scheduled_scans.trigger_scheduled_scans)
+            logger.info("scheduled_scan_trigger_cycle_done enqueued=%d", enqueued)
+        except Exception as e:
+            logger.exception("scheduled_scan_trigger failed: %s", e)
+        await asyncio.sleep(interval_sec)
+
+
 async def _scheduled_sli_materialization_loop():
     interval_sec = max(
         15,
@@ -219,6 +238,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_scheduled_network_anomaly_loop()),
         asyncio.create_task(_scheduled_telemetry_import_loop()),
         asyncio.create_task(_scheduled_telemetry_keepalive_loop()),
+        asyncio.create_task(_scheduled_scan_trigger_loop()),
         asyncio.create_task(_scheduled_sli_materialization_loop()),
     ]
     try:
