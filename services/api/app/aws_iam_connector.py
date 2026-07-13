@@ -29,6 +29,7 @@ from .queue import publish_scan_job
 from .request_context import tenant_id_ctx
 from .risk_scoring import recompute_finding_risk
 from .routers.findings import FindingUpsertBody, upsert_finding_record
+from .scan_history import normalize_triggered_by, record_scan_finished, record_scan_started
 from .settings import settings
 
 logger = logging.getLogger("secplat.aws_iam_connector")
@@ -500,6 +501,8 @@ def run_aws_iam_posture_job(job_id: int) -> None:
     # this, and binding it scopes both the credential lookup and every finding write to the
     # owning workspace.
     tenant_token = None
+    params = {}
+    connector_id: int | None = None
     org_id = _resolve_job_org_id(db, job_id)
     if org_id:
         tenant_token = tenant_id_ctx.set(org_id)
@@ -537,6 +540,17 @@ def run_aws_iam_posture_job(job_id: int) -> None:
         # in job params); the RLS-scoped lookup can only return this workspace's own
         # credential. Operator scans keep the server-side AWS_* settings path.
         credential_id = params.get("credential_id")
+        try:
+            connector_id = int(credential_id) if credential_id else None
+        except (TypeError, ValueError):
+            connector_id = None
+        record_scan_started(
+            db,
+            job_id=job_id,
+            provider="aws",
+            connector_id=connector_id,
+            triggered_by=normalize_triggered_by(params.get("triggered_by")),
+        )
         credential = _load_aws_credential(db, credential_id) if credential_id else None
 
         _append_job_log(db, job_id, f"AWS IAM posture scan started (region={region})")
@@ -579,10 +593,24 @@ def run_aws_iam_posture_job(job_id: int) -> None:
             ok=True,
             message=f"AWS IAM posture scan completed. Detected {len(findings)} issue(s), resolved {resolved}.",
         )
+        record_scan_finished(
+            db,
+            job_id=job_id,
+            connector_id=connector_id,
+            ok=True,
+            findings_count=len(findings),
+        )
     except Exception as exc:  # noqa: BLE001
         logger.exception("aws_iam_posture_failed job_id=%s", job_id)
         _finish_job(
             db, job_id, ok=False, error=str(exc), message=f"AWS IAM posture scan failed: {exc}"
+        )
+        record_scan_finished(
+            db,
+            job_id=job_id,
+            connector_id=connector_id,
+            ok=False,
+            findings_count=None,
         )
     finally:
         db.close()

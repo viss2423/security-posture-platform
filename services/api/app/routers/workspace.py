@@ -16,8 +16,9 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -31,6 +32,7 @@ from app.github_connector import launch_github_posture_job
 from app.rate_limit import check_rate_limit
 from app.request_context import current_tenant_id, request_id_ctx, tenant_id_ctx
 from app.routers.auth import _client_id, _issue_token_pair, require_auth
+from app.scan_history import normalize_schedule, normalize_triggered_by
 from app.settings import settings
 
 router = APIRouter(prefix="/workspace", tags=["workspace"])
@@ -44,6 +46,7 @@ class ConnectBody(BaseModel):
     scope_type: str | None = None
     scope: str | None = None
     label: str | None = None
+    schedule: str | None = None
 
 
 class ScanBody(BaseModel):
@@ -52,6 +55,24 @@ class ScanBody(BaseModel):
     scope_type: str | None = None
     scope: str | None = None
     max_repos: int | None = None
+    triggered_by: str | None = None
+
+
+class ScheduleBody(BaseModel):
+    schedule: str | None = None
+
+
+def _next_scan_at(schedule: str | None) -> datetime | None:
+    if schedule in {None, "off"}:
+        return None
+    now = datetime.now(UTC)
+    if schedule == "hourly":
+        return now + timedelta(hours=1)
+    if schedule == "daily":
+        return now + timedelta(days=1)
+    if schedule == "weekly":
+        return now + timedelta(weeks=1)
+    raise ValueError("schedule must be one of: off, hourly, daily, weekly")
 
 
 def _default_tenant() -> str:
@@ -68,6 +89,11 @@ async def connect_workspace(
     provider = (body.provider or "").strip().lower()
     if provider not in _SUPPORTED_PROVIDERS:
         raise HTTPException(status_code=400, detail="provider must be 'github' or 'aws'")
+    try:
+        schedule = normalize_schedule(body.schedule)
+        next_scan_at = _next_scan_at(schedule)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     secret = (body.token or "").strip()
     if not secret:
         raise HTTPException(status_code=400, detail="token required")
@@ -137,9 +163,15 @@ async def connect_workspace(
                 text(
                     """
                     INSERT INTO user_credentials
-                      (owner_username, provider, label, ciphertext, key_version, scope_type, scope)
+                      (
+                        owner_username, provider, label, ciphertext, key_version, scope_type,
+                        scope, schedule, next_scan_at
+                      )
                     VALUES
-                      (:owner, :provider, :label, :ciphertext, :kv, :scope_type, :scope)
+                      (
+                        :owner, :provider, :label, :ciphertext, :kv, :scope_type, :scope,
+                        :schedule, :next_scan_at
+                      )
                     RETURNING credential_id
                     """
                 ),
@@ -151,6 +183,8 @@ async def connect_workspace(
                     "kv": key_version,
                     "scope_type": (body.scope_type or "").strip() or None,
                     "scope": (body.scope or "").strip() or None,
+                    "schedule": schedule,
+                    "next_scan_at": next_scan_at,
                 },
             )
             .mappings()
@@ -177,10 +211,114 @@ async def connect_workspace(
         "workspace_id": workspace_id,
         "credential_id": int(cred["credential_id"]),
         "provider": provider,
+        "schedule": schedule,
+        "last_scanned_at": None,
+        "next_scan_at": next_scan_at.isoformat() if next_scan_at else None,
         "activated": activated,
         "access_token": token_pair.access_token,
         "refresh_token": token_pair.refresh_token,
     }
+
+
+@router.patch("/connectors/{credential_id}/schedule")
+async def update_connector_schedule(
+    credential_id: int,
+    body: ScheduleBody,
+    user: str = Depends(require_auth),
+    db: Session = Depends(get_db),
+) -> dict:
+    tenant = current_tenant_id()
+    if tenant == _default_tenant():
+        raise HTTPException(status_code=403, detail="connect a workspace before scheduling scans")
+    try:
+        schedule = normalize_schedule(body.schedule)
+        next_scan_at = _next_scan_at(schedule)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    row = (
+        db.execute(
+            text(
+                """
+                UPDATE user_credentials
+                   SET schedule = :schedule,
+                       next_scan_at = :next_scan_at
+                 WHERE credential_id = :credential_id
+                   AND org_id = :tenant
+                 RETURNING credential_id, provider, schedule, last_scanned_at, next_scan_at
+                """
+            ),
+            {
+                "credential_id": int(credential_id),
+                "tenant": tenant,
+                "schedule": schedule,
+                "next_scan_at": next_scan_at,
+            },
+        )
+        .mappings()
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="connector not found in this workspace")
+    db.commit()
+    log_audit(
+        db,
+        "workspace.connector.schedule",
+        user_name=user,
+        details={
+            "workspace_id": tenant,
+            "credential_id": int(credential_id),
+            "provider": row["provider"],
+            "schedule": schedule,
+        },
+        request_id=request_id_ctx.get(None),
+    )
+    db.commit()
+    return {
+        "credential_id": int(row["credential_id"]),
+        "provider": row["provider"],
+        "schedule": row["schedule"],
+        "last_scanned_at": row["last_scanned_at"],
+        "next_scan_at": row["next_scan_at"],
+    }
+
+
+@router.get("/scan-history")
+async def list_scan_history(
+    connector_id: int | None = None,
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    _: str = Depends(require_auth),
+) -> dict:
+    tenant = current_tenant_id()
+    if tenant == _default_tenant():
+        raise HTTPException(
+            status_code=403,
+            detail="connect a workspace before viewing scan history",
+        )
+    rows = (
+        db.execute(
+            text(
+                """
+                SELECT scan_history_id, workspace_id, connector, provider, job_id,
+                       started_at, finished_at, status, findings_count, triggered_by
+                FROM scan_history
+                WHERE workspace_id = :tenant
+                  AND (:connector IS NULL OR connector = :connector)
+                ORDER BY started_at DESC
+                LIMIT :limit
+                """
+            ),
+            {
+                "tenant": tenant,
+                "connector": str(connector_id) if connector_id is not None else None,
+                "limit": limit,
+            },
+        )
+        .mappings()
+        .all()
+    )
+    return {"workspace_id": tenant, "history": [dict(row) for row in rows]}
 
 
 @router.post("/scans")
@@ -212,9 +350,9 @@ async def start_workspace_scan(
         db.execute(
             text(
                 "SELECT credential_id FROM user_credentials "
-                "WHERE credential_id = :cid AND provider = :provider"
+                "WHERE credential_id = :cid AND provider = :provider AND org_id = :tenant"
             ),
-            {"cid": int(body.credential_id), "provider": provider},
+            {"cid": int(body.credential_id), "provider": provider, "tenant": tenant},
         )
         .mappings()
         .first()
@@ -240,6 +378,7 @@ async def start_workspace_scan(
             "scope_type": scope_type,
             "scope": scope,
             "max_repos": max_repos,
+            "triggered_by": normalize_triggered_by(body.triggered_by),
         }
     else:  # aws
         # AWS IAM is global, but boto3 needs a region for endpoint resolution. The region
@@ -253,6 +392,7 @@ async def start_workspace_scan(
         job_params = {
             "credential_id": int(body.credential_id),
             "region": region,
+            "triggered_by": normalize_triggered_by(body.triggered_by),
         }
 
     # org_id defaults from the tenant GUC (the caller's workspace); the job — and every

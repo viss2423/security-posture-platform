@@ -1203,8 +1203,13 @@ CREATE TABLE IF NOT EXISTS user_credentials (
   created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   last_used_at   TIMESTAMPTZ
 );
+ALTER TABLE user_credentials ADD COLUMN IF NOT EXISTS schedule TEXT;
+ALTER TABLE user_credentials ADD COLUMN IF NOT EXISTS last_scanned_at TIMESTAMPTZ;
+ALTER TABLE user_credentials ADD COLUMN IF NOT EXISTS next_scan_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_user_credentials_org_id ON user_credentials(org_id);
 CREATE INDEX IF NOT EXISTS idx_user_credentials_owner ON user_credentials(owner_username);
+CREATE INDEX IF NOT EXISTS idx_user_credentials_next_scan_at
+  ON user_credentials(next_scan_at) WHERE next_scan_at IS NOT NULL;
 GRANT SELECT, INSERT, UPDATE, DELETE ON user_credentials TO secplat_runtime;
 GRANT USAGE, SELECT ON SEQUENCE user_credentials_credential_id_seq TO secplat_runtime;
 ALTER TABLE user_credentials ENABLE ROW LEVEL SECURITY;
@@ -1213,6 +1218,35 @@ DROP POLICY IF EXISTS secplat_tenant_user_credentials ON user_credentials;
 CREATE POLICY secplat_tenant_user_credentials ON user_credentials
 USING (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'))
 WITH CHECK (org_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'));
+
+CREATE TABLE IF NOT EXISTS scan_history (
+  scan_history_id BIGSERIAL PRIMARY KEY,
+  workspace_id    TEXT NOT NULL DEFAULT
+    COALESCE(NULLIF(current_setting('secplat.tenant_id', true), ''), 'default'),
+  connector       TEXT,
+  provider        TEXT NOT NULL,
+  job_id          BIGINT,
+  started_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  finished_at     TIMESTAMPTZ,
+  status          TEXT NOT NULL,
+  findings_count  INTEGER,
+  triggered_by    TEXT NOT NULL DEFAULT 'manual',
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_scan_history_job_id
+  ON scan_history(job_id) WHERE job_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_scan_history_workspace_started
+  ON scan_history(workspace_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_scan_history_connector_started
+  ON scan_history(workspace_id, connector, started_at DESC);
+GRANT SELECT, INSERT, UPDATE, DELETE ON scan_history TO secplat_runtime;
+GRANT USAGE, SELECT ON SEQUENCE scan_history_scan_history_id_seq TO secplat_runtime;
+ALTER TABLE scan_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE scan_history FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS secplat_tenant_scan_history ON scan_history;
+CREATE POLICY secplat_tenant_scan_history ON scan_history
+USING (workspace_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'))
+WITH CHECK (workspace_id = COALESCE(current_setting('secplat.tenant_id', true), 'default'));
 """
 
 # The job runner must discover a job's tenant even when it runs on a different tenant

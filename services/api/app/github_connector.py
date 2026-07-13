@@ -26,6 +26,7 @@ from .queue import publish_scan_job
 from .request_context import tenant_id_ctx
 from .risk_scoring import recompute_finding_risk
 from .routers.findings import FindingUpsertBody, upsert_finding_record
+from .scan_history import normalize_triggered_by, record_scan_finished, record_scan_started
 from .settings import settings
 
 logger = logging.getLogger("secplat.github_connector")
@@ -401,6 +402,8 @@ def run_github_posture_job(job_id: int) -> None:
     # a ws_* tenant that is invisible to the default-tenant worker without this; binding it
     # also guarantees findings and the credential lookup are scoped to the owning workspace.
     tenant_token = None
+    params = {}
+    connector_id: int | None = None
     org_id = _resolve_job_org_id(db, job_id)
     if org_id:
         tenant_token = tenant_id_ctx.set(org_id)
@@ -434,6 +437,17 @@ def run_github_posture_job(job_id: int) -> None:
         # only return this workspace's own credential. Operator scans keep the existing
         # per-job token / server-side GITHUB_TOKEN path.
         credential_id = params.get("credential_id")
+        try:
+            connector_id = int(credential_id) if credential_id else None
+        except (TypeError, ValueError):
+            connector_id = None
+        record_scan_started(
+            db,
+            job_id=job_id,
+            provider="github",
+            connector_id=connector_id,
+            triggered_by=normalize_triggered_by(params.get("triggered_by")),
+        )
         if credential_id:
             token = _load_github_credential_token(db, credential_id)
         else:
@@ -503,10 +517,24 @@ def run_github_posture_job(job_id: int) -> None:
             ok=True,
             message=f"GitHub posture scan completed. Detected {len(findings)} issue(s), resolved {resolved}.",
         )
+        record_scan_finished(
+            db,
+            job_id=job_id,
+            connector_id=connector_id,
+            ok=True,
+            findings_count=len(findings),
+        )
     except Exception as exc:  # noqa: BLE001
         logger.exception("github_posture_failed job_id=%s", job_id)
         _finish_job(
             db, job_id, ok=False, error=str(exc), message=f"GitHub posture scan failed: {exc}"
+        )
+        record_scan_finished(
+            db,
+            job_id=job_id,
+            connector_id=connector_id,
+            ok=False,
+            findings_count=None,
         )
     finally:
         db.close()
